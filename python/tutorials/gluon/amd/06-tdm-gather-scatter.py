@@ -62,7 +62,7 @@ warp_size = gl.constexpr(32)
 # gl.SliceLayout(
 #     dim=1,
 #     parent=gl.BlockedLayout(
-#         size_per_thread=[BLOCK_M // num_warps, 1],
+#         size_per_thread=[BLOCK_X // num_warps, 1],
 #         threads_per_warp=[1, warp_size],
 #         warps_per_cta=[num_warps, 1],
 #         order=[1, 0],
@@ -78,84 +78,85 @@ warp_size = gl.constexpr(32)
 #
 # Different warps still hold different rows, so the TDM instructions are spread
 # over the warps. If every warp held all the indices instead, for example with
-# `size_per_thread=[BLOCK_M, 1]` and `warps_per_cta=[1, num_warps]`, only warp 0
+# `size_per_thread=[BLOCK_X, 1]` and `warps_per_cta=[1, num_warps]`, only warp 0
 # would issue the instructions, and the other warps would stay idle.
 
 
 @gluon.jit
-def gather_kernel(x_ptr, idx_ptr, out_ptr, M, K, BLOCK_M: gl.constexpr, BLOCK_K: gl.constexpr,
-                  INDEX_DTYPE: gl.constexpr):
+def gather_kernel(a_ptr, idx_ptr, b_ptr, x_numel, y_numel,  #
+                  BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, INDEX_DTYPE: gl.constexpr):
     smem_layout: gl.constexpr = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    x_desc = cdna5.tdm.make_tensor_descriptor(x_ptr, [M, K], [K, 1], [BLOCK_M, BLOCK_K], smem_layout)
+    a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [x_numel, y_numel], [y_numel, 1], [BLOCK_X, BLOCK_Y], smem_layout)
     num_warps: gl.constexpr = gl.num_warps()
     idx_layout: gl.constexpr = gl.SliceLayout(
-        dim=1, parent=gl.BlockedLayout(size_per_thread=[BLOCK_M // num_warps, 1], threads_per_warp=[1, warp_size],
+        dim=1, parent=gl.BlockedLayout(size_per_thread=[BLOCK_X // num_warps, 1], threads_per_warp=[1, warp_size],
                                        warps_per_cta=[num_warps, 1], order=[1, 0]))
-    idx = gl.load(idx_ptr + gl.arange(0, BLOCK_M, idx_layout)).to(INDEX_DTYPE)
+    idx = gl.load(idx_ptr + gl.arange(0, BLOCK_X, idx_layout)).to(INDEX_DTYPE)
 
-    smem = gl.allocate_shared_memory(x_ptr.dtype.element_ty, [BLOCK_M, BLOCK_K], smem_layout)
+    smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [BLOCK_X, BLOCK_Y], smem_layout)
     layout: gl.constexpr = gl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
-    rows = gl.arange(0, BLOCK_M, gl.SliceLayout(1, layout))
-    cols = gl.arange(0, BLOCK_K, gl.SliceLayout(0, layout))
-    for k in range(0, K, BLOCK_K):
-        cdna5.tdm.async_gather(x_desc, idx, smem)
+    rows = gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
+    cols = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
+    for off_y in range(0, y_numel, BLOCK_Y):
+        cdna5.tdm.async_gather(a_desc, idx, smem)
         cdna5.tdm.async_wait(0)
-        mask = (k + cols < K)[None, :]
-        gl.store(out_ptr + rows[:, None] * K + k + cols[None, :], smem.load(layout), mask=mask)
-        x_desc = cdna5.tdm.update_tensor_descriptor(x_desc, add_offsets=[0, BLOCK_K], clamp_bounds=True)
+        mask = (off_y + cols < y_numel)[None, :]
+        gl.store(b_ptr + rows[:, None] * y_numel + off_y + cols[None, :], smem.load(layout), mask=mask)
+        a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_Y], clamp_bounds=True)
 
 
 @gluon.jit
-def scatter_kernel(src_ptr, idx_ptr, y_ptr, M, K, BLOCK_M: gl.constexpr, BLOCK_K: gl.constexpr,
+def scatter_kernel(a_ptr, idx_ptr, b_ptr, x_numel, y_numel,  #
+                   BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr,  #
                    INDEX_DTYPE: gl.constexpr):
     smem_layout: gl.constexpr = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    y_desc = cdna5.tdm.make_tensor_descriptor(y_ptr, [M, K], [K, 1], [BLOCK_M, BLOCK_K], smem_layout)
+    b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr, [x_numel, y_numel], [y_numel, 1], [BLOCK_X, BLOCK_Y], smem_layout)
     num_warps: gl.constexpr = gl.num_warps()
     idx_layout: gl.constexpr = gl.SliceLayout(
-        dim=1, parent=gl.BlockedLayout(size_per_thread=[BLOCK_M // num_warps, 1], threads_per_warp=[1, warp_size],
+        dim=1, parent=gl.BlockedLayout(size_per_thread=[BLOCK_X // num_warps, 1], threads_per_warp=[1, warp_size],
                                        warps_per_cta=[num_warps, 1], order=[1, 0]))
-    idx = gl.load(idx_ptr + gl.arange(0, BLOCK_M, idx_layout)).to(INDEX_DTYPE)
+    idx = gl.load(idx_ptr + gl.arange(0, BLOCK_X, idx_layout)).to(INDEX_DTYPE)
 
-    smem = gl.allocate_shared_memory(y_ptr.dtype.element_ty, [BLOCK_M, BLOCK_K], smem_layout)
+    smem = gl.allocate_shared_memory(b_ptr.dtype.element_ty, [BLOCK_X, BLOCK_Y], smem_layout)
     layout: gl.constexpr = gl.BlockedLayout([1, 8], [4, 8], [num_warps, 1], [1, 0])
-    rows = gl.arange(0, BLOCK_M, gl.SliceLayout(1, layout))
-    cols = gl.arange(0, BLOCK_K, gl.SliceLayout(0, layout))
-    for k in range(0, K, BLOCK_K):
-        mask = (k + cols < K)[None, :]
-        smem.store(gl.load(src_ptr + rows[:, None] * K + k + cols[None, :], mask=mask, other=0))
-        cdna5.tdm.async_scatter(y_desc, idx, smem)
+    rows = gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
+    cols = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
+    for off_y in range(0, y_numel, BLOCK_Y):
+        mask = (off_y + cols < y_numel)[None, :]
+        smem.store(gl.load(a_ptr + rows[:, None] * y_numel + off_y + cols[None, :], mask=mask, other=0))
+        cdna5.tdm.async_scatter(b_desc, idx, smem)
         cdna5.tdm.async_wait(0)
-        y_desc = cdna5.tdm.update_tensor_descriptor(y_desc, add_offsets=[0, BLOCK_K], clamp_bounds=True)
+        b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_Y], clamp_bounds=True)
 
 
-@pytest.mark.parametrize("BLOCK_M, BLOCK_K", [(16, 64), (64, 128)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(16, 64), (64, 128)])
 @pytest.mark.parametrize("index_dtype", [gl.int16, gl.int32])
-@pytest.mark.parametrize("M", [1024, 512])
+@pytest.mark.parametrize("x_numel", [1024, 512])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_gather(BLOCK_M, BLOCK_K, index_dtype, M):
-    K = 1000
-    x = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
-    idx = torch.randint(0, 1024, (BLOCK_M, ), device="cuda", dtype=torch.int32).sort().values
-    out = torch.empty(BLOCK_M, K, device="cuda", dtype=x.dtype)
-    gather_kernel[(1, )](x, idx, out, M, K, BLOCK_M, BLOCK_K, index_dtype)
-    ref = torch.zeros_like(out)
-    valid = idx < M
-    ref[valid] = x[idx[valid].long()]
-    torch.testing.assert_close(out, ref, atol=0, rtol=0)
+def test_gather(BLOCK_X, BLOCK_Y, index_dtype, x_numel):
+    y_numel = 1000
+    a = torch.randn(x_numel, y_numel, device="cuda", dtype=torch.bfloat16)
+    idx = torch.randint(0, 1024, (BLOCK_X, ), device="cuda", dtype=torch.int32).sort().values
+    b = torch.empty(BLOCK_X, y_numel, device="cuda", dtype=a.dtype)
+    gather_kernel[(1, )](a, idx, b, x_numel, y_numel, BLOCK_X, BLOCK_Y, index_dtype)
+    ref = torch.zeros_like(b)
+    valid = idx < x_numel
+    ref[valid] = a[idx[valid].long()]
+    torch.testing.assert_close(b, ref, atol=0, rtol=0)
 
 
-@pytest.mark.parametrize("BLOCK_M, BLOCK_K", [(16, 64), (64, 128)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(16, 64), (64, 128)])
 @pytest.mark.parametrize("index_dtype", [gl.int16, gl.int32])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_scatter(BLOCK_M, BLOCK_K, index_dtype):
-    M, K = 1024, 1000
-    y = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
-    idx = torch.randperm(M, device="cuda", dtype=torch.int32)[:BLOCK_M]
-    src = torch.randn(BLOCK_M, K, device="cuda", dtype=y.dtype)
-    ref = y.clone()
-    ref[idx.long()] = src
-    scatter_kernel[(1, )](src, idx, y, M, K, BLOCK_M, BLOCK_K, index_dtype)
-    torch.testing.assert_close(y, ref, atol=0, rtol=0)
+def test_scatter(BLOCK_X, BLOCK_Y, index_dtype):
+    x_numel, y_numel = 1024, 1000
+    b = torch.randn(x_numel, y_numel, device="cuda", dtype=torch.bfloat16)
+    idx = torch.randperm(x_numel, device="cuda", dtype=torch.int32)[:BLOCK_X]
+    a = torch.randn(BLOCK_X, y_numel, device="cuda", dtype=b.dtype)
+    ref = b.clone()
+    ref[idx.long()] = a
+    scatter_kernel[(1, )](a, idx, b, x_numel, y_numel, BLOCK_X, BLOCK_Y, index_dtype)
+    torch.testing.assert_close(b, ref, atol=0, rtol=0)
 
 
 # %%
@@ -174,13 +175,13 @@ def test_scatter(BLOCK_M, BLOCK_K, index_dtype):
 # exchange, int32 indices can address a larger tensor.
 
 if __name__ == "__main__":
-    x = torch.randn(1024, 1024, device="cuda", dtype=torch.bfloat16)
+    a = torch.randn(1024, 1024, device="cuda", dtype=torch.bfloat16)
     idx = torch.randint(0, 1024, (128, ), device="cuda", dtype=torch.int32)
     for num_rows in [64, 128]:
-        out = torch.empty(num_rows, 1024, device="cuda", dtype=x.dtype)
+        b = torch.empty(num_rows, 1024, device="cuda", dtype=a.dtype)
         for index_dtype in [gl.int16, gl.int32]:
             print(f"{num_rows} rows, {index_dtype}:")
-            kernel = gather_kernel[(1, )](x, idx, out, 1024, 1024, num_rows, 256, index_dtype)
+            kernel = gather_kernel[(1, )](a, idx, b, 1024, 1024, num_rows, 256, index_dtype)
             t1.print_instructions(kernel, r"tensor_load_to_lds")
 
 # %%
@@ -224,67 +225,70 @@ if __name__ == "__main__":
 
 
 @gluon.jit
-def copy_kernel(x_ptr, idx_ptr, out_ptr, M, K, BLOCK_M: gl.constexpr, BLOCK_K: gl.constexpr, INDEX_DTYPE: gl.constexpr,
-                USE_TDM: gl.constexpr):
-    off_m = gl.program_id(0) * BLOCK_M
+def copy_kernel(a_ptr, idx_ptr, b_ptr, x_numel, y_numel,  #
+                BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr,  #
+                INDEX_DTYPE: gl.constexpr, USE_TDM: gl.constexpr):
+    off_x = gl.program_id(0) * BLOCK_X
     num_warps: gl.constexpr = gl.num_warps()
     if USE_TDM:
         smem_layout: gl.constexpr = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-        x_desc = cdna5.tdm.make_tensor_descriptor(x_ptr, [M, K], [K, 1], [BLOCK_M, BLOCK_K], smem_layout)
-        out_desc = cdna5.tdm.make_tensor_descriptor(out_ptr, [M, K], [K, 1], [BLOCK_M, BLOCK_K], smem_layout)
-        out_desc = cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[off_m, 0], clamp_bounds=True)
+        a_desc = cdna5.tdm.make_tensor_descriptor(a_ptr, [x_numel, y_numel], [y_numel, 1], [BLOCK_X, BLOCK_Y],
+                                                  smem_layout)
+        b_desc = cdna5.tdm.make_tensor_descriptor(b_ptr, [x_numel, y_numel], [y_numel, 1], [BLOCK_X, BLOCK_Y],
+                                                  smem_layout)
+        b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[off_x, 0], clamp_bounds=True)
         idx_layout: gl.constexpr = gl.SliceLayout(
-            dim=1, parent=gl.BlockedLayout(size_per_thread=[BLOCK_M // num_warps, 1], threads_per_warp=[1, warp_size],
+            dim=1, parent=gl.BlockedLayout(size_per_thread=[BLOCK_X // num_warps, 1], threads_per_warp=[1, warp_size],
                                            warps_per_cta=[num_warps, 1], order=[1, 0]))
-        idx = gl.load(idx_ptr + off_m + gl.arange(0, BLOCK_M, idx_layout)).to(INDEX_DTYPE)
-        smem = gl.allocate_shared_memory(x_ptr.dtype.element_ty, [BLOCK_M, BLOCK_K], smem_layout)
-        for k in range(0, K, BLOCK_K):
-            cdna5.tdm.async_gather(x_desc, idx, smem)
+        idx = gl.load(idx_ptr + off_x + gl.arange(0, BLOCK_X, idx_layout)).to(INDEX_DTYPE)
+        smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [BLOCK_X, BLOCK_Y], smem_layout)
+        for off_y in range(0, y_numel, BLOCK_Y):
+            cdna5.tdm.async_gather(a_desc, idx, smem)
             cdna5.tdm.async_wait(0)
-            cdna5.tdm.async_store(out_desc, src=smem)
+            cdna5.tdm.async_store(b_desc, src=smem)
             cdna5.tdm.async_wait(0)
-            x_desc = cdna5.tdm.update_tensor_descriptor(x_desc, add_offsets=[0, BLOCK_K], clamp_bounds=True)
-            out_desc = cdna5.tdm.update_tensor_descriptor(out_desc, add_offsets=[0, BLOCK_K], clamp_bounds=True)
+            a_desc = cdna5.tdm.update_tensor_descriptor(a_desc, add_offsets=[0, BLOCK_Y], clamp_bounds=True)
+            b_desc = cdna5.tdm.update_tensor_descriptor(b_desc, add_offsets=[0, BLOCK_Y], clamp_bounds=True)
     else:
         layout: gl.constexpr = gl.BlockedLayout([1, 8], [1, warp_size], [num_warps, 1], [1, 0])
-        rows = off_m + gl.arange(0, BLOCK_M, gl.SliceLayout(1, layout))
-        cols = gl.arange(0, BLOCK_K, gl.SliceLayout(0, layout))
+        rows = off_x + gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
+        cols = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
         idx = gl.load(idx_ptr + rows)
-        for k in range(0, K, BLOCK_K):
-            x = gl.load(x_ptr + idx[:, None].to(gl.int64) * K + k + cols[None, :])
-            gl.store(out_ptr + rows[:, None].to(gl.int64) * K + k + cols[None, :], x)
+        for off_y in range(0, y_numel, BLOCK_Y):
+            a = gl.load(a_ptr + idx[:, None].to(gl.int64) * y_numel + off_y + cols[None, :])
+            gl.store(b_ptr + rows[:, None].to(gl.int64) * y_numel + off_y + cols[None, :], a)
 
 
-def copy(x, idx, use_tdm, BLOCK_M=16, BLOCK_K=2048, index_dtype=gl.int16):
-    M, K = x.shape
-    out = torch.empty(idx.shape[0], K, device=x.device, dtype=x.dtype)
-    grid = (idx.shape[0] // BLOCK_M, )
-    copy_kernel[grid](x, idx, out, M, K, BLOCK_M, BLOCK_K, index_dtype, use_tdm)
-    return out
+def copy(a, idx, use_tdm, BLOCK_X=16, BLOCK_Y=2048, index_dtype=gl.int16):
+    x_numel, y_numel = a.shape
+    b = torch.empty(idx.shape[0], y_numel, device=a.device, dtype=a.dtype)
+    grid = (idx.shape[0] // BLOCK_X, )
+    copy_kernel[grid](a, idx, b, x_numel, y_numel, BLOCK_X, BLOCK_Y, index_dtype, use_tdm)
+    return b
 
 
 @pytest.mark.parametrize("use_tdm", [True, False])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
 def test_copy(use_tdm):
-    x = torch.randn(4096, 4096, device="cuda", dtype=torch.bfloat16)
+    a = torch.randn(4096, 4096, device="cuda", dtype=torch.bfloat16)
     idx = torch.randint(0, 4096, (2048, ), device="cuda", dtype=torch.int32)
-    out = copy(x, idx, use_tdm)
-    torch.testing.assert_close(out, x[idx.long()], atol=0, rtol=0)
+    b = copy(a, idx, use_tdm)
+    torch.testing.assert_close(b, a[idx.long()], atol=0, rtol=0)
 
 
 if __name__ == "__main__":
     print("Benchmarking gather")
     print("===================")
-    M, K = 16384, 8192
-    x = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
-    idx = torch.randint(0, M, (M, ), device="cuda", dtype=torch.int32)
+    x_numel, y_numel = 16384, 8192
+    a = torch.randn(x_numel, y_numel, device="cuda", dtype=torch.bfloat16)
+    idx = torch.randint(0, x_numel, (x_numel, ), device="cuda", dtype=torch.int32)
 
     def bench(name, fn):
         ms = triton.testing.do_bench(fn, warmup=200, rep=1000)
-        print(f"{name}: {2 * x.numel() * x.element_size() / ms * 1e-9:.1f} TB/s")
+        print(f"{name}: {2 * a.numel() * a.element_size() / ms * 1e-9:.1f} TB/s")
 
-    bench("global load", lambda: copy(x, idx, False))
-    bench("tdm gather", lambda: copy(x, idx, True))
+    bench("global load", lambda: copy(a, idx, False))
+    bench("tdm gather", lambda: copy(a, idx, True))
 
 # %%
 # ```

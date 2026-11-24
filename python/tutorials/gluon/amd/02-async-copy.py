@@ -102,7 +102,7 @@ if __name__ == "__main__" and is_cdna4():
 
 @gluon.jit
 def elementwise_async_copy_kernel(  #
-        a_ptr, b_ptr, c_ptr, numel_x, numel_y,  #
+        a_ptr, b_ptr, c_ptr, x_numel, y_numel,  #
         a_stride_x, a_stride_y, b_stride_x, b_stride_y, c_stride_x, c_stride_y,  #
         BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr,  #
@@ -117,9 +117,9 @@ def elementwise_async_copy_kernel(  #
     a_smem = gl.allocate_shared_memory(dtype, [BLOCK_X, BLOCK_Y], layout=smem_layout)
     b_smem = gl.allocate_shared_memory(dtype, [BLOCK_X, BLOCK_Y], layout=smem_layout)
 
-    for off_y in range(0, numel_y, BLOCK_Y):
+    for off_y in range(0, y_numel, BLOCK_Y):
         offs_y = off_y + gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
-        mask = (offs_x < numel_x)[:, None] & (offs_y < numel_y)[None, :]
+        mask = (offs_x < x_numel)[:, None] & (offs_y < y_numel)[None, :]
         cdna4.async_copy.global_load_to_shared(a_smem, a_ptrs + a_stride_y * offs_y[None, :], mask)
         cdna4.async_copy.global_load_to_shared(b_smem, b_ptrs + b_stride_y * offs_y[None, :], mask)
         cdna4.async_copy.commit_group()
@@ -138,16 +138,16 @@ def elementwise_async_copy_kernel(  #
 
 @gluon.jit
 def elementwise_async_copy_w_buffer_kernel(  #
-        a_ptr, b_ptr, c_ptr, numel_x, numel_y,  #
+        a_ptr, b_ptr, c_ptr, x_numel, y_numel,  #
         a_stride_x, a_stride_y, b_stride_x, b_stride_y, c_stride_x, c_stride_y,  #
         BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr,  #
 ):
     pid = gl.program_id(0)
     off_x = pid * BLOCK_X
-    a_desc = t1.make_buffer_descriptor(a_ptr, off_x, numel_x, a_stride_x, BLOCK_X)
-    b_desc = t1.make_buffer_descriptor(b_ptr, off_x, numel_x, b_stride_x, BLOCK_X)
-    c_desc = t1.make_buffer_descriptor(c_ptr, off_x, numel_x, c_stride_x, BLOCK_X)
+    a_desc = t1.make_buffer_descriptor(a_ptr, off_x, x_numel, a_stride_x, BLOCK_X)
+    b_desc = t1.make_buffer_descriptor(b_ptr, off_x, x_numel, b_stride_x, BLOCK_X)
+    c_desc = t1.make_buffer_descriptor(c_ptr, off_x, x_numel, c_stride_x, BLOCK_X)
 
     idx_x = gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
     idx_y = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
@@ -159,8 +159,8 @@ def elementwise_async_copy_w_buffer_kernel(  #
     a_smem = gl.allocate_shared_memory(dtype, [BLOCK_X, BLOCK_Y], layout=smem_layout)
     b_smem = gl.allocate_shared_memory(dtype, [BLOCK_X, BLOCK_Y], layout=smem_layout)
 
-    for off_y in range(0, numel_y, BLOCK_Y):
-        mask = (off_y + idx_y < numel_y)[None, :]
+    for off_y in range(0, y_numel, BLOCK_Y):
+        mask = (off_y + idx_y < y_numel)[None, :]
         cdna4.buffer.load_to_shared(a_smem, a_desc, a_offs, mask, soffset=off_y * a_stride_y)
         cdna4.buffer.load_to_shared(b_smem, b_desc, b_offs, mask, soffset=off_y * b_stride_y)
         cdna4.async_copy.commit_group()
@@ -173,25 +173,25 @@ def elementwise_async_copy_w_buffer_kernel(  #
 
 def elementwise_async_copy(A, B, C, kernel, BLOCK_X=32, BLOCK_Y=256):
     assert A.shape == B.shape == C.shape
-    numel_x, numel_y = A.shape
+    x_numel, y_numel = A.shape
     layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     # With these parameters, `SwizzledSharedLayout` is a plain shared memory
     # layout without padding or swizzling.
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    grid = (triton.cdiv(numel_x, BLOCK_X), )
+    grid = (triton.cdiv(x_numel, BLOCK_X), )
     return kernel[grid](
-        A, B, C, numel_x, numel_y,  #
+        A, B, C, x_numel, y_numel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
         BLOCK_X, BLOCK_Y, layout, smem_layout)
 
 
-@pytest.mark.parametrize("numel_x, numel_y", [(1000, 2000), (4000, 160)])
+@pytest.mark.parametrize("x_numel, y_numel", [(1000, 2000), (4000, 160)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 256), (4, 512)])
 @pytest.mark.parametrize("kernel", [elementwise_async_copy_kernel, elementwise_async_copy_w_buffer_kernel])
 @pytest.mark.skipif(not is_cdna4(), reason="Requires CDNA4")
-def test_elementwise_async_copy(numel_x, numel_y, BLOCK_X, BLOCK_Y, kernel):
-    a = torch.randn(numel_x, numel_y, device="cuda")
-    b = torch.randn(numel_x, numel_y, device="cuda")
+def test_elementwise_async_copy(x_numel, y_numel, BLOCK_X, BLOCK_Y, kernel):
+    a = torch.randn(x_numel, y_numel, device="cuda")
+    b = torch.randn(x_numel, y_numel, device="cuda")
     c = torch.empty_like(a)
     elementwise_async_copy(a, b, c, kernel, BLOCK_X, BLOCK_Y)
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
@@ -298,10 +298,10 @@ if __name__ == "__main__" and is_cdna4():
 
 
 @gluon.jit
-def issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, idx_y, numel_y, a_stride_y, b_stride_y,
+def issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, idx_y, y_numel, a_stride_y, b_stride_y,
                 BLOCK_Y: gl.constexpr, num_buffers: gl.constexpr):
     off_y = copy_idx * BLOCK_Y
-    mask = (off_y + idx_y < numel_y)[None, :]
+    mask = (off_y + idx_y < y_numel)[None, :]
     cdna4.buffer.load_to_shared(a_smem.index(copy_idx % num_buffers), a_desc, a_offs, mask, soffset=off_y * a_stride_y)
     cdna4.buffer.load_to_shared(b_smem.index(copy_idx % num_buffers), b_desc, b_offs, mask, soffset=off_y * b_stride_y)
     cdna4.async_copy.commit_group()
@@ -309,28 +309,28 @@ def issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, idx_y,
 
 
 @gluon.jit
-def perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, idx_y, numel_y, c_stride_y, BLOCK_Y: gl.constexpr,
+def perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, idx_y, y_numel, c_stride_y, BLOCK_Y: gl.constexpr,
                 num_buffers: gl.constexpr, layout: gl.constexpr):
     a_val = a_smem.index(read_idx % num_buffers).load(layout)
     b_val = b_smem.index(read_idx % num_buffers).load(layout)
     off_y = read_idx * BLOCK_Y
-    mask = (off_y + idx_y < numel_y)[None, :]
+    mask = (off_y + idx_y < y_numel)[None, :]
     cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=off_y * c_stride_y)
     return read_idx + 1
 
 
 @gluon.jit
 def elementwise_pipelined_kernel(  #
-        a_ptr, b_ptr, c_ptr, numel_x, numel_y,  #
+        a_ptr, b_ptr, c_ptr, x_numel, y_numel,  #
         a_stride_x, a_stride_y, b_stride_x, b_stride_y, c_stride_x, c_stride_y,  #
         BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr, num_buffers: gl.constexpr,  #
 ):
     pid = gl.program_id(0)
     off_x = pid * BLOCK_X
-    a_desc = t1.make_buffer_descriptor(a_ptr, off_x, numel_x, a_stride_x, BLOCK_X)
-    b_desc = t1.make_buffer_descriptor(b_ptr, off_x, numel_x, b_stride_x, BLOCK_X)
-    c_desc = t1.make_buffer_descriptor(c_ptr, off_x, numel_x, c_stride_x, BLOCK_X)
+    a_desc = t1.make_buffer_descriptor(a_ptr, off_x, x_numel, a_stride_x, BLOCK_X)
+    b_desc = t1.make_buffer_descriptor(b_ptr, off_x, x_numel, b_stride_x, BLOCK_X)
+    c_desc = t1.make_buffer_descriptor(c_ptr, off_x, x_numel, c_stride_x, BLOCK_X)
 
     idx_x = gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
     idx_y = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
@@ -345,41 +345,41 @@ def elementwise_pipelined_kernel(  #
     read_idx = 0
 
     for _ in gl.static_range(num_buffers - 1):
-        copy_idx = issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, idx_y, numel_y, a_stride_y,
+        copy_idx = issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, idx_y, y_numel, a_stride_y,
                                b_stride_y, BLOCK_Y, num_buffers)
 
-    for _ in range(gl.cdiv(numel_y, BLOCK_Y) - (num_buffers - 1)):
-        copy_idx = issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, idx_y, numel_y, a_stride_y,
+    for _ in range(gl.cdiv(y_numel, BLOCK_Y) - (num_buffers - 1)):
+        copy_idx = issue_loads(copy_idx, a_smem, b_smem, a_desc, b_desc, a_offs, b_offs, idx_y, y_numel, a_stride_y,
                                b_stride_y, BLOCK_Y, num_buffers)
         cdna4.async_copy.wait_group(num_buffers - 1)
-        read_idx = perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, idx_y, numel_y, c_stride_y, BLOCK_Y,
+        read_idx = perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, idx_y, y_numel, c_stride_y, BLOCK_Y,
                                num_buffers, layout)
 
     for i in gl.static_range(num_buffers - 1):
         cdna4.async_copy.wait_group(num_buffers - 2 - i)
-        read_idx = perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, idx_y, numel_y, c_stride_y, BLOCK_Y,
+        read_idx = perform_add(read_idx, a_smem, b_smem, c_desc, c_offs, idx_y, y_numel, c_stride_y, BLOCK_Y,
                                num_buffers, layout)
 
 
 def elementwise_pipelined(A, B, C, BLOCK_X=32, BLOCK_Y=256, num_buffers=2):
     assert A.shape == B.shape == C.shape
-    numel_x, numel_y = A.shape
+    x_numel, y_numel = A.shape
     layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    grid = (triton.cdiv(numel_x, BLOCK_X), )
+    grid = (triton.cdiv(x_numel, BLOCK_X), )
     return elementwise_pipelined_kernel[grid](
-        A, B, C, numel_x, numel_y,  #
+        A, B, C, x_numel, y_numel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
         BLOCK_X, BLOCK_Y, layout, smem_layout, num_buffers)
 
 
-@pytest.mark.parametrize("numel_x, numel_y", [(1000, 2000), (4000, 160)])
+@pytest.mark.parametrize("x_numel, y_numel", [(1000, 2000), (4000, 160)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 256), (4, 512)])
 @pytest.mark.parametrize("num_buffers", [1, 2])
 @pytest.mark.skipif(not is_cdna4(), reason="Requires CDNA4")
-def test_elementwise_pipelined(numel_x, numel_y, BLOCK_X, BLOCK_Y, num_buffers):
-    a = torch.randn(numel_x, numel_y, device="cuda")
-    b = torch.randn(numel_x, numel_y, device="cuda")
+def test_elementwise_pipelined(x_numel, y_numel, BLOCK_X, BLOCK_Y, num_buffers):
+    a = torch.randn(x_numel, y_numel, device="cuda")
+    b = torch.randn(x_numel, y_numel, device="cuda")
     c = torch.empty_like(a)
     elementwise_pipelined(a, b, c, BLOCK_X, BLOCK_Y, num_buffers)
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
@@ -408,9 +408,9 @@ if __name__ == "__main__" and is_cdna4():
 if __name__ == "__main__" and is_cdna4():
     print("Benchmarking elementwise add")
     print("============================")
-    numel_x, numel_y = 16 * 1024, 16 * 1024
-    A = torch.randn(numel_x, numel_y, device="cuda")
-    B = torch.randn(numel_x, numel_y, device="cuda")
+    x_numel, y_numel = 16 * 1024, 16 * 1024
+    A = torch.randn(x_numel, y_numel, device="cuda")
+    B = torch.randn(x_numel, y_numel, device="cuda")
     C = torch.empty_like(A)
 
     def bench(name, fn):
@@ -478,7 +478,7 @@ if __name__ == "__main__" and is_cdna4():
 
 @gluon.jit
 def elementwise_async_copy_cdna5_kernel(  #
-        a_ptr, b_ptr, c_ptr, numel_x, numel_y,  #
+        a_ptr, b_ptr, c_ptr, x_numel, y_numel,  #
         a_stride_x, a_stride_y, b_stride_x, b_stride_y, c_stride_x, c_stride_y,  #
         BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr,  #
@@ -493,9 +493,9 @@ def elementwise_async_copy_cdna5_kernel(  #
     a_smem = gl.allocate_shared_memory(dtype, [BLOCK_X, BLOCK_Y], layout=smem_layout)
     b_smem = gl.allocate_shared_memory(dtype, [BLOCK_X, BLOCK_Y], layout=smem_layout)
 
-    for off_y in range(0, numel_y, BLOCK_Y):
+    for off_y in range(0, y_numel, BLOCK_Y):
         offs_y = off_y + gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
-        mask = (offs_x < numel_x)[:, None] & (offs_y < numel_y)[None, :]
+        mask = (offs_x < x_numel)[:, None] & (offs_y < y_numel)[None, :]
         cdna5.async_copy.global_to_shared(a_smem, a_ptrs + a_stride_y * offs_y[None, :], mask)
         cdna5.async_copy.global_to_shared(b_smem, b_ptrs + b_stride_y * offs_y[None, :], mask)
         cdna5.async_copy.commit_group()
@@ -508,22 +508,22 @@ def elementwise_async_copy_cdna5_kernel(  #
 
 def elementwise_async_copy_cdna5(A, B, C, BLOCK_X=32, BLOCK_Y=256):
     assert A.shape == B.shape == C.shape
-    numel_x, numel_y = A.shape
+    x_numel, y_numel = A.shape
     layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    grid = (triton.cdiv(numel_x, BLOCK_X), )
+    grid = (triton.cdiv(x_numel, BLOCK_X), )
     return elementwise_async_copy_cdna5_kernel[grid](
-        A, B, C, numel_x, numel_y,  #
+        A, B, C, x_numel, y_numel,  #
         *A.stride(), *B.stride(), *C.stride(),  #
         BLOCK_X, BLOCK_Y, layout, smem_layout)
 
 
-@pytest.mark.parametrize("numel_x, numel_y", [(1000, 2000), (4000, 160)])
+@pytest.mark.parametrize("x_numel, y_numel", [(1000, 2000), (4000, 160)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 256), (4, 512)])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_elementwise_async_copy_cdna5(numel_x, numel_y, BLOCK_X, BLOCK_Y):
-    a = torch.randn(numel_x, numel_y, device="cuda")
-    b = torch.randn(numel_x, numel_y, device="cuda")
+def test_elementwise_async_copy_cdna5(x_numel, y_numel, BLOCK_X, BLOCK_Y):
+    a = torch.randn(x_numel, y_numel, device="cuda")
+    b = torch.randn(x_numel, y_numel, device="cuda")
     c = torch.empty_like(a)
     elementwise_async_copy_cdna5(a, b, c, BLOCK_X, BLOCK_Y)
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
@@ -568,14 +568,14 @@ if __name__ == "__main__" and is_cdna5():
 
 @gluon.jit
 def elementwise_async_copy_mbarrier_kernel(  #
-        a_ptr, b_ptr, c_ptr, numel_x, numel_y,  #
+        a_ptr, b_ptr, c_ptr, x_numel, y_numel,  #
         BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, layout: gl.constexpr,  #
         smem_layout: gl.constexpr,  #
 ):
     offs_x = gl.program_id(0) * BLOCK_X + gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
     offs_y = gl.program_id(1) * BLOCK_Y + gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
-    offs = offs_x[:, None] * numel_y + offs_y[None, :]
-    mask = (offs_x < numel_x)[:, None] & (offs_y < numel_y)[None, :]
+    offs = offs_x[:, None] * y_numel + offs_y[None, :]
+    mask = (offs_x < x_numel)[:, None] & (offs_y < y_numel)[None, :]
 
     dtype: gl.constexpr = a_ptr.dtype.element_ty
     a_smem = gl.allocate_shared_memory(dtype, [BLOCK_X, BLOCK_Y], layout=smem_layout)
@@ -592,20 +592,20 @@ def elementwise_async_copy_mbarrier_kernel(  #
 
 
 def elementwise_async_copy_mbarrier(A, B, C, BLOCK_X=32, BLOCK_Y=256):
-    numel_x, numel_y = A.shape
+    x_numel, y_numel = A.shape
     layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
     smem_layout = gl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
-    grid = (triton.cdiv(numel_x, BLOCK_X), triton.cdiv(numel_y, BLOCK_Y))
-    return elementwise_async_copy_mbarrier_kernel[grid](A, B, C, numel_x, numel_y, BLOCK_X, BLOCK_Y, layout,
+    grid = (triton.cdiv(x_numel, BLOCK_X), triton.cdiv(y_numel, BLOCK_Y))
+    return elementwise_async_copy_mbarrier_kernel[grid](A, B, C, x_numel, y_numel, BLOCK_X, BLOCK_Y, layout,
                                                         smem_layout)
 
 
-@pytest.mark.parametrize("numel_x, numel_y", [(1000, 2000), (4000, 160)])
+@pytest.mark.parametrize("x_numel, y_numel", [(1000, 2000), (4000, 160)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 256), (4, 512)])
 @pytest.mark.skipif(not is_cdna5(), reason="Requires CDNA5")
-def test_elementwise_async_copy_mbarrier(numel_x, numel_y, BLOCK_X, BLOCK_Y):
-    a = torch.randn(numel_x, numel_y, device="cuda")
-    b = torch.randn(numel_x, numel_y, device="cuda")
+def test_elementwise_async_copy_mbarrier(x_numel, y_numel, BLOCK_X, BLOCK_Y):
+    a = torch.randn(x_numel, y_numel, device="cuda")
+    b = torch.randn(x_numel, y_numel, device="cuda")
     c = torch.empty_like(a)
     elementwise_async_copy_mbarrier(a, b, c, BLOCK_X, BLOCK_Y)
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
@@ -614,9 +614,9 @@ def test_elementwise_async_copy_mbarrier(numel_x, numel_y, BLOCK_X, BLOCK_Y):
 if __name__ == "__main__" and is_cdna5():
     print("Benchmarking elementwise add")
     print("============================")
-    numel_x, numel_y = 16 * 1024, 16 * 1024
-    A = torch.randn(numel_x, numel_y, device="cuda")
-    B = torch.randn(numel_x, numel_y, device="cuda")
+    x_numel, y_numel = 16 * 1024, 16 * 1024
+    A = torch.randn(x_numel, y_numel, device="cuda")
+    B = torch.randn(x_numel, y_numel, device="cuda")
     C = torch.empty_like(A)
 
     def bench(name, fn):
@@ -625,7 +625,7 @@ if __name__ == "__main__" and is_cdna5():
 
     def global_load(BLOCK_X, BLOCK_Y):
         layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
-        t1.elementwise_kernel[(triton.cdiv(numel_x, BLOCK_X), )](A, B, C, numel_x, numel_y, *A.stride(), *B.stride(),
+        t1.elementwise_kernel[(triton.cdiv(x_numel, BLOCK_X), )](A, B, C, x_numel, y_numel, *A.stride(), *B.stride(),
                                                                  *C.stride(), BLOCK_X, BLOCK_Y, layout)
 
     BLOCK_X, BLOCK_Y = 4, 512
