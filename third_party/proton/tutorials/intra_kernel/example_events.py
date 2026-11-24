@@ -77,7 +77,7 @@ def ws_epilogue_partition(a_desc, b_desc, c_desc, a_bufs, b_bufs, load_empty_bar
         c_smem.store(acc_tmem.load().to(c_desc.dtype))
         fence_async_shared()
         tma.async_store(c_desc, [off_m, off_n], c_smem)
-        tma.store_wait(pendings=0)
+        tma.store_wait(pendings=0, deps=[c_smem])
 
 
 @gluon.jit
@@ -305,13 +305,13 @@ def matmul_kernel(a_desc, b_desc, c_desc, num_warps: gl.constexpr):
     mbarrier.wait(vb_bar, epilogue_phase)
     pl.end_event(mma_vb_event)
     vb = vb_tmem.load()
-    tma.store_wait(pendings=0)
+    tma.store_wait(pendings=0, deps=[c_smem])
     pl.end_event(store_event)
     c_smem.store(vb.to(dtype))
     fence_async_shared()
     pl.start_event(store_event)
     tma.async_store(c_desc, [off_m + block_m, off_n], c_smem)
-    tma.store_wait(pendings=0)
+    tma.store_wait(pendings=0, deps=[c_smem])
     pl.end_event(store_event)
 
 

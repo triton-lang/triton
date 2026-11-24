@@ -29,6 +29,20 @@ def barrier(input, _semantic=None):
 
 
 @core.builtin
+def compact_exp2(input, _semantic=None):
+    """
+    Compute exp2 on an FP32 value with a compact FPSan signature.
+
+    Under FPSan the result has payload ``(1 + 2**25)**x mod 2**32`` for
+    input payload ``x``. Its 128 powers fit in an FP8 probability code.
+    Use this operation for both the centered weights and their rescaling
+    factors to preserve ``E(x + y) = E(x) * E(y)`` across an FP8 round trip.
+    Native execution computes the ordinary base-2 exponential.
+    """
+    return _semantic.fpsan_compact_exp2(_semantic.to_tensor(input))
+
+
+@core.builtin
 def homomorphic_cast(input, dtype: core.dtype, fp_downcast_rounding: Optional[str] = None, _semantic=None):
     """
     Cast to a same-width or narrower floating-point type, preserving FPSan algebra.

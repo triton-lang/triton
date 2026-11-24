@@ -1020,6 +1020,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // Global effects leave stores pending; opaque synchronization needs publication.
   // WAIT-LABEL: @wait_global_effects
   // WAIT: ttng.tmem_store
+  // WAIT-NEXT: ttng.prefetch_bulk
   // WAIT-NEXT: %{{.*}} = tt.load
   // WAIT-NEXT: tt.print
   // WAIT-NEXT: ttng.tmem_wait store
@@ -1028,9 +1029,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // WAIT-NEXT: tt.return
   tt.func @wait_global_effects(%ptr: !tt.ptr<i32>, %value: f32) {
     %true = arith.constant true
+    %c64 = arith.constant 64 : i32
     %data = tt.splat %value : f32 -> tensor<128x128xf32, #blocked>
     %mem = ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
     ttng.tmem_store %data, %mem, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem128, #ttng.tensor_memory, mutable>
+    ttng.prefetch_bulk %ptr, %c64, %true : !tt.ptr<i32>, i32, i1
     %loaded = tt.load %ptr {isVolatile = true} : !tt.ptr<i32>
     tt.print "loaded" {hex = false, isSigned = array<i32: 1>} : %loaded : i32
     %opaque = tt.elementwise_inline_asm "bar.sync 0; mov.u32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = false} -> i32

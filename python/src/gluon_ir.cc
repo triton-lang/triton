@@ -769,6 +769,13 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("operand"), py::arg("numBins"), py::arg("mask").none(),
           py::arg("layout"))
+      .def(
+          "create_fpsan_probability_cast",
+          [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+            return self
+                .create<triton::instrument::ExperimentalFPSanProbabilityCastOp>(
+                    dstType, src);
+          })
       .def("create_experimental_fpsan_embed",
            [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
              return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
@@ -1139,7 +1146,7 @@ void init_gluon_ir(py::module_ &m) {
              std::optional<tt::ScaleDotElemType> bType) {
             Value accDep;
             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-            self.create<ttng::TCGen5MMAOp>(
+            auto mma = self.create<ttng::TCGen5MMAOp>(
                 tokType, a, b, acc, accDep, useAcc, pred, two_ctas, multicast,
                 mbarriers, mbarrier_preds,
                 /*isAsync=*/true, /*isUnsigned=*/false,
@@ -1147,6 +1154,7 @@ void init_gluon_ir(py::module_ &m) {
                       : tt::ScaleDotElemTypeAttr{},
                 bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *bType)
                       : tt::ScaleDotElemTypeAttr{});
+            return mma->getResult(0);
           },
           py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
           py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),
@@ -1160,10 +1168,11 @@ void init_gluon_ir(py::module_ &m) {
               bool two_ctas, bool multicast) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             self.create<ttng::TCGen5MMAScaledOp>(
+             auto mma = self.create<ttng::TCGen5MMAScaledOp>(
                  tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
                  useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
                  /*isAsync=*/true, multicast);
+             return mma->getResult(0);
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
@@ -1172,6 +1181,10 @@ void init_gluon_ir(py::module_ &m) {
                                                earlyARelease);
            })
 
+      .def("create_prefetch_bulk",
+           [](GluonOpBuilder &self, Value ptr, Value numBytes, Value pred) {
+             self.create<ttng::PrefetchBulkOp>(ptr, numBytes, pred);
+           })
       .def("create_async_bulk_copy_global_to_local",
            [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
               Value barrier, Value pred, bool multicast) {
@@ -1217,8 +1230,9 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord, src);
            })
       .def("create_async_tma_store_wait",
-           [](GluonOpBuilder &self, int pendings, bool readOnly) {
-             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly);
+           [](GluonOpBuilder &self, int pendings, bool readOnly,
+              std::vector<Value> &deps) {
+             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly, deps);
            })
       .def(
           "create_async_tma_gather",

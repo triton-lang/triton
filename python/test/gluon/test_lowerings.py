@@ -115,6 +115,9 @@ def _scan_layouts():
     # Exceed the totals budget while lanes select independent warp segments.
     grouped = linear([[4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 16]],
                      [[2, 0], [0, 1], [0, 2], [0, 4], [0, 8]] + lane_padding, [[1, 0], [0, 0]], [], [128, 32])
+    # Two values per segment require an exclusive carry. Warp bits interleave the segments.
+    grouped_carries = linear([[1, 0], [4, 0], [8, 0], [16, 0], [64, 0]], [[0, 1 << bit] for bit in range(lane_bits)],
+                             [[2, 0], [32, 0]], [], [128, THREADS_PER_WARP])
 
     sliced = ttgl.SliceLayout(1, ttgl.BlockedLayout([1, 2, 2], [4, 1, THREADS_PER_WARP // 4], [2, 1, 2], [2, 0, 1]))
     mma_v2 = ttgl.NVMMADistributedLayout(version=[2, 0], warps_per_cta=[2, 2], instr_shape=[16, 8])
@@ -132,6 +135,7 @@ def _scan_layouts():
         "warp_transpose": transpose,
         "thread_only": thread_only,
         "grouped_totals": grouped,
+        "grouped_carries": grouped_carries,
         "slice": sliced,
         "mma_v2": mma_v2,
         "mma_v3": mma_v3,
@@ -144,6 +148,23 @@ def _scan_layouts():
         for name, layout in layouts.items()
         if _is_layout_applicable(layout)
     ]
+    if is_hopper_or_newer():
+        # CTA bits can split contiguous segments, interleave elements, or replicate a scan.
+        cta_major = linear([[1, 0], [2, 0], [0, 16]], [[4, 0], [8, 0], [0, 1], [0, 2], [0, 4]], [[0, 8], [0, 0]],
+                           [[16, 0]], [32, 32])
+        cta_minor = linear([[8, 0], [0, 4], [0, 8]], [[2, 0], [4, 0], [0, 1], [0, 2], [16, 0]], [[0, 0], [0, 0]],
+                           [[0, 16], [1, 0]], [32, 32])
+        cta_replicated = linear([[0, 1], [0, 8], [16, 0]], [[0, 2], [1, 0], [2, 0], [4, 0], [8, 0]], [[0, 4], [0, 0]],
+                                [[0, 0], [0, 16]], [32, 32])
+        # Each lane receives a full sequence of totals in registers. CTA ranks differ from scan order.
+        cta_registers = linear([[2, 0], [8, 0], [16, 0], [32, 0]], [[0, 1 << i] for i in range(5)], [[0, 0], [0, 0]],
+                               [[4, 0], [1, 0]], [64, 32])
+        cases += [
+            pytest.param(cta_major, *cta_major.shape, 0, torch.int8, id="cta_major"),
+            pytest.param(cta_minor, *cta_minor.shape, 0, torch.int32, id="cta_minor"),
+            pytest.param(cta_replicated, *cta_replicated.shape, 1, torch.bool, id="cta_replicated"),
+            pytest.param(cta_registers, *cta_registers.shape, 0, torch.int32, id="cta_registers"),
+        ]
     cases += [
         pytest.param(ttgl.BlockedLayout([1, 1], [1, THREADS_PER_WARP], [4, 1], [1, 0]), 4, n, 1, torch.int32,
                      id=f"shuffle_bounds_{n}") for n in (4, THREADS_PER_WARP // 2, THREADS_PER_WARP)
@@ -212,6 +233,8 @@ def _scan_tuple_combine(a1, b1, a2, b2):
 @pytest.mark.parametrize("layout, M, N, axis, dtype", _scan_layouts())
 @pytest.mark.parametrize("reverse", [False, True])
 def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
+    num_ctas = 2**len(getattr(layout, "block_bases", []))
+    skip_if_unsupported_cluster_size(num_ctas)
 
     @gluon.jit
     def kernel(A, B, OutA, OutB, M: ttgl.constexpr, N: ttgl.constexpr, layout: ttgl.constexpr, axis: ttgl.constexpr,
@@ -244,7 +267,7 @@ def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
                               cur).copy_(expected_b.select(axis, prev) * a.select(axis, cur) + b.select(axis, cur))
     a, b = a.to(device), b.to(device)
     out_a, out_b = torch.empty_like(a), torch.empty_like(b)
-    kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=4)
+    kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
 
@@ -1935,12 +1958,11 @@ _ld_st_shared_layouts = _filter_layouts([
 
 
 @pytest.mark.skipif(not is_cuda(), reason="Requires CUDA")
-def test_local_load_transposed_nvmma_zero_swizzle(device):
-    rows = 128
-    cols = 16
+@pytest.mark.parametrize("rows, cols, swizzle", [(128, 16, 0), (512, 64, 32)])
+def test_local_load_transposed_nvmma(rows, cols, swizzle, device):
     src_layout = ttgl.BlockedLayout([1, 1], [32, 1], [4, 1], [1, 0])
     dst_layout = ttgl.BlockedLayout([1, 16], [1, 32], [1, 4], [1, 0])
-    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=0, transposed=False, element_bitwidth=8, rank=2)
+    shared_layout = ttgl.NVMMASharedLayout(swizzle_byte_width=swizzle, transposed=False, element_bitwidth=8, rank=2)
 
     @gluon.jit
     def kernel(x_ptr, y_ptr, rows: ttgl.constexpr, cols: ttgl.constexpr, src_layout: ttgl.constexpr,
