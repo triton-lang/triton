@@ -3482,7 +3482,12 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     // The mapped destination determines the multicast group: {0,2}, then {1,3}.
     // CHECK: %[[MULTICAST_LOWER_CTAS:.*]] = arith.constant 5 : i32
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[MULTICAST_LOWER_CTAS]])
-    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[MULTICAST_LOWER_CTAS]])
+    // The destination selects the CTA pair and the issuer selects the
+    // completion barrier's parity within that pair.
+    // CHECK: %[[PAIR_BIT:.*]] = arith.constant dense<2> : tensor<4xi32
+    // CHECK: %[[PAIRS:.*]] = arith.andi {{.*}}, %[[PAIR_BIT]]
+    // CHECK: %[[BARRIERS:.*]] = arith.shli {{.*}}, %[[PAIRS]]
+    // CHECK: tt.call @__triton_consan_track_barrier_write_for_buffer{{.*}}({{.*}}%[[BARRIERS]], %[[MULTICAST_LOWER_CTAS]])
     // CHECK: ttng.async_tma_copy_global_to_local
     ttng.async_tma_copy_global_to_local %desc[%zero, %zero] %lower, %bar, %true {multicast} : !tt.tensordesc<128x64xf16, #subslice_multicast_shared>, !ttg.memdesc<4xi64, #subslice_multicast_barrier, #subslice_multicast_smem, mutable> -> !ttg.memdesc<128x64xf16, #subslice_multicast_shared, #subslice_multicast_smem, mutable, 256x64>
     // CHECK: %[[MULTICAST_UPPER_CTAS:.*]] = arith.constant 10 : i32
