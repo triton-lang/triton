@@ -45,6 +45,14 @@ if __name__ == "__main__" and not (is_cdna4() or is_cdna5()):
 # A warp has 64 lanes on CDNA4 GPUs and 32 lanes on CDNA5 GPUs.
 warp_size = gl.constexpr(64 if is_cdna4() else 32)
 
+
+@gluon.jit
+def offs_2d(rows: gl.constexpr, cols: gl.constexpr, row_stride, col_stride, layout: gl.constexpr):
+    r = gl.arange(0, rows, gl.SliceLayout(1, layout))
+    c = gl.arange(0, cols, gl.SliceLayout(0, layout))
+    return r[:, None] * row_stride + c[None, :] * col_stride
+
+
 # %%
 # CDNA4 MFMA
 # ----------
@@ -67,13 +75,6 @@ warp_size = gl.constexpr(64 if is_cdna4() else 32)
 
 
 @gluon.jit
-def offs_2d(rows: gl.constexpr, cols: gl.constexpr, stride, layout: gl.constexpr):
-    r = gl.arange(0, rows, gl.SliceLayout(1, layout))
-    c = gl.arange(0, cols, gl.SliceLayout(0, layout))
-    return r[:, None] * stride + c[None, :]
-
-
-@gluon.jit
 def mfma_kernel(a_ptr, b_ptr, c_ptr,  #
                 M: gl.constexpr, N: gl.constexpr, K: gl.constexpr,  #
                 INSTR_SHAPE: gl.constexpr, WARPS_PER_CTA: gl.constexpr):
@@ -82,13 +83,13 @@ def mfma_kernel(a_ptr, b_ptr, c_ptr,  #
     a_layout: gl.constexpr = gl.DotOperandLayout(operand_index=0, parent=mfma_layout, k_width=8)
     b_layout: gl.constexpr = gl.DotOperandLayout(operand_index=1, parent=mfma_layout, k_width=8)
 
-    a = gl.load(a_ptr + offs_2d(M, K, K, a_layout))
-    b = gl.load(b_ptr + offs_2d(K, N, N, b_layout))
+    a = gl.load(a_ptr + offs_2d(M, K, K, 1, a_layout))
+    b = gl.load(b_ptr + offs_2d(K, N, N, 1, b_layout))
 
     acc = gl.zeros([M, N], gl.float32, mfma_layout)
     acc = cdna4.mfma(a, b, acc)
 
-    gl.store(c_ptr + offs_2d(M, N, N, mfma_layout), acc)
+    gl.store(c_ptr + offs_2d(M, N, N, 1, mfma_layout), acc)
 
 
 def mfma(A, B, instr_shape, warps_per_cta):
@@ -211,15 +212,15 @@ def mfma_chain_kernel(a_ptr, b_ptr, c_ptr, out_ptr, BLOCK: gl.constexpr):
     warps: gl.constexpr = gl.num_warps()
     mfma_layout: gl.constexpr = gl.amd.AMDMFMALayout(  #
         version=4, instr_shape=[16, 16, 32], transposed=True, warps_per_cta=[warps, 1])
-    a = gl.load(a_ptr + offs_2d(BLOCK, BLOCK, BLOCK, gl.DotOperandLayout(0, mfma_layout, 8)))
-    b = gl.load(b_ptr + offs_2d(BLOCK, BLOCK, BLOCK, gl.DotOperandLayout(1, mfma_layout, 8)))
+    a = gl.load(a_ptr + offs_2d(BLOCK, BLOCK, BLOCK, 1, gl.DotOperandLayout(0, mfma_layout, 8)))
+    b = gl.load(b_ptr + offs_2d(BLOCK, BLOCK, BLOCK, 1, gl.DotOperandLayout(1, mfma_layout, 8)))
     s = cdna4.mfma(a, b, gl.zeros([BLOCK, BLOCK], gl.float32, mfma_layout))
 
     # `assert_trivial=True` makes the compilation fail if the conversion happens
     p = gl.convert_layout(s.to(gl.bfloat16), gl.DotOperandLayout(0, mfma_layout, 4), assert_trivial=True)
-    c = gl.load(c_ptr + offs_2d(BLOCK, BLOCK, BLOCK, gl.DotOperandLayout(1, mfma_layout, 4)))
+    c = gl.load(c_ptr + offs_2d(BLOCK, BLOCK, BLOCK, 1, gl.DotOperandLayout(1, mfma_layout, 4)))
     out = cdna4.mfma(p, c, gl.zeros([BLOCK, BLOCK], gl.float32, mfma_layout))
-    gl.store(out_ptr + offs_2d(BLOCK, BLOCK, BLOCK, mfma_layout), out)
+    gl.store(out_ptr + offs_2d(BLOCK, BLOCK, BLOCK, 1, mfma_layout), out)
 
 
 @pytest.mark.skipif(not is_cdna4(), reason="Requires CDNA4")
@@ -267,13 +268,13 @@ def mfma_smem_kernel(a_ptr, b_ptr, c_ptr,  #
 
     # Load data from global memory to shared memory
     a_smem = gl.allocate_shared_memory(gl.bfloat16, [M, K], a_smem_layout)
-    cdna4.buffer.load_to_shared(a_smem, a_desc, offs_2d(M, K, K, gmem_layout))
+    cdna4.buffer.load_to_shared(a_smem, a_desc, offs_2d(M, K, K, 1, gmem_layout))
     if B_K_CONTIGUOUS:
         b_smem = gl.allocate_shared_memory(gl.bfloat16, [N, K], b_smem_layout)
-        cdna4.buffer.load_to_shared(b_smem, b_desc, offs_2d(N, K, K, gmem_layout))
+        cdna4.buffer.load_to_shared(b_smem, b_desc, offs_2d(N, K, K, 1, gmem_layout))
     else:
         b_smem = gl.allocate_shared_memory(gl.bfloat16, [K, N], b_smem_layout)
-        cdna4.buffer.load_to_shared(b_smem, b_desc, offs_2d(K, N, N, gmem_layout))
+        cdna4.buffer.load_to_shared(b_smem, b_desc, offs_2d(K, N, N, 1, gmem_layout))
     cdna4.async_copy.commit_group()
     cdna4.async_copy.wait_group(0)
 
@@ -290,7 +291,7 @@ def mfma_smem_kernel(a_ptr, b_ptr, c_ptr,  #
 
     acc = gl.zeros([M, N], gl.float32, mfma_layout)
     acc = cdna4.mfma(a, b, acc)
-    gl.store(c_ptr + offs_2d(M, N, N, mfma_layout), acc)
+    gl.store(c_ptr + offs_2d(M, N, N, 1, mfma_layout), acc)
 
 
 def mfma_smem(A, B, b_k_contiguous):
@@ -436,7 +437,7 @@ if __name__ == "__main__" and is_cdna4():
 def async_copy_tile_kernel(a_ptr, gmem_layout: gl.constexpr, smem_layout: gl.constexpr):
     smem = gl.allocate_shared_memory(gl.bfloat16, [256, 64], smem_layout)
     a_desc = cdna4.buffer.make_buffer_descriptor(a_ptr, 256 * 64 * 2)
-    cdna4.buffer.load_to_shared(smem, a_desc, offs_2d(256, 64, 64, gmem_layout))
+    cdna4.buffer.load_to_shared(smem, a_desc, offs_2d(256, 64, 64, 1, gmem_layout))
     cdna4.async_copy.commit_group()
     cdna4.async_copy.wait_group(0)
 
@@ -642,8 +643,8 @@ def matmul_cdna4_kernel(a_ptr, b_ptr, c_ptr, M, N, K, NUM_BUFFERS: gl.constexpr 
 
     a_desc = t1.make_buffer_descriptor(a_ptr, off_m, cfg.M, cfg.K, cfg.BLOCK_M)
     b_desc = t1.make_buffer_descriptor(b_ptr, off_n, cfg.N, cfg.K, cfg.BLOCK_N)
-    a_offs = offs_2d(cfg.BLOCK_M, cfg.BLOCK_K, cfg.K, layouts.a_gmem_layout)
-    b_offs = offs_2d(cfg.BLOCK_N, cfg.BLOCK_K, cfg.K, layouts.b_gmem_layout)
+    a_offs = offs_2d(cfg.BLOCK_M, cfg.BLOCK_K, cfg.K, 1, layouts.a_gmem_layout)
+    b_offs = offs_2d(cfg.BLOCK_N, cfg.BLOCK_K, cfg.K, 1, layouts.b_gmem_layout)
 
     a_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K], layouts.a_smem_layout)
     b_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K], layouts.b_smem_layout)
@@ -722,8 +723,8 @@ def matmul_cdna4_subtiled_kernel(a_ptr, b_ptr, c_ptr, M, N, K,  #
 
     a_desc = t1.make_buffer_descriptor(a_ptr, off_m, cfg.M, cfg.K, cfg.BLOCK_M)
     b_desc = t1.make_buffer_descriptor(b_ptr, off_n, cfg.N, cfg.K, cfg.BLOCK_N)
-    a_offs = offs_2d(cfg.BLOCK_M, cfg.BLOCK_K, cfg.K, layouts.a_gmem_layout)
-    b_offs = offs_2d(cfg.BLOCK_N, cfg.BLOCK_K, cfg.K, layouts.b_gmem_layout)
+    a_offs = offs_2d(cfg.BLOCK_M, cfg.BLOCK_K, cfg.K, 1, layouts.a_gmem_layout)
+    b_offs = offs_2d(cfg.BLOCK_N, cfg.BLOCK_K, cfg.K, 1, layouts.b_gmem_layout)
 
     a_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K], layouts.a_smem_layout)
     b_smem = gl.allocate_shared_memory(cfg.dtype, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K], layouts.b_smem_layout)
@@ -831,13 +832,13 @@ def wmma_kernel(a_ptr, b_ptr, c_ptr,  #
     a_layout: gl.constexpr = gl.DotOperandLayout(operand_index=0, parent=wmma_layout, k_width=8)
     b_layout: gl.constexpr = gl.DotOperandLayout(operand_index=1, parent=wmma_layout, k_width=8)
 
-    a = gl.load(a_ptr + offs_2d(M, K, K, a_layout))
-    b = gl.load(b_ptr + offs_2d(K, N, N, b_layout))
+    a = gl.load(a_ptr + offs_2d(M, K, K, 1, a_layout))
+    b = gl.load(b_ptr + offs_2d(K, N, N, 1, b_layout))
 
     acc = gl.zeros([M, N], gl.float32, wmma_layout)
     acc = cdna5.wmma(a, b, acc)
 
-    gl.store(c_ptr + offs_2d(M, N, N, wmma_layout), acc)
+    gl.store(c_ptr + offs_2d(M, N, N, 1, wmma_layout), acc)
 
 
 def wmma(A, B, warp_bases):
@@ -897,7 +898,7 @@ def wmma_smem_kernel(a_ptr, b_ptr, c_ptr, M: gl.constexpr, N: gl.constexpr, K: g
     else:
         b = b_smem.load(gl.DotOperandLayout(1, wmma_layout, 8))
     acc = cdna5.wmma(a, b, gl.zeros([M, N], gl.float32, wmma_layout))
-    gl.store(c_ptr + offs_2d(M, N, N, wmma_layout), acc)
+    gl.store(c_ptr + offs_2d(M, N, N, 1, wmma_layout), acc)
 
 
 def wmma_smem(A, B, b_k_contiguous):

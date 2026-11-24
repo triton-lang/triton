@@ -367,7 +367,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                                                    gl.num_warps())
 
     pid = gl.program_id(0)
-    num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
+    num_pid_n = cfg.N // cfg.BLOCK_N
     off_m = pid // num_pid_n * cfg.BLOCK_M
     off_n = pid % num_pid_n * cfg.BLOCK_N
 
@@ -375,9 +375,8 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                                               layouts.a_smem_layout)
     w_desc = cdna5.tdm.make_tensor_descriptor(w_ptr, [cfg.N, cfg.K // 2], [cfg.K // 2, 1],
                                               [cfg.BLOCK_N, cfg.BLOCK_K // 2], layouts.w_smem_layout)
-    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [gl.cdiv(cfg.N, 128), cfg.K // 32 * 128],
-                                               [cfg.K // 32 * 128, 1], [cfg.BLOCK_N // 128, cfg.BLOCK_K // 32 * 128],
-                                               layouts.ws_smem_layout)
+    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [cfg.N // 128, cfg.K // 32 * 128], [cfg.K // 32 * 128, 1],
+                                               [cfg.BLOCK_N // 128, cfg.BLOCK_K // 32 * 128], layouts.ws_smem_layout)
     a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K],
                                        layouts.a_smem_layout)
     w_smem = gl.allocate_shared_memory(w_ptr.dtype.element_ty, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K // 2],

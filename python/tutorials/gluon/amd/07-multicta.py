@@ -301,7 +301,7 @@ def get_cluster_layouts(CTAS_M, CTAS_N, BLOCK_M, BLOCK_N, BLOCK_K, num_warps):
     cga_y += [[0, 1 << i] for i in range(int(math.log2(CTAS_N)))]
 
     # Take the layouts of one CTA from 05-mfma-wmma-scaled.py and add the cga_layout.
-    cta_acc = t5.get_mx_wmma_layouts(CTA_M, CTA_N, BLOCK_K, num_warps).acc_layout.value
+    cta_acc = t5.get_wmma_layouts(CTA_M, CTA_N, BLOCK_K, num_warps).acc_layout.value
     acc_layout = gl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=cta_acc.warp_bases,
                                       reg_bases=cta_acc.reg_bases, instr_shape=[16, 16, 128], cga_layout=cga_y)
     w_parent_layout = gl.amd.AMDWMMALayout(version=3, transposed=True, warp_bases=cta_acc.warp_bases,
@@ -359,7 +359,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                                                 gl.num_warps())
 
     pid = gl.program_id(0)
-    num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
+    num_pid_n = cfg.N // cfg.BLOCK_N
     off_m = pid // num_pid_n * cfg.BLOCK_M
     off_n = pid % num_pid_n * cfg.BLOCK_N
 
@@ -367,9 +367,8 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr,  #
                                               layouts.a_smem_layout)
     w_desc = cdna5.tdm.make_tensor_descriptor(w_ptr, [cfg.N, cfg.K // 2], [cfg.K // 2, 1],
                                               [cfg.BLOCK_N, cfg.BLOCK_K // 2], layouts.w_smem_layout)
-    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [gl.cdiv(cfg.N, 128), cfg.K // 32 * 128],
-                                               [cfg.K // 32 * 128, 1], [cfg.BLOCK_N // 128, cfg.BLOCK_K // 32 * 128],
-                                               layouts.ws_smem_layout)
+    ws_desc = cdna5.tdm.make_tensor_descriptor(w_scale_ptr, [cfg.N // 128, cfg.K // 32 * 128], [cfg.K // 32 * 128, 1],
+                                               [cfg.BLOCK_N // 128, cfg.BLOCK_K // 32 * 128], layouts.ws_smem_layout)
     a_smem = gl.allocate_shared_memory(a_ptr.dtype.element_ty, [cfg.NUM_BUFFERS, cfg.BLOCK_M, cfg.BLOCK_K],
                                        layouts.a_smem_layout)
     w_smem = gl.allocate_shared_memory(w_ptr.dtype.element_ty, [cfg.NUM_BUFFERS, cfg.BLOCK_N, cfg.BLOCK_K // 2],

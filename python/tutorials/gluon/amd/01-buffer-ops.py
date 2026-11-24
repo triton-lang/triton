@@ -212,7 +212,7 @@ if __name__ == "__main__":
 # appear in the generated assembly code. However, in the buffer version, the
 # bounds check is done natively by the hardware, so almost all of the branches
 # are eliminated.
-#
+
 
 def get_throughput(ms, C):
     tbytes = 3 * C.numel() * C.element_size() / 1e12

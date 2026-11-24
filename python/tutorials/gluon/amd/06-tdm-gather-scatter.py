@@ -382,7 +382,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
                        BLOCK_M=256, BLOCK_N=256, BLOCK_K=256,  #
                        NUM_BUFFERS=NUM_BUFFERS, GATHER=GATHER, SCATTER=SCATTER)
     num_warps: gl.constexpr = gl.num_warps()
-    layouts: gl.constexpr = t5.get_mx_wmma_layouts(cfg.BLOCK_M, cfg.BLOCK_N, cfg.BLOCK_K, num_warps)
+    layouts: gl.constexpr = t5.get_wmma_layouts(cfg.BLOCK_M, cfg.BLOCK_N, cfg.BLOCK_K, num_warps)
     if cfg.GATHER:
         a_smem_layout: gl.constexpr = gl.PaddedSharedLayout.with_identity_for([[256, 16]], [cfg.BLOCK_M, cfg.BLOCK_K],
                                                                               [1, 0])
@@ -401,7 +401,7 @@ def matmul_kernel(a_ptr, w_ptr, w_scale_ptr, y_ptr, gather_idx_ptr, scatter_idx_
                                         ws_desc.layout)
 
     pid = gl.program_id(0)
-    num_pid_n = gl.cdiv(cfg.N, cfg.BLOCK_N)
+    num_pid_n = cfg.N // cfg.BLOCK_N
     off_m = pid // num_pid_n * cfg.BLOCK_M
     off_n = pid % num_pid_n * cfg.BLOCK_N
     expert = off_m // (cfg.M // cfg.E)
