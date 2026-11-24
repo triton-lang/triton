@@ -12,7 +12,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
+#include "llvm/TargetParser/NVPTXTargetParser.h"
 #include <dlfcn.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -319,6 +321,48 @@ void init_triton_nvidia(py::module_ &m) {
     auto *mdOne = ConstantAsMetadata::get(ConstantInt::getSigned(i32, 1));
     auto *reflect = MDNode::get(ctx, {mdFour, mdName, mdOne});
     mod->addModuleFlag(reflect);
+  });
+
+  // Replace the __nvvm_reflect calls from libdevice with the values that NVPTX
+  // codegen's NVVMReflect pass gives them, so that O3 folds them. With a
+  // target machine, O3 would run nvvm-reflect at its start; without one, a
+  // reflect call left for codegen can be duplicated by O3 into a shape that
+  // NVVMReflect mishandles (#12927).
+  m.def("fold_nvvm_reflect", [](llvm::Module *mod, const std::string &proc) {
+    using namespace llvm;
+    unsigned arch = NVPTX::getSmVersion(NVPTX::parseArch(proc));
+    unsigned ftz = 0;
+    if (auto *flag = mdconst::extract_or_null<ConstantInt>(
+            mod->getModuleFlag("nvvm-reflect-ftz")))
+      ftz = flag->getSExtValue();
+    for (StringRef name :
+         {"__nvvm_reflect", "__nvvm_reflect_ocl", "llvm.nvvm.reflect"}) {
+      Function *fn = mod->getFunction(name);
+      if (!fn)
+        continue;
+      for (User *user : make_early_inc_range(fn->users())) {
+        auto *call = dyn_cast<CallInst>(user);
+        if (!call || call->arg_size() != 1)
+          continue;
+        auto *str =
+            dyn_cast<Constant>(call->getArgOperand(0)->stripPointerCasts());
+        auto *data = str && str->getNumOperands() == 1
+                         ? dyn_cast<ConstantDataSequential>(str->getOperand(0))
+                         : nullptr;
+        if (!data || !data->isCString())
+          continue;
+        StringRef key = data->getAsString().drop_back();
+        // Same values as NVVMReflect: __CUDA_ARCH is the SM id (e.g. 900),
+        // __CUDA_FTZ the module flag, and any other key 0.
+        unsigned value = key == "__CUDA_ARCH"  ? arch
+                         : key == "__CUDA_FTZ" ? ftz
+                                               : 0;
+        call->replaceAllUsesWith(ConstantInt::get(call->getType(), value));
+        call->eraseFromParent();
+      }
+      if (fn->use_empty())
+        fn->eraseFromParent();
+    }
   });
 
   m.def("device_malloc",

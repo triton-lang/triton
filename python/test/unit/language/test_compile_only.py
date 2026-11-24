@@ -78,6 +78,29 @@ def test_compile_only_sort_keeps_comparisons_boolean() -> None:
     assert "arith.extui" not in compiled.asm["ttgir"]
 
 
+@pytest.mark.parametrize("arch", [80, 90, 100])
+def test_compile_only_libdevice_reflect_folded_before_llvm_opt(arch) -> None:
+    # libdevice's __nvvm_reflect calls must be folded before the LLVM O3
+    # pipeline: left for codegen, they can be duplicated by O3 into a shape
+    # that makes NVVMReflect use freed memory (#12927).
+
+    @triton.jit
+    def kernel(x_ptr, s_ptr, y_ptr, p, q):
+        offsets = tl.arange(0, 128)
+        x = tl.load(x_ptr + offsets)
+        if p == 0:
+            if q != 0:
+                tl.store(s_ptr + offsets, x)
+        y = tl.ceil(x)
+        if q != 0:
+            tl.store(s_ptr + offsets, x)
+        tl.store(y_ptr + offsets, y)
+
+    signature = {"x_ptr": "*fp32", "s_ptr": "*fp32", "y_ptr": "*fp32", "p": "i32", "q": "i32"}
+    compiled = triton.compile(ASTSource(fn=kernel, signature=signature), target=GPUTarget("cuda", arch, 32))
+    assert "__nvvm_reflect" not in compiled.asm["llir"]
+
+
 def test_compile_only_sm100() -> None:
 
     @triton.jit
