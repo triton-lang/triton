@@ -1,4 +1,6 @@
 #include "triton/Dialect/Gluon/Transforms/InferLayoutUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Visitors.h"

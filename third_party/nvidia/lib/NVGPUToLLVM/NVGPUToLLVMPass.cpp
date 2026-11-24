@@ -2,6 +2,7 @@
 #include "NVGPUToLLVM/Passes.h"
 
 #include "Dialect/NVGPU/IR/Dialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
@@ -206,18 +207,12 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    int numWarps = triton::gpu::lookupNumWarps(op);
-    if (numWarps == 1) {
-      // If there is only one warp, the warp ID is always 0.
-      rewriter.replaceOp(op, b.i32_val(0));
-      return success();
-    }
-
     Value tid = NVVM::ThreadIdXOp::create(rewriter, loc, i32_ty);
     Value warpId = b.udiv(tid, b.i32_val(32));
     auto func = op->getParentOfType<FunctionOpInterface>();
     if (auto offset = func->getAttrOfType<IntegerAttr>(
             triton::gpu::AttrWarpIdOffsetName)) {
+      int numWarps = triton::gpu::lookupNumWarps(op);
       warpId = b.sub(warpId, b.i32_val(offset.getInt()));
       warpId = b.and_(warpId, b.i32_val(numWarps - 1));
     }
@@ -549,8 +544,18 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
       /*onlyAttachMLIRArgs=*/true);
   ptxBuilder.launch(rewriter, loc, void_ty(func->getContext()));
   NVVM::BarrierOp::create(rewriter, loc);
-  Value address = b.load(i32_ty, sharedMem);
-  NVVM::BarrierOp::create(rewriter, loc);
+  // Allocations of at least 512 columns always start at column zero. Avoid
+  // reading back the base address in that case. The barrier above is still
+  // needed to ensure that the allocation completes before other warps use it.
+  Value address;
+  if (size >= 512) {
+    address = b.i32_val(0);
+  } else {
+    address = b.load(i32_ty, sharedMem);
+    // Do not let another shared-memory use overwrite the allocation result
+    // until every thread has read it.
+    NVVM::BarrierOp::create(rewriter, loc);
+  }
   address = b.inttoptr(ptr_ty(func.getContext(), 6), address);
   return address;
 }
@@ -573,8 +578,16 @@ void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, std::string exclusive,
     auto loc = ret.getLoc();
     // Multi-CTA kernels already synchronize the cluster before every return.
     if (!twoCTAs) {
-      // Warp-specialized groups may reach different copies of this barrier.
-      NVVM::BarrierOp::create(b, loc, Value{}, Value{}, /*aligned=*/false);
+      auto threads = func->getAttrOfType<DenseI32ArrayAttr>(
+          NVVM::NVVMDialect::getReqntidAttrName());
+      Value barrierId;
+      // After WS, the default warps may still be using barrier 0 when workers
+      // reach teardown. Use CTA barrier channel 1 to differentiate teardown.
+      if (threads[0] > 32 * gpu::lookupNumWarps(func))
+        barrierId = TritonLLVMOpBuilder(loc, b).i32_val(
+            LLVM::NVIDIA::kWarpSpecializeCTABarrierId);
+      // Warp groups can join at different return sites, so omit .aligned.
+      NVVM::BarrierOp::create(b, loc, barrierId, Value{}, /*aligned=*/false);
     }
     PTXBuilder ptxBuilder;
     // Calculate the predicate in the inline asm to avoid creating long

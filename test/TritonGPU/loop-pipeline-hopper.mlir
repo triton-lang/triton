@@ -27,7 +27,7 @@
 // CHECK-SAME: contiguity = 4 : i32
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
-// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] other %{{.*}} {contiguity = 4 : i32} : tensor<32x128x!tt.ptr<f16>, #blocked> -> <32x128xf16, #shared1, #smem, mutable>
+// CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] {contiguity = 4 : i32} : tensor<32x128x!tt.ptr<f16>, #blocked> -> <32x128xf16, #shared1, #smem, mutable>
 // CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
 // CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
@@ -463,7 +463,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %1 = arith.divsi %arg4, %arg2 : i32
       // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
       // CHECK-NEXT: ttg.local_store
-      // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global
       tt.descriptor_store %arg1[%1, %1], %arg0 : !tt.tensordesc<128x128xf32, #shared>, tensor<128x128xf32, #blocked>
     }
@@ -486,7 +485,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %2 = tt.splat %1 : i32 -> tensor<8xi32, #blocked1>
       // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
       // CHECK-NEXT: ttg.local_store
-      // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_scatter
       tt.descriptor_scatter %arg1[%2, %1], %arg0 : !tt.tensordesc<1x128xf32, #shared>, tensor<8xi32, #blocked1>, i32, tensor<8x128xf32, #blocked>
     }
@@ -514,7 +512,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       // CHECK: ttng.tensormap_fenceproxy_acquire
       // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
       // CHECK-NEXT: ttg.local_store
-      // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global
       // CHECK: scf.yield
       tt.descriptor_store %desc[%c0_i32, %1], %arg0 : !tt.tensordesc<128x128xf32, #shared>, tensor<128x128xf32, #blocked>
@@ -538,11 +535,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %2 = arith.divsi %arg2, %arg4 : i32
       // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
       // CHECK-NEXT: ttg.local_store %{{.+}}, %[[ALLOC]]
-      // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global %{{.*}} %[[ALLOC]]
       // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
       // CHECK-NEXT: ttg.local_store %{{.+}}, %[[ALLOC]]
-      // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global %{{.*}} %[[ALLOC]]
       tt.descriptor_store %arg1[%1], %arg0 : !tt.tensordesc<1xf32, #shared>, tensor<1xf32, #blocked>
       tt.descriptor_store %arg1[%2], %arg0 : !tt.tensordesc<1xf32, #shared>, tensor<1xf32, #blocked>
@@ -1122,7 +1117,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %c0 = arith.constant 0 : i32
       // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
       // CHECK-NEXT: ttg.local_store {{.*}}, %[[ALLOC]]
-      // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global {{.*}} %[[ALLOC]]
       tt.descriptor_store %desc[%c0, %c0], %src : !tt.tensordesc<128x128xf32, #shared_while_store>, tensor<128x128xf32, #blocked_while_store>
       scf.yield %keep_going : i1
@@ -1171,7 +1165,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %desc = tt.make_tensor_descriptor %base, [%c128_i32, %c128_i32], [%c128_i64, %c1_i64] : <f32>, <128x128xf32, #shared_while_store>
       // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
       // CHECK-NEXT: ttg.local_store {{.*}}, %[[ALLOC]]
-      // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global [[DESC]]{{.*}} %[[ALLOC]]
       tt.descriptor_store %desc[%c0, %c0], %src : !tt.tensordesc<128x128xf32, #shared_while_store>, tensor<128x128xf32, #blocked_while_store>
       %true = arith.constant true

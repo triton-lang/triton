@@ -1,5 +1,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -713,18 +715,16 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_UNARY_OP(arith::ExtSIOp, LLVM::SExtOp)
   POPULATE_UNARY_OP(arith::ExtUIOp, LLVM::ZExtOp)
   POPULATE_UNARY_OP(arith::FPToUIOp, LLVM::FPToUIOp)
-  POPULATE_UNARY_OP(arith::UIToFPOp, LLVM::UIToFPOp)
   POPULATE_UNARY_OP(arith::NegFOp, LLVM::FNegOp)
   POPULATE_UNARY_OP(math::AbsIOp, LLVM::AbsOp,
                     [](LLVM::AbsOp op) { op.setIsIntMinPoison(false); })
+  POPULATE_UNARY_OP(math::CountTrailingZerosOp, math::CountTrailingZerosOp)
   POPULATE_UNARY_OP(math::FloorOp, math::FloorOp)
   POPULATE_UNARY_OP(math::CeilOp, math::CeilOp)
   POPULATE_UNARY_OP(math::LogOp, math::LogOp)
   POPULATE_UNARY_OP(math::Log2Op, math::Log2Op)
   POPULATE_UNARY_OP(math::CosOp, math::CosOp)
   POPULATE_UNARY_OP(math::SinOp, math::SinOp)
-  POPULATE_UNARY_OP(math::SqrtOp, math::SqrtOp)
-  POPULATE_UNARY_OP(math::RsqrtOp, math::RsqrtOp)
   POPULATE_UNARY_OP(math::ExpOp, math::ExpOp)
   POPULATE_UNARY_OP(math::Exp2Op, math::Exp2Op)
   POPULATE_UNARY_OP(math::ErfOp, math::ErfOp)
@@ -740,6 +740,7 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   POPULATE_BINARY_OP(arith::SubIOp, LLVM::SubOp) // -
   POPULATE_BINARY_OP(arith::AddIOp, LLVM::AddOp) // +
   POPULATE_BINARY_OP(arith::MulIOp, LLVM::MulOp) // *
+  POPULATE_BINARY_OP(ClMulOp, LLVM::ClmulOp)
   POPULATE_BINARY_OP(arith::DivSIOp, LLVM::SDivOp)
   POPULATE_BINARY_OP(arith::DivUIOp, LLVM::UDivOp)
   POPULATE_BINARY_OP(arith::RemFOp, LLVM::FRemOp) // %

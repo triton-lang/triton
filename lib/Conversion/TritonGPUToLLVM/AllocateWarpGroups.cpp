@@ -153,8 +153,9 @@ struct AllocateWarpGroups
       SmallVector<std::pair<unsigned, int32_t>> idxAndSize;
       for (auto [i, size] : llvm::enumerate(arr))
         idxAndSize.emplace_back(i, size);
-      llvm::sort(idxAndSize,
-                 [&](auto lhs, auto rhs) { return lhs.second > rhs.second; });
+      llvm::stable_sort(idxAndSize, [&](auto lhs, auto rhs) {
+        return lhs.second > rhs.second;
+      });
 
       SmallVector<int32_t> startIds(arr.size());
       int startId = baseNumWarps;

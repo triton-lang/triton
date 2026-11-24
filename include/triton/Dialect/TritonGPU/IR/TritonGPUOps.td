@@ -58,13 +58,12 @@ def TTG_InlineAsmOp : TTG_Op<"inline_asm", [
 
 // These operations are introduced after logical control flow has been assigned
 // a physical execution domain. They do not change tensor placement layouts.
-def TTG_ThreadPredicateOp : TTG_Op<"thread_predicate"> {
+def TTG_ThreadPredicateOp : TTG_Op<"thread_predicate", [Pure]> {
   let summary = "select the threads in a compiler-generated execution domain";
   let description = [{
     This operation marks entry into a restricted thread region and executes in
-    the enclosing domain before its branch. Its conservative effects let
-    synchronization analysis finish pending waits before entering the region.
-    It must not be speculated, merged, or eliminated before that analysis.
+    the enclosing domain before its branch. It returns whether the current
+    thread belongs to the specified domain.
   }];
   let arguments = (ins ThreadDomainAttr:$domain);
   let results = (outs I1:$result);
@@ -176,6 +175,7 @@ def TTG_AsyncCommitGroupOp : TTG_Op<"async_commit_group"> {
 }
 
 def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
+  FoldTruePredicate,
   GlobalToLocalCopyTrait,
   AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
@@ -550,6 +550,7 @@ def TTG_LocalScatterOp : TTG_Op<"local_scatter"> {
 }
 
 def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
+  FoldTruePredicate,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
   TypesMatchWith<"result type matches values type", "values", "result", "$_self">,
   OptionalTypesMatchWith<"mask type matches values type",
@@ -700,7 +701,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
     The "default" region of the op represents the code executed by the currently
     executing warp group. This region is allowed to implicitly capture. The op
-    contains a number of "partition" regions that are isolated from above. They
+    contains one or more "partition" regions that are isolated from above. They
     must be isolated because these regions represent different layout domains,
     as the number of warps is different.
 
@@ -895,6 +896,7 @@ def TTG_WarpIdOp : TTG_Op<"warp_id", [Pure]> {
   let arguments = (ins UnitAttr:$omitUniformHint);
   let results = (outs I32:$result);
 
+  let hasCanonicalizeMethod = 1;
   let assemblyFormat = "attr-dict";
 }
 

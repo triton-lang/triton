@@ -4,10 +4,10 @@
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @atomic_add_f32_nomask(%dest_ptrs: tensor<256x!tt.ptr<f32>, #blocked> {tt.divisibility = 16 : i32, tt.contiguity = 16 : i32}, %data: tensor<256xf32, #blocked>) {
     // CHECK-LABEL: atomic_add_f32_nomask
-    // CHECK: atom.global.gpu.acq_rel.add.f32
-    // CHECK: atom.global.gpu.acq_rel.add.f32
-    // CHECK: atom.global.gpu.acq_rel.add.f32
-    // CHECK: atom.global.gpu.acq_rel.add.f32
+    // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") acq_rel
+    // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") acq_rel
+    // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") acq_rel
+    // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") acq_rel
     %0 = tt.atomic_rmw fadd, acq_rel, gpu, %dest_ptrs, %data : (tensor<256x!tt.ptr<f32>, #blocked>, tensor<256xf32, #blocked>) -> tensor<256xf32, #blocked>
     tt.return
   }

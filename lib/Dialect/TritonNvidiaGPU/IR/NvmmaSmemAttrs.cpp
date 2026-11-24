@@ -86,7 +86,7 @@ std::optional<NvmmaSmemAttrs> getNvmmaSmemAttrs(ttg::MemDescType memTy) {
     return std::nullopt;
   if (auto nvmma = dyn_cast<ttg::NVMMASharedEncodingAttr>(encoding))
     return NvmmaSmemAttrs{nvmma.getSwizzlingByteWidth(), nvmma.getTransposed(),
-                          nvmma.getFp4Padded()};
+                          nvmma.isPaddedFp4()};
 
   auto ll = ttg::toLinearLayout(memTy).pseudoinvert();
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(memTy.getElementType());

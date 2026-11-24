@@ -1,8 +1,6 @@
 #ifndef TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
 #define TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
 
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
-#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -307,7 +305,7 @@ inferDotScaleCGALayoutFromOperand(CGAEncodingAttr operandCGALayout, int opIdx);
 
 SmallVector<unsigned> getCTAsPerCGA(Attribute layout);
 
-SmallVector<unsigned> getCTASplitNum(Attribute layout);
+SmallVector<unsigned> getCTASplitNum(Attribute layout, ArrayRef<int64_t> shape);
 
 // Returns the "logical" shape per CTA.
 // When shape and CTASplitNum have different number of dimensions, we assume

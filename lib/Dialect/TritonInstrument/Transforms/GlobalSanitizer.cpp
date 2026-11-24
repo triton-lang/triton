@@ -4,6 +4,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "triton/Analysis/Alias.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -50,6 +51,47 @@ static void instrumentAsyncTMALoad(ttng::AsyncTMACopyGlobalToLocalOp op) {
   ExperimentalGSanTensorDescAccessOp::create(builder, op.getLoc(), op.getDesc(),
                                              op.getCoord(), op.getPred(),
                                              /*isStore=*/false);
+}
+
+static void instrumentAsyncBulkCopy(Operation *op, ttg::MemDescType sharedTy,
+                                    Value pointer, int numBytes, Value pred,
+                                    bool leaderOnly, bool isStore) {
+  // Each issuing CTA accesses one contiguous row. Pass its exact byte range to
+  // the runtime instead of materializing a tensor of source pointers.
+  ImplicitLocOpBuilder b(op->getLoc(), op);
+  auto copyLayout = ttng::getBulkCopyLayout(sharedTy);
+  Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
+  Value sourceOffset = arith::ConstantIntOp::create(b, 0, 32);
+  unsigned stride = numBytes;
+  for (unsigned bit = 1; bit <= copyLayout.splitMask; bit <<= 1) {
+    if (!(copyLayout.splitMask & bit))
+      continue;
+    Value set = arith::AndIOp::create(b, ctaId,
+                                      arith::ConstantIntOp::create(b, bit, 32));
+    Value index = arith::DivUIOp::create(
+        b, set, arith::ConstantIntOp::create(b, bit, 32));
+    Value delta = arith::MulIOp::create(
+        b, index, arith::ConstantIntOp::create(b, stride, 32));
+    sourceOffset = arith::AddIOp::create(b, sourceOffset, delta);
+    stride *= 2;
+  }
+  Value issuerPred = pred;
+  if (leaderOnly) {
+    Value replica = arith::AndIOp::create(
+        b, ctaId,
+        arith::ConstantIntOp::create(b, copyLayout.broadcastMask, 32));
+    Value leader =
+        arith::CmpIOp::create(b, arith::CmpIPredicate::eq, replica,
+                              arith::ConstantIntOp::create(b, 0, 32));
+    issuerPred = arith::AndIOp::create(b, issuerPred, leader);
+  }
+  auto ptrTy = tt::PointerType::get(b.getI8Type());
+  Value ptr = tt::BitcastOp::create(b, ptrTy, pointer);
+  ptr = tt::AddPtrOp::create(b, ptrTy, ptr, sourceOffset);
+  if (isStore)
+    ExperimentalGSanStoreRangeOp::create(b, ptr, numBytes, issuerPred);
+  else
+    ExperimentalGSanLoadRangeOp::create(b, ptr, numBytes, issuerPred);
 }
 
 static void instrumentAsyncTMAStore(Operation *op, Value descValue,
@@ -536,6 +578,16 @@ public:
           })
           .Case([&](ttng::AsyncTMACopyGlobalToLocalOp op) {
             instrumentAsyncTMALoad(op);
+          })
+          .Case([&](ttng::AsyncBulkCopyGlobalToLocalOp op) {
+            instrumentAsyncBulkCopy(op, op.getDst().getType(), op.getSrc(),
+                                    op.getNumBytesPerCTA(), op.getPred(),
+                                    op.getMulticast(), /*isStore=*/false);
+          })
+          .Case([&](ttng::AsyncBulkCopyLocalToGlobalOp op) {
+            instrumentAsyncBulkCopy(op, op.getSrc().getType(), op.getDst(),
+                                    op.getNumBytesPerCTA(), op.getPred(),
+                                    /*leaderOnly=*/true, /*isStore=*/true);
           })
           .Case(
               [&](ttng::AsyncTMAGatherOp op) { instrumentAsyncTMAGather(op); })

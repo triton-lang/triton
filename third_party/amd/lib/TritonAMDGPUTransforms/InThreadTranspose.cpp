@@ -1,6 +1,7 @@
 #include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Utility.h"

@@ -30,6 +30,10 @@ static constexpr StringLiteral kGSanLoadTensorRuntimeFn =
     "__triton_gsan_load_tensor";
 static constexpr StringLiteral kGSanStoreTensorRuntimeFn =
     "__triton_gsan_store_tensor";
+static constexpr StringLiteral kGSanStoreRangeRuntimeFn =
+    "__triton_gsan_store_range";
+static constexpr StringLiteral kGSanLoadRangeRuntimeFn =
+    "__triton_gsan_load_range";
 static constexpr StringLiteral kGSanLoadTensorDescRuntimeFn =
     "__triton_gsan_load_tensor_desc";
 static constexpr StringLiteral kGSanStoreTensorDescRuntimeFn =
@@ -101,7 +105,9 @@ getOrCreateGSanRuntimeFunction(ConversionPatternRewriter &rewriter,
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty,      i32_ty,
               i32_ty,      i32_ty,      ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorRuntimeFn ||
-             funcName == kGSanStoreTensorRuntimeFn) {
+             funcName == kGSanStoreTensorRuntimeFn ||
+             funcName == kGSanLoadRangeRuntimeFn ||
+             funcName == kGSanStoreRangeRuntimeFn) {
     argTys = {ptr_ty(ctx), ptr_ty(ctx), i32_ty, i32_ty, ptr_ty(ctx), i32_ty};
   } else if (funcName == kGSanLoadTensorDescRuntimeFn ||
              funcName == kGSanStoreTensorDescRuntimeFn) {
@@ -439,6 +445,41 @@ public:
 };
 
 template <typename AccessOp>
+struct GSanRangeOpConversion : public ConvertOpToLLVMPattern<AccessOp> {
+  using ConvertOpToLLVMPattern<AccessOp>::ConvertOpToLLVMPattern;
+  using OpAdaptor = typename AccessOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(AccessOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto gsanGlobalStatePtr = getGSanGlobalStateArg(op, rewriter, loc);
+    if (failed(gsanGlobalStatePtr))
+      return failure();
+
+    TritonLLVMOpBuilder b(loc, rewriter);
+    // Like a one-row TMA access, the range is distributed over one warp.
+    // The warp ID is relative to the current warp-specialized region.
+    Value warpId = getLaneAndWarpId(rewriter, loc).second;
+    Value pred = ttg::maybeAnd(rewriter, loc, adaptor.getPred(),
+                               b.icmp_eq(warpId, b.i32_val(0)));
+    auto runtimeFunc = getOrCreateGSanRuntimeFunction(
+        rewriter, std::is_same_v<AccessOp, tti::ExperimentalGSanLoadRangeOp>
+                      ? kGSanLoadRangeRuntimeFn
+                      : kGSanStoreRangeRuntimeFn);
+    auto sourceLoc = materializeSourceLocation(rewriter, loc);
+    b.call(runtimeFunc,
+           ValueRange{*gsanGlobalStatePtr,
+                      castToGenericPointer(rewriter, loc, adaptor.getPtr()),
+                      b.i32_val(op.getNumBytes()),
+                      materializeI32Bool(rewriter, b, pred), sourceLoc.file,
+                      sourceLoc.line});
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+template <typename AccessOp>
 struct GSanTensorDescAccessOpConversion
     : public ConvertOpToLLVMPattern<AccessOp> {
 public:
@@ -635,7 +676,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
     StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -718,7 +759,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
     StringRef syncScope = targetInfo->getAtomicSyncScope(scope);
 
     TritonLLVMOpBuilder b(loc, rewriter);
@@ -849,7 +890,7 @@ public:
     auto rmwOp = op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -890,8 +931,9 @@ public:
                               static_cast<int32_t>(scope), sourceLoc);
 
       SmallVector<Value> rmwVals{rmwVal};
-      auto old = NVIDIA::emitPtxAtomicRMW(rewriter, loc, valueElemTy, rmwPtr,
-                                          rmwVals, rmwOp, sem, scope, pred);
+      auto old =
+          NVIDIA::emitAtomicRMW(rewriter, loc, valueElemTy, rmwPtr, rmwVals,
+                                rmwOp, sem, scope, pred, *targetInfo);
       if (failed(old))
         return failure();
 
@@ -931,7 +973,7 @@ public:
 
     auto sem = op.getSem();
     auto scope = op.getScope();
-    insertAtomicOrderingBarriers(op, sem, rewriter, *targetInfo);
+    insertAtomicOrderingBarriers(op, sem, scope, rewriter, *targetInfo);
 
     TritonLLVMOpBuilder b(loc, rewriter);
     Value llPtr = adaptor.getPtr();
@@ -968,8 +1010,9 @@ public:
                               /*doesRead=*/true, static_cast<int32_t>(sem),
                               static_cast<int32_t>(scope), sourceLoc);
 
-      Value old = NVIDIA::emitPtxAtomicCAS(rewriter, loc, valueElemTy, casPtr,
-                                           casCmp, casVal, sem, scope, pred);
+      Value old =
+          NVIDIA::emitAtomicCAS(rewriter, loc, valueElemTy, casPtr, casCmp,
+                                casVal, sem, scope, pred, *targetInfo);
 
       auto oldInt = bitcastToScalarInt(rewriter, loc, old);
       auto cmpInt = bitcastToScalarInt(rewriter, loc, casCmp);
@@ -1254,7 +1297,7 @@ struct GSanMBarrierArriveOpConversion
       recipientMask = b.shl(b.i32_val(1), leaderRank);
     } else {
       for (int32_t mask : op.getMulticastMasks()) {
-        Value nextMask = LLVM::NVIDIA::createTMAMulticastMask(
+        Value nextMask = LLVM::NVIDIA::createMulticastMask(
             loc, rewriter, static_cast<uint16_t>(mask), ctaRank);
         recipientMask =
             recipientMask ? b.or_(recipientMask, nextMask) : nextMask;
@@ -1348,4 +1391,7 @@ void mlir::triton::populateGSanToLLVMPatterns(
   patterns.add<GSanAtomicRMWOpConversion>(typeConverter, targetInfo);
   patterns.add<GSanTensorAccessOpConversion>(typeConverter, axisInfoAnalysis,
                                              targetInfo);
+  patterns.add<GSanRangeOpConversion<tti::ExperimentalGSanLoadRangeOp>,
+               GSanRangeOpConversion<tti::ExperimentalGSanStoreRangeOp>>(
+      typeConverter);
 }

@@ -55,7 +55,8 @@ SwizzledSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
-  auto shapePerCTA = getShapePerCTA(shared, shape);
+  auto shapePerCTA =
+      getShapePerCTA(shared.getCGALayout().getCTASplitNum(), shape);
 
   int rank = shape.size();
   if (rank == 1) {
@@ -104,7 +105,8 @@ AMDRotatingSharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto shared = *this;
   MLIRContext *ctx = shared.getContext();
 
-  auto shapePerCTA = getShapePerCTA(shared, shape);
+  auto shapePerCTA =
+      getShapePerCTA(shared.getCGALayout().getCTASplitNum(), shape);
 
   int rank = shape.size();
   if (rank == 1) {
@@ -165,7 +167,7 @@ LinearLayout getCoreMatrixLinearLayout(NVMMASharedEncodingAttr shared,
 
   int tileRows = 8;
   int tileCols = 8 * std::max(16, tileWidthBytes) / elemBitWidth;
-  bool isFp4Padded = shared.getFp4Padded();
+  bool isFp4Padded = shared.isPaddedFp4();
 
   std::vector<std::vector<int>> bases2D;
   for (int col = 1; col < tileCols; col *= 2) {
@@ -275,43 +277,27 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   auto kOffset = S("offset");
-  SmallVector<int64_t> maybeTransposedTmaShape(tmaShape.begin(),
-                                               tmaShape.end());
-  if (shared.getTransposed()) {
-    // Move the outer dim to the inner position.
-    // TODO: we should move back to using `order` instead of transposed to make
-    // the order more explicit.
-    std::rotate(maybeTransposedTmaShape.begin(),
-                maybeTransposedTmaShape.begin() + 1,
-                maybeTransposedTmaShape.end());
-  }
+  // Keep the axes in physical order so the box repeats along the rows first.
+  auto order = getOrder(shared, tmaShape);
+  std::reverse(order.begin(), order.end());
+  auto boxNames = applyPermutation(standardOutDimNames(ctx, rank), order);
+  auto maybeTransposedTmaShape = applyPermutation(tmaShape, order);
   if (shared.getSwizzlingByteWidth() == 0) {
-    auto outDimNames = standardOutDimNames(ctx, rank);
     LinearLayout layout = LinearLayout::identity1D(
-        maybeTransposedTmaShape[rank - 1], kOffset, outDimNames[rank - 1]);
+        maybeTransposedTmaShape[rank - 1], kOffset, boxNames[rank - 1]);
     for (int i = rank - 2; i >= 0; --i) {
       layout *= LinearLayout::identity1D(maybeTransposedTmaShape[i], kOffset,
-                                         outDimNames[i]);
+                                         boxNames[i]);
     }
-    if (shared.getTransposed()) {
-      SmallVector<int> order = {rank - 1};
-      for (int i = 0; i < rank - 1; i++) {
-        order.push_back(i);
-      }
-      layout = transposeLinearLayout(layout, order);
-    }
+    layout = layout.transposeOuts(boxNames);
     return combineCtaCgaWithShape(layout, shared.getCGALayout(), shape);
   }
   assert(rank >= 2);
 
   // Collapse all the outer dim into one. We will then create a layout for this
   // shape and reshape it to the original shape.
-  std::array<int64_t, 2> collapsedTmaShape{1, tmaShape.back()};
-  for (int i = 0; i + 1 < rank; i++)
-    collapsedTmaShape[0] *= tmaShape[i];
-  if (shared.getTransposed()) {
-    std::swap(collapsedTmaShape[0], collapsedTmaShape[1]);
-  }
+  int64_t cols = maybeTransposedTmaShape.back();
+  std::array<int64_t, 2> collapsedTmaShape{product(tmaShape) / cols, cols};
 
   auto tileLayout = getCoreMatrixLinearLayout(shared, disableSwizzle);
   auto outDimNames = standardOutDimNames(ctx, 2);
@@ -320,7 +306,7 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
   auto tileRows = tileLayout.getOutDimSize(kRow);
   auto tileCols = tileLayout.getOutDimSize(kCol);
 
-  int packingFactor = shared.getFp4Padded() ? 2 : 1;
+  int packingFactor = shared.isPaddedFp4() ? 2 : 1;
   if (collapsedTmaShape[1] * packingFactor < tileCols ||
       collapsedTmaShape[0] < tileRows) {
     if (emitErrors) {
@@ -344,19 +330,16 @@ static FailureOr<LinearLayout> buildNvmmaSharedLinearLayout(
     return failure();
   auto reshapedLayout = reshapeLayout(ctx, layout, maybeTransposedTmaShape);
 
-  if (shared.getTransposed()) {
-    SmallVector<int> order = {rank - 1};
-    for (int i = 0; i < rank - 1; i++) {
-      order.push_back(i);
-    }
-    reshapedLayout = transposeLinearLayout(reshapedLayout, order);
-  }
+  if (shared.getTransposed())
+    reshapedLayout = LinearLayout(reshapedLayout.getBases(), boxNames);
 
   return combineCtaCgaWithShape(reshapedLayout, shared.getCGALayout(), shape);
 }
 
 LinearLayout
 NVMMASharedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+  if (getPadding() == NVMmaPadding::B6x16P32)
+    llvm::report_fatal_error("b6x16_p32 has no per-element linear layout");
   // The shared memory layout is independent of TMA mode (Tiled vs Im2Col)
   return nvmmaSharedToLinearLayout(shape, *this, TMAMode::Tiled);
 }
@@ -375,17 +358,18 @@ FailureOr<LinearLayout>
 nvmmaSharedToLinearLayout(ArrayRef<int64_t> shape,
                           NVMMASharedEncodingAttr shared, TMAMode mode,
                           bool disableSwizzle, bool emitErrors) {
-  auto shapePerCTA = getShapePerCTA(shared, shape);
+  auto shapePerCTA =
+      getShapePerCTA(shared.getCGALayout().getCTASplitNum(), shape);
   SmallVector<int64_t> tmaShape;
   if (emitErrors) {
     tmaShape =
         getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
-                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getSwizzlingByteWidth(), shared.isPaddedFp4(),
                          shared.getTransposed(), /*packedSize=*/true, mode);
   } else {
     auto maybeTmaShape =
         getTMABlockShape(shapePerCTA, shared.getElementBitWidth(),
-                         shared.getSwizzlingByteWidth(), shared.getFp4Padded(),
+                         shared.getSwizzlingByteWidth(), shared.isPaddedFp4(),
                          shared.getTransposed(), /*packedSize=*/true,
                          /*emitError=*/nullptr, mode);
     if (failed(maybeTmaShape))
@@ -1314,13 +1298,22 @@ LinearLayout paddedLinearLayout(MemDescType type) {
 
 LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
                                            Attribute encoding) {
+  // Physical byte offsets of whole atoms are linear even when individual
+  // six-bit codes within an atom have no byte address.
+  if (NVMMASharedEncodingAttr::isPackedFp6(encoding))
+    return nvmmaSharedToLinearLayout(
+        shape, cast<NVMMASharedEncodingAttr>(encoding), TMAMode::Tiled);
   return isPaddedEncoding(encoding) ? paddedLinearLayout(shape, encoding)
                                     : toLinearLayout(shape, encoding);
 }
 
 LinearLayout toLinearLayoutIgnoringPadding(MemDescType type) {
-  return isPaddedEncoding(type.getEncoding()) ? paddedLinearLayout(type)
-                                              : toLinearLayout(type);
+  // TMEM subviews need their logical shape to trim the parent layout.
+  if (isa<nvidia_gpu::TensorMemorySpaceAttr>(type.getMemorySpace()))
+    return toLinearLayout(type);
+  auto encoding = type.getEncoding();
+  return toLinearLayoutIgnoringPadding(
+      dropPipeliningDim(type.getAllocShape(), encoding), encoding);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

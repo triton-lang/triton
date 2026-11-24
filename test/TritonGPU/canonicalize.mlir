@@ -13,6 +13,28 @@ tt.func @false_async_copy_keeps_fill(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %
   %token = ttg.async_copy_global_to_local %ptr, %mem mask %false other %zero : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
   tt.return %token : !ttg.async.token
 }
+
+// CHECK-LABEL: @true_async_copy_mask
+// CHECK-SAME: (%[[PTR:[^:]+]]: {{.*}}, %[[MEM:[^:]+]]:
+// CHECK: %[[TOKEN:.*]] = ttg.async_copy_global_to_local %[[PTR]], %[[MEM]] {contiguity = 4 : i32} :
+// CHECK-NEXT: tt.return %[[TOKEN]] : !ttg.async.token
+tt.func @true_async_copy_mask(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %mem: !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>) -> !ttg.async.token {
+  %true = arith.constant dense<true> : tensor<128xi1, #blocked>
+  %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+  %token = ttg.async_copy_global_to_local %ptr, %mem mask %true other %zero {contiguity = 4 : i32} : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  tt.return %token : !ttg.async.token
+}
+
+// CHECK-LABEL: @fold_shared_atomic_mask
+// CHECK-NOT: arith.constant
+// CHECK: ttg.local_atomic_scatter_rmw add, {{.*}}], %{{[^, ]+}} {axis = 0 : i32}
+// CHECK: ttg.local_atomic_scatter_rmw add, {{.*}}], %{{[^, ]+}}, %{{[^, ]+}} {axis = 0 : i32}
+tt.func @fold_shared_atomic_mask(%dst: !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, %idx: tensor<128xi32, #blocked>, %val: tensor<128xi32, #blocked>, %mask: tensor<128xi1, #blocked>) {
+  %true = arith.constant dense<true> : tensor<128xi1, #blocked>
+  %0 = ttg.local_atomic_scatter_rmw add, %dst[%idx], %val, %true {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xi32, #blocked>
+  %1 = ttg.local_atomic_scatter_rmw add, %dst[%idx], %val, %mask {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xi32, #blocked>
+  tt.return
+}
 }
 
 // -----
@@ -315,7 +337,10 @@ tt.func @unused_warp_specialize_results(%arg0: i32, %arg1: i32, %arg2: i32) -> (
   default {
     // CHECK-NEXT: ttg.warp_yield %arg0, %arg2 : i32, i32
     ttg.warp_yield %arg0, %arg1, %arg2 : i32, i32, i32
-  // CHECK-NEXT: () -> (i32, i32)
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  // CHECK: () -> (i32, i32)
   } : () -> (i32, i32, i32)
   // CHECK-NEXT: return [[OUTS]]#0, [[OUTS]]#1 : i32, i32
   tt.return %0#0, %0#2 : i32, i32
@@ -409,5 +434,58 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %0 = tt.broadcast %arg : tensor<1xi32, #src> -> tensor<32xi32, #slice>
     %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<32xi32, #slice> -> tensor<1x32xi32, #parent>
     tt.return %1 : tensor<1x32xi32, #parent>
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @gsan_descriptor_predicate
+// CHECK: tti.experimental_gsan_tensordesc_access %arg0[%arg1, %arg2], false : !tt.tensordesc<4x4xf32>
+tt.func @gsan_descriptor_predicate(%desc: !tt.tensordesc<4x4xf32>, %x: i32, %y: i32) {
+  %true = arith.constant true
+  tti.experimental_gsan_tensordesc_access %desc[%x, %y], false, %true : !tt.tensordesc<4x4xf32>
+  tt.return
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @single_warp_id
+  tt.func @single_warp_id() -> i32 {
+    // CHECK: %[[ZERO:.*]] = arith.constant 0 : i32
+    // CHECK: tt.return %[[ZERO]]
+    %id = ttg.warp_id
+    tt.return %id : i32
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  llvm.func @use(i32)
+
+  // CHECK-LABEL: @partition_warp_id
+  llvm.func @partition_warp_id() {
+    ttg.warp_specialize()
+    default {
+      ttg.warp_yield
+    }
+    // CHECK: partition0
+    partition0() num_warps(1) {
+      // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+      // CHECK: llvm.call @use(%[[ZERO]])
+      %id = ttg.warp_id
+      llvm.call @use(%id) : (i32) -> ()
+      ttg.warp_return
+    }
+    // CHECK: partition1
+    partition1() num_warps(2) {
+      // CHECK: %[[ID:.*]] = ttg.warp_id
+      // CHECK: llvm.call @use(%[[ID]])
+      %id = ttg.warp_id
+      llvm.call @use(%id) : (i32) -> ()
+      ttg.warp_return
+    } : () -> ()
+    llvm.return
   }
 }

@@ -11,7 +11,6 @@
 #include <optional>
 #include <stdexcept>
 
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/Types.h"
@@ -241,8 +240,11 @@ py::object layoutToGluon(Attribute layout, bool isRubin = false) {
     auto cgaBases = getCgaLayoutBases(cgaLayout);
     return getLayoutClass("NVMMASharedLayout")(
         nvmma.getSwizzlingByteWidth(), nvmma.getElementBitWidth(),
-        cgaLayout.getRank(), nvmma.getTransposed(), nvmma.getFp4Padded(),
-        cgaBases);
+        cgaLayout.getRank(), nvmma.getTransposed(), nvmma.isPaddedFp4(),
+        cgaBases,
+        nvmma.getPadding() == ttg::NVMmaPadding::None
+            ? py::none()
+            : py::cast(ttg::stringifyNVMmaPadding(nvmma.getPadding()).str()));
   } else if (auto swizzled =
                  dyn_cast<ttg::SwizzledSharedEncodingAttr>(layout)) {
     auto cgaBases = getCgaLayoutBases(swizzled.getCGALayout());
@@ -616,14 +618,18 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("get_nvmma_shared_layout",
            [](GluonOpBuilder &self, unsigned swizzleByteWidth,
-              unsigned elementBitwidth, bool transposed, bool fp4Padded,
+              unsigned elementBitwidth, bool transposed,
+              const std::string &padding,
               std::vector<std::vector<int32_t>> &cgaBases,
               unsigned rank) -> Attribute {
              auto ctx = self.getContext();
-             auto cgaLayout = buildCgaLayoutAttr(ctx, cgaBases, rank);
+             auto mode = ttg::symbolizeNVMmaPadding(padding);
+             if (!mode)
+               throw std::invalid_argument(
+                   "invalid NVIDIA shared memory padding");
              return self.getChecked<ttg::NVMMASharedEncodingAttr>(
-                 ctx, swizzleByteWidth, transposed, elementBitwidth, fp4Padded,
-                 cgaLayout);
+                 ctx, swizzleByteWidth, transposed, elementBitwidth, *mode,
+                 buildCgaLayoutAttr(ctx, cgaBases, rank));
            })
       .def("get_auto_layout",
            [](GluonOpBuilder &self) -> Attribute {
@@ -763,6 +769,13 @@ void init_gluon_ir(py::module_ &m) {
           },
           py::arg("operand"), py::arg("numBins"), py::arg("mask").none(),
           py::arg("layout"))
+      .def(
+          "create_fpsan_probability_cast",
+          [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
+            return self
+                .create<triton::instrument::ExperimentalFPSanProbabilityCastOp>(
+                    dstType, src);
+          })
       .def("create_experimental_fpsan_embed",
            [](GluonOpBuilder &self, Value &src, Type &dstType) -> Value {
              return self.create<triton::instrument::ExperimentalFPSanEmbedOp>(
@@ -890,7 +903,8 @@ void init_gluon_ir(py::module_ &m) {
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,
               int bitwidth) -> int {
              auto regLayout = ttg::toLinearLayout(shape, regLayoutAttr);
-             auto smemLayout = ttg::toLinearLayout(shape, sharedLayoutAttr);
+             auto smemLayout =
+                 ttg::toLinearLayoutIgnoringPadding(shape, sharedLayoutAttr);
              auto mod = self.getBuilder()
                             .getInsertionBlock()
                             ->getParentOp()
@@ -899,18 +913,28 @@ void init_gluon_ir(py::module_ &m) {
              if (!arch.has_value())
                return ttg::bankConflictsMemDesc(regLayout, smemLayout,
                                                 bitwidth);
+
              tt::AMD::TargetInfo targetInfo(arch->str());
              int numBanks = targetInfo.getSharedMemoryBanks();
-             auto vecBitwidth = std::max<int32_t>(
-                 32, smemLayout.getInDimSize(StringAttr::get(
-                         smemLayout.getInDimNames().begin()->getContext(),
-                         "vector")) *
-                         bitwidth);
+             auto padded =
+                 dyn_cast<ttg::PaddedSharedEncodingAttr>(sharedLayoutAttr);
+             auto maybeMaxVecElems =
+                 padded ? std::optional<int>(padded.getMinInterval())
+                        : std::nullopt;
+             auto cvt = regLayout.invertAndCompose(smemLayout);
+             auto [elemsPerVec, perm] = tt::largestVectorisation(
+                 mod.getContext(), cvt, bitwidth, maybeMaxVecElems);
+             constexpr int maxVecBitwidth = 128;
+             auto vecBitwidth =
+                 std::clamp(elemsPerVec * bitwidth, 32, maxVecBitwidth);
              auto [dstTile, srcTile] =
                  targetInfo.getSharedLdStTiles(vecBitwidth);
-             (void)srcTile;
-             assert(srcTile.laneAddr.empty() &&
-                    "srcTile.laneAddr should be empty");
+             assert(srcTile.laneAddr.empty() && srcTile.laneMask.empty() &&
+                    "srcTile should be empty");
+
+             if (padded)
+               return bankConflictsMemDescPadded(regLayout, padded, bitwidth,
+                                                 numBanks, dstTile);
              return ttg::bankConflictsMemDesc(regLayout, smemLayout, bitwidth,
                                               numBanks, dstTile);
            })
@@ -1113,18 +1137,29 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value clcResult, int dim) -> Value {
              return self.create<ttng::CLCGetProgramIdOp>(clcResult, dim);
            })
-      .def("create_tcgen05_mma",
-           [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
-              Value pred, std::vector<Value> &mbarriers,
-              std::vector<Value> &mbarrier_preds, bool two_ctas,
-              bool multicast) {
-             Value accDep;
-             auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             self.create<ttng::TCGen5MMAOp>(tokType, a, b, acc, accDep, useAcc,
-                                            pred, two_ctas, multicast,
-                                            mbarriers, mbarrier_preds,
-                                            /*isAsync=*/true);
-           })
+      .def(
+          "create_tcgen05_mma",
+          [](GluonOpBuilder &self, Value a, Value b, Value acc, Value useAcc,
+             Value pred, std::vector<Value> &mbarriers,
+             std::vector<Value> &mbarrier_preds, bool two_ctas, bool multicast,
+             std::optional<tt::ScaleDotElemType> aType,
+             std::optional<tt::ScaleDotElemType> bType) {
+            Value accDep;
+            auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
+            auto mma = self.create<ttng::TCGen5MMAOp>(
+                tokType, a, b, acc, accDep, useAcc, pred, two_ctas, multicast,
+                mbarriers, mbarrier_preds,
+                /*isAsync=*/true, /*isUnsigned=*/false,
+                aType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *aType)
+                      : tt::ScaleDotElemTypeAttr{},
+                bType ? tt::ScaleDotElemTypeAttr::get(self.getContext(), *bType)
+                      : tt::ScaleDotElemTypeAttr{});
+            return mma->getResult(0);
+          },
+          py::arg("a"), py::arg("b"), py::arg("acc"), py::arg("useAcc"),
+          py::arg("pred"), py::arg("mbarriers"), py::arg("mbarrier_preds"),
+          py::arg("two_ctas"), py::arg("multicast"), py::arg("a_type").none(),
+          py::arg("b_type").none())
       .def("create_tcgen05_mma_scaled",
            [](GluonOpBuilder &self, Value a, Value b, Value acc, Value aScale,
               Value bScale, tt::ScaleDotElemType aType,
@@ -1133,17 +1168,37 @@ void init_gluon_ir(py::module_ &m) {
               bool two_ctas, bool multicast) {
              Value accDep;
              auto tokType = self.getBuilder().getType<ttg::AsyncTokenType>();
-             self.create<ttng::TCGen5MMAScaledOp>(
+             auto mma = self.create<ttng::TCGen5MMAScaledOp>(
                  tokType, a, b, acc, accDep, aScale, bScale, aType, bType,
                  useAcc, pred, mbarriers, mbarrier_preds, two_ctas,
                  /*isAsync=*/true, multicast);
+             return mma->getResult(0);
            })
       .def("create_tcgen05_commit",
            [](GluonOpBuilder &self, Value &barrier, Value &pred,
-              std::vector<Value> &descs) {
-             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs);
+              std::vector<Value> &descs, bool earlyARelease) {
+             self.create<ttng::TCGen5CommitOp>(barrier, pred, descs,
+                                               earlyARelease);
            })
 
+      .def("create_prefetch_bulk",
+           [](GluonOpBuilder &self, Value ptr, Value numBytes, Value pred) {
+             self.create<ttng::PrefetchBulkOp>(ptr, numBytes, pred);
+           })
+      .def("create_async_bulk_copy_global_to_local",
+           [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
+              Value barrier, Value pred, bool multicast) {
+             multicast &=
+                 ttng::hasCGABroadcast(cast<ttg::MemDescType>(dst.getType()));
+             self.create<ttng::AsyncBulkCopyGlobalToLocalOp>(
+                 dst, src, numBytes, barrier, pred, multicast);
+           })
+      .def("create_async_bulk_copy_local_to_global",
+           [](GluonOpBuilder &self, Value dst, Value src, int32_t numBytes,
+              Value pred) {
+             self.create<ttng::AsyncBulkCopyLocalToGlobalOp>(dst, src, numBytes,
+                                                             pred);
+           })
       .def(
           "create_async_tma_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, std::vector<Value> &coord,
@@ -1175,8 +1230,9 @@ void init_gluon_ir(py::module_ &m) {
              self.create<ttng::AsyncTMAReduceOp>(kind, descPtr, coord, src);
            })
       .def("create_async_tma_store_wait",
-           [](GluonOpBuilder &self, int pendings, bool readOnly) {
-             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly);
+           [](GluonOpBuilder &self, int pendings, bool readOnly,
+              std::vector<Value> &deps) {
+             self.create<ttng::TMAStoreWaitOp>(pendings, readOnly, deps);
            })
       .def(
           "create_async_tma_gather",
@@ -1390,13 +1446,6 @@ void init_gluon_ir(py::module_ &m) {
              return self.create<ttag::ExtractSliceOp>(resultType, source,
                                                       offsetsAttr);
            })
-      .def("create_make_tensor_descriptor",
-           [](TritonOpBuilder &self, Type resultTy, Value &base,
-              std::vector<Value> &shape, std::vector<Value> &strides,
-              tt::PaddingOption paddingOption) -> Value {
-             return self.create<tt::MakeTensorDescOp>(resultTy, base, shape,
-                                                      strides, paddingOption);
-           })
       .def(
           "create_async_tdm_copy_global_to_local",
           [](GluonOpBuilder &self, Value descPtr, Value result, Value barrier,
@@ -1529,24 +1578,15 @@ void init_gluon_ir(py::module_ &m) {
            })
       .def("create_amd_sched_barrier",
            [](GluonOpBuilder &self, uint32_t mask) {
-             auto schedMask = ROCDL::symbolizeSchedGroupMask(mask);
-             if (!schedMask)
+             if (failed(ttag::createSchedBarrier(self.getBuilder(),
+                                                 self.getLastLoc(), mask)))
                throw std::invalid_argument("invalid scheduling barrier mask " +
                                            std::to_string(mask));
-             self.create<ROCDL::SchedBarrier>(*schedMask);
            })
       .def("create_warp_pipeline_border",
            [](GluonOpBuilder &self, const std::string &marker, int priority) {
-             auto border =
-                 self.create<ROCDL::SchedBarrier>(ROCDL::SchedGroupMask::none);
-             auto ctx = self.getContext();
-             border->setAttr("triton.warp_pipeline.border",
-                             StringAttr::get(ctx, marker));
-             if (priority > -1) {
-               auto i32Ty = IntegerType::get(ctx, 32);
-               border->setAttr("triton.warp_pipeline.priority",
-                               IntegerAttr::get(i32Ty, priority));
-             }
+             ttag::createWarpPipelineBorder(
+                 self.getBuilder(), self.getLastLoc(), marker, priority);
            });
 
   m.def("compute_tmem_reg_layout",

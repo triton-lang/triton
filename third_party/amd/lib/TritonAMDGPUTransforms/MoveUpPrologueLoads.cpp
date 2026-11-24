@@ -15,6 +15,7 @@
 
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/PassManager.h"
@@ -47,8 +48,8 @@ static Block::iterator findEarlyInsertionPoint(Block *block, tt::LoadOp load) {
     }
 
     // Break at atomic, barrier and loop ops.
-    if (isa<tt::AtomicOpInterface, tt::AtomicPollOp, gpu::BarrierOp,
-            ttg::BarrierOp, scf::ForOp, scf::WhileOp>(&op)) {
+    if (isa<tt::AtomicOpInterface, gpu::BarrierOp, ttg::BarrierOp, scf::ForOp,
+            scf::WhileOp>(&op)) {
       insertPoint = Block::iterator(&op);
     }
   }

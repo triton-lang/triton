@@ -240,7 +240,7 @@ def TTI_ExperimentalGSanMBarrierWaitOp
 
 def TTI_ExperimentalGSanTensorDescAccessOp
     : TTI_Op<"experimental_gsan_tensordesc_access",
-             [AttrSizedOperandSegments]> {
+             [AttrSizedOperandSegments, FoldTruePredicate]> {
   let summary = "Instrument a TMA tensor descriptor access for GSan";
   let description = [{
     Passes the native tensor descriptor and its coordinates directly to the
@@ -255,7 +255,7 @@ def TTI_ExperimentalGSanTensorDescAccessOp
 }
 
 def TTI_ExperimentalGSanIndexedTensorDescAccessOp
-    : TTI_Op<"experimental_gsan_indexed_tensordesc_access"> {
+    : TTI_Op<"experimental_gsan_indexed_tensordesc_access", [FoldTruePredicate]> {
   let summary = "Instrument an indexed TMA gather or scatter for GSan";
   let description = [{
     Passes a native tensor descriptor and its row indices directly to the GSan
@@ -285,9 +285,39 @@ def TTI_ExperimentalGSanAtomicTensorDescAccessOp
   }];
 }
 
+def TTI_ExperimentalGSanLoadRangeOp
+    : TTI_Op<"experimental_gsan_load_range", [FoldTruePredicate]> {
+  let summary = "Instrument a contiguous global-memory read for GSan";
+  let description = [{
+    Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+    The runtime processes the range as one row using the TMA shadow walker.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    I32Attr:$numBytes, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+  }];
+}
+
+def TTI_ExperimentalGSanStoreRangeOp
+    : TTI_Op<"experimental_gsan_store_range", [FoldTruePredicate]> {
+  let summary = "Instrument a contiguous global-memory write for GSan";
+  let description = [{
+    Checks numBytes bytes starting at ptr, guarded by the optional predicate.
+    The runtime processes the range as one row using the TMA shadow walker.
+  }];
+  let arguments = (ins
+    Arg<TT_Ptr, "", [MemWrite<GlobalMemory>, MemRead<GlobalMemory>]>:$ptr,
+    I32Attr:$numBytes, Optional<I1>:$pred);
+  let assemblyFormat = [{
+    $ptr `,` $numBytes (`,` $pred^)? attr-dict `:` type($ptr)
+  }];
+}
+
 def TTI_ExperimentalGSanTensorAccessOp
     : TTI_Op<"experimental_gsan_tensor_access",
-             [TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
+             [FoldTruePredicate, TypesMatchWith<"mask type matches ptr type", "ptr", "mask",
                              "getI1SameShape(getPointeeType($_self))",
                              "($_op.getOperands().size() <= 1) || std::equal_to<>()">]> {
   let summary = "Instrument a tensor load/store access for GSan";
@@ -305,6 +335,7 @@ def TTI_ExperimentalGSanTensorAccessOp
 def TTI_ExperimentalGSanAtomicLoadOp
     : TTI_Op<"experimental_gsan_atomic_load", [
   AtomicOpInterface,
+  FoldTruePredicate,
   SameLoadStoreOperandsAndResultShape,
   SameLoadStoreOperandsAndResultEncoding,
   TypesMatchWith<"result matches ptr type", "ptr", "result",
@@ -330,6 +361,7 @@ def TTI_ExperimentalGSanAtomicLoadOp
 def TTI_ExperimentalGSanAtomicStoreOp
     : TTI_Op<"experimental_gsan_atomic_store", [
   AtomicOpInterface,
+  FoldTruePredicate,
   SameLoadStoreOperandsShape,
   SameLoadStoreOperandsEncoding,
   TypesMatchWith<"value type matches ptr type", "ptr", "value",
@@ -376,6 +408,7 @@ def TTI_ExperimentalGSanAtomicPollOp
 
 def TTI_ExperimentalGSanAtomicRMWOp : TTI_Op<"experimental_gsan_atomic_rmw", [
   AtomicOpInterface,
+  FoldTruePredicate,
   SameOperandsAndResultShape,
   SameOperandsAndResultEncoding,
   TypesMatchWith<"ptr type matches value type", "val", "ptr",
@@ -428,24 +461,34 @@ def TTI_ExperimentalGSanAtomicCASOp : TTI_Op<"experimental_gsan_atomic_cas", [
 // ===== Critical section lock ops =====
 
 
-def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalLockAcquireOp : TTI_Op<"experimental_lock_acquire",
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Acquire a lock.";
   let description = [{
     Enter a critical section by acquiring a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
 }
 
 
-def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TTI_ExperimentalLockReleaseOp : TTI_Op<"experimental_lock_release",
+    [FoldTruePredicate, MemoryEffects<[MemWrite<GlobalMemory>]>]> {
   let summary = "Release a lock.";
   let description = [{
     Leave a critical section by releasing a lock with single thread.
+    `uncontended` records that only one software group can enter the critical
+    section. Collective synchronization still orders its memory accesses.
+    `ctaLocal` records that every contender for this lock is in the same CTA.
   }];
-  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred);
+  let arguments = (ins TT_PtrLike:$lock, Optional<I1>:$pred,
+                       UnitAttr:$uncontended, UnitAttr:$ctaLocal);
   let assemblyFormat = [{
     $lock (`,` $pred^)? attr-dict `:` type($lock)
   }];
@@ -478,6 +521,16 @@ def TTI_DotI8Op : TTI_Op<"dot_i8", [
     $a `,` $b `,` $c `,` `aSigned` `=` $aSigned `,` `bSigned` `=` $bSigned
     attr-dict `:` type($a) `*` type($b) `->` type($d)
   }];
+  let hasVerifier = 1;
+}
+
+def TTI_ExperimentalFPSanProbabilityCastOp : TTI_Op<"experimental_fpsan_probability_cast", [
+  Pure, Elementwise, SameOperandsAndResultShape, SameOperandsAndResultEncoding
+]> {
+  let summary = "Pack or expand compact FPSan probability payloads";
+  let arguments = (ins RankedTensorOf<[F32, F8E4M3FN, F8E5M2]>:$src);
+  let results = (outs RankedTensorOf<[F32, F8E4M3FN, F8E5M2]>:$result);
+  let assemblyFormat = "$src attr-dict `:` functional-type(operands, results)";
   let hasVerifier = 1;
 }
 

@@ -4,10 +4,8 @@
 #include "TargetInfo.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include <cstdint>
 
@@ -37,9 +35,6 @@ enum class MemoryOp { Load, Store };
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::amdgpu::ISAFamily isaFamily =
                      mlir::triton::amdgpu::ISAFamily::Unknown);
-Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
-                mlir::triton::amdgpu::ISAFamily isaFamily =
-                    mlir::triton::amdgpu::ISAFamily::Unknown);
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
                  mlir::triton::amdgpu::ISAFamily isaFamily =
                      mlir::triton::amdgpu::ISAFamily::Unknown);

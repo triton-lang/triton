@@ -640,6 +640,20 @@ def build_amd_codegen(amd_llvm_info: dict, helper_args: BuildHelperArgs):
 
 def download_and_copy_amd_codegen(helper_args: BuildHelperArgs):
     if helper_args.amd_codegen_path is not None:
+        # Copy the user-provided codegen library into the wheel packaging
+        # directory so it is included in the built wheel.  The path may be
+        # a directory containing the library or a full path to the .so
+        # (the Makefile passes a filename).
+        library = amd_codegen_library_name()
+        source_path = helper_args.amd_codegen_path
+        if os.path.isdir(source_path):
+            source_path = os.path.join(source_path, library)
+        if os.path.isfile(source_path):
+            destination_path = os.path.join(get_base_dir(), "third_party", "amd", "backend", "lib", library)
+            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
+            if os.path.realpath(source_path) != os.path.realpath(destination_path):
+                print(f"copy {source_path} to {destination_path} ...")
+                shutil.copy2(source_path, destination_path)
         return
 
     library = amd_codegen_library_name()
@@ -800,8 +814,27 @@ def get_nvidia_toolchain_packages():
     ]
 
 
+def _nvidia_toolchain_available():
+    """Check whether pre-built NVIDIA toolchain binaries exist for this platform.
+
+    NVIDIA publishes the CUDA toolkit versions Triton requires (12.9+) only
+    for x86_64 and aarch64/sbsa.  Older versions were available for ppc64le
+    (up to CUDA 12.4) but not at the versions Triton pins.  On unsupported
+    platforms the downloads would 404, so skip them with a warning rather
+    than failing the build.
+    """
+    import platform as _plat
+    return _plat.machine() in ("x86_64", "aarch64", "arm64")
+
+
 def download_and_copy_dependencies(helper_args: BuildHelperArgs):
     download_and_copy_amd_codegen(helper_args)
+
+    if not _nvidia_toolchain_available():
+        print("WARNING: NVIDIA toolchain binaries are not available for this "
+              f"platform ({platform.system()}-{platform.machine()}). "
+              "Skipping NVIDIA runtime tool downloads (ptxas, nvcc, etc.).")
+        return
 
     for package in get_nvidia_toolchain_packages():
         download_and_copy(

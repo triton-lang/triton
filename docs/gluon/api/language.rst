@@ -137,6 +137,7 @@ Math Ops
     cdiv
     ceil
     clamp
+    clmul
     cos
     div_rn
     erf

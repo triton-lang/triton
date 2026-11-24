@@ -19,7 +19,7 @@ from triton.experimental.gluon.language.nvidia.blackwell import (
 )
 
 from triton._internal_testing import is_blackwell, is_cuda, is_hopper_or_newer, run_in_process
-from triton.experimental.gsan import create_mem_pool
+from triton.experimental.gsan import configure, create_mem_pool
 from triton.experimental.gsan._testing_utils import atomic_poll, shadow_cell_from_address
 from triton.tools.tensor_descriptor import TensorDescriptor
 
@@ -727,8 +727,9 @@ def _run_failure_case(case: str, shadow_granularity: int | None = None, *, runne
                                                   f"exc={result.exc!r}\n"
                                                   f"driver stderr:\n{result.driver_stderr_output}")
     assert "GSanLibrary.cu" not in result.driver_stderr_output
-    assert Path(inspect.getsourcefile(source_function)).name in result.driver_stderr_output
-    assert _expected_file_line(source_function, marker) in result.driver_stderr_output
+    if not triton.knobs.compilation.disable_line_info:
+        assert Path(inspect.getsourcefile(source_function)).name in result.driver_stderr_output
+        assert _expected_file_line(source_function, marker) in result.driver_stderr_output
     assert error in result.driver_stderr_output
 
 
@@ -1068,6 +1069,92 @@ def test_atomic_load_store_semantic_mismatch_read_after_write(producer_sem, cons
                       marker="result = tl.load(payload_ptr)", error="Read after write race detected")
 
 
+@triton.jit
+def _atomic_acquire_expired_snapshot_kernel(flag, scratch, out, KIND: tl.constexpr, RMW: tl.constexpr):
+    tl.atomic_store(flag, 1, sem="release", scope="sys")
+    for epoch in range(8):
+        if RMW:
+            tl.atomic_xchg(scratch, epoch, sem="release", scope="sys")
+        else:
+            tl.atomic_store(scratch, epoch, sem="release", scope="sys")
+    if KIND == "poll":
+        value = tl.atomic_poll(flag, 1, sem="acquire", scope="sys")
+    else:
+        value = tl.atomic_load(flag, sem="acquire", scope="sys")
+    tl.store(out, value)
+
+
+def _run_atomic_acquire_expired_snapshot(kind, rmw):
+    configure(clock_buffer_size=4)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        flag = torch.zeros(1, dtype=torch.int32, device="cuda")
+        scratch = torch.zeros_like(flag)
+        out = torch.empty_like(flag)
+        _atomic_acquire_expired_snapshot_kernel[(1, )](flag, scratch, out, kind, rmw, num_warps=4)
+        torch.cuda.synchronize()
+
+
+@pytest.mark.parametrize("kind", ["load", "poll"])
+@pytest.mark.parametrize("rmw", [False, True])
+def test_atomic_acquire_expired_snapshot(kind, rmw):
+    _run_failure_case("atomic_acquire_expired_snapshot", runner=_run_atomic_acquire_expired_snapshot,
+                      runner_args=(kind, rmw), source_function=_atomic_acquire_expired_snapshot_kernel.fn,
+                      marker=f"value = tl.atomic_{kind}(flag", error="GSan clock buffer token overwritten")
+
+
+@triton.jit
+def _atomic_acquire_reuse_race_kernel(flag, entered, start, scratch, payload, out, KIND: tl.constexpr,
+                                      PUBLICATIONS: tl.constexpr):
+    if tl.program_id(0) == 0:
+        tl.atomic_poll(entered, 1, sem="relaxed", scope="sys")
+        tl.atomic_store(flag, 1, sem="release", scope="sys")
+        # This write is not released by flag. Importing a recycled snapshot
+        # from scratch must not make it appear ordered with the consumer.
+        tl.store(payload, 1000)
+        # Ensure the payload write exists before the reader starts importing.
+        # This relaxed handshake does not release that write to the reader.
+        tl.atomic_store(start, 1, sem="relaxed", scope="sys")
+        for epoch in range(PUBLICATIONS):
+            tl.atomic_store(scratch, epoch, sem="release", scope="sys")
+    else:
+        tl.atomic_store(entered, 1, sem="relaxed", scope="sys")
+        tl.atomic_poll(start, 1, sem="relaxed", scope="sys")
+        if KIND == "poll":
+            tl.atomic_poll(flag, 1, sem="acquire", scope="sys")
+        else:
+            value = tl.atomic_load(flag, sem="acquire", scope="sys")
+            while value != 1:
+                value = tl.atomic_load(flag, sem="acquire", scope="sys")
+        tl.store(out, tl.load(payload))
+
+
+def _run_atomic_acquire_reuse_race(kind, buffer_size, publications):
+    configure(clock_buffer_size=buffer_size)
+    triton.knobs.compilation.instrumentation_mode = "gsan"
+    pool = create_mem_pool()
+    with torch.cuda.use_mem_pool(pool):
+        cells = [torch.zeros(1, dtype=torch.int32, device="cuda") for _ in range(6)]
+        _atomic_acquire_reuse_race_kernel[(2, )](*cells, kind, publications, num_warps=4)
+        torch.cuda.synchronize()
+
+
+@pytest.mark.parametrize("kind", ["load", "poll"])
+@pytest.mark.parametrize("buffer_size", [2, 4])
+@pytest.mark.parametrize("publications", [8, 64])
+def test_atomic_acquire_concurrent_reuse_reports_race(kind, buffer_size, publications):
+    result = run_in_process(_run_atomic_acquire_reuse_race, args=(kind, buffer_size, publications))
+    assert isinstance(result.exc, RuntimeError), (result.exc, result.driver_stderr_output)
+    # Depending on scheduling, the race can be detected by either participant,
+    # or the acquire can find that its original snapshot has already expired.
+    assert any(message in result.driver_stderr_output for message in (
+        "Read after write race detected",
+        "Write after read race detected",
+        "GSan clock buffer token overwritten",
+    )), result.driver_stderr_output
+
+
 @pytest.mark.parametrize("producer_sem, consumer_sem", RELEASE_ACQUIRE_SYNC_CASES)
 @pytest.mark.gsan_fine_granularity("This race test uses scalar accesses or atomic synchronization")
 def test_cross_sm_cta_scope_read_after_write(shadow_granularity, producer_sem, consumer_sem):
@@ -1095,3 +1182,112 @@ def test_transitive_cta_scope_read_after_write(shadow_granularity, release_sem, 
                       source_function=_transitive_atomic_sync_kernel.fn,
                       marker="ready = tl.atomic_add(flag0_ptr, 0, sem=relay_sem, scope=scope)",
                       error="Read after write race detected")
+
+
+@gluon.jit
+def _bulk_load(src, out):
+    layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+    smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, 48)
+    hopper.bulk.async_load(smem, src, 12, bar)
+    hopper.mbarrier.wait(bar, phase=0)
+    offsets = gl.arange(0, 16, layout)
+    gl.store(out + offsets, smem.load(layout), offsets < 12)
+    hopper.mbarrier.invalidate(bar)
+
+
+@gluon.jit
+def _bulk_raw_kernel(src, out, ready, ACQUIRE: gl.constexpr):
+    if gl.program_id(0) == 0:
+        gl.store(src + 11, 123)
+        gl.inline_asm("fence.proxy.async.global;")
+        gl.atomic_xchg(ready, 1, sem="release", scope="gpu")
+    else:
+        while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed", scope="gpu") == 0:
+            pass
+        gl.inline_asm("fence.proxy.async.global;")
+        _bulk_load(src, out)
+
+
+@run_with_gsan
+def _run_bulk_case(write_after_read=False, acquire=False):
+    src = torch.zeros(12, device="cuda", dtype=torch.int32)
+    out = torch.empty_like(src)
+    ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    if write_after_read:
+        _bulk_war_kernel[(2, )](src, out, ready)
+    else:
+        _bulk_raw_kernel[(2, )](src, out, ready, acquire)
+    torch.cuda.synchronize()
+    if not write_after_read:
+        torch.testing.assert_close(src, out)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_read_after_write():
+    _run_failure_case("bulk_raw", runner=_run_bulk_case, source_function=_bulk_load.fn, marker="hopper.bulk.async_load",
+                      error="Read after write race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_acquire_orders_source():
+    result = run_in_process(_run_bulk_case, (False, True))
+    assert result.exc is None
+    assert result.driver_stderr_output == ""
+
+
+@gluon.jit
+def _bulk_war_kernel(src, out, ready):
+    if gl.program_id(0) == 0:
+        _bulk_load(src, out)
+        gl.atomic_xchg(ready, 1, sem="relaxed")
+    else:
+        while gl.atomic_add(ready, 0, sem="relaxed") == 0:
+            pass
+        gl.store(src + 11, 123)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_load_write_after_read():
+    _run_failure_case("bulk_war", runner=_run_bulk_case, runner_args=(True, ), source_function=_bulk_war_kernel.fn,
+                      marker="gl.store(src + 11", error="Write after read race detected")
+
+
+@gluon.jit
+def _bulk_store_after_read(payload, scratch, ready, ACQUIRE: gl.constexpr):
+    if gl.program_id(0) == 0:
+        gl.store(scratch, gl.load(payload + 11))
+        gl.atomic_xchg(ready, 1, sem="release")
+    else:
+        while gl.atomic_add(ready, 0, sem="acquire" if ACQUIRE else "relaxed") == 0:
+            pass
+        layout: gl.constexpr = gl.BlockedLayout([1], [32], [4], [0])
+        smem = gl.allocate_shared_memory(gl.int32, [16], gl.SwizzledSharedLayout(1, 1, 1, [0]),
+                                         gl.full((16, ), 17, gl.int32, layout))
+        hopper.bulk.async_store(payload, smem, 12)
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
+
+
+@run_with_gsan
+def _run_bulk_store_after_read(acquire=False):
+    payload = torch.zeros(12, device="cuda", dtype=torch.int32)
+    scratch = torch.empty(1, device="cuda", dtype=torch.int32)
+    ready = torch.zeros(1, device="cuda", dtype=torch.int32)
+    _bulk_store_after_read[(2, )](payload, scratch, ready, acquire)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(payload, torch.full_like(payload, 17))
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_store_write_after_read():
+    _run_failure_case("bulk_store_war", runner=_run_bulk_store_after_read, source_function=_bulk_store_after_read.fn,
+                      marker="hopper.bulk.async_store", error="Write after read race detected")
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+def test_bulk_async_store_acquire_orders_destination():
+    result = run_in_process(_run_bulk_store_after_read, (True, ))
+    assert result.exc is None
+    assert result.driver_stderr_output == ""

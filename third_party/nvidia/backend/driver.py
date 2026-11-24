@@ -197,6 +197,22 @@ TMA_DTYPE_DEVICE_TO_HOST[8] = 10
 TMA_DTYPE_DEVICE_TO_HOST[9] = 8
 TMA_DTYPE_DEVICE_TO_HOST[10] = 9
 TMA_TF32 = 11
+TMA_B4X16_P64 = 14
+
+
+def _contiguous_bytes_at_base(base):
+    # Count consecutive bytes in the real tensor. Gaps between rows may be unmapped.
+    shape = getattr(base, "shape", None)
+    if shape is None or not hasattr(base, "stride") or 0 in shape:
+        return 0
+    elements = 1
+    for dim in reversed(range(len(shape))):
+        if shape[dim] == 1:
+            continue
+        if base.stride(dim) != elements:
+            break
+        elements *= shape[dim]
+    return elements * base.dtype.itemsize
 
 
 def make_tensordesc_arg(arg, metadata, _):
@@ -207,7 +223,6 @@ def make_tensordesc_arg(arg, metadata, _):
     elem_size = metadata["elem_size"]
     elem_type = metadata["elem_type"]
     block_size = metadata["block_size"]
-    fp4_padded = metadata["fp4_padded"]
     is_im2col = metadata.get("is_im2col", False)
 
     shape = arg.shape
@@ -215,7 +230,8 @@ def make_tensordesc_arg(arg, metadata, _):
     assert strides[-1] == 1
     padding = 1 if arg.padding == "nan" else 0
 
-    if fp4_padded:
+    if elem_type == TMA_B4X16_P64:
+        # CUDA counts FP4 values. The backing tensor stores two per byte.
         expanded_shape = list(shape)
         expanded_shape[-1] *= 2
     else:
@@ -243,6 +259,7 @@ def make_tensordesc_arg(arg, metadata, _):
         )
     else:
         # Tiled mode - use existing tiled descriptor fill function
+        allow_small_alloc = getattr(arg, "allow_small_alloc", False)
         cu_tensor_map = triton.runtime.driver.active.utils.fill_tma_descriptor_tiled(
             arg.base.data_ptr(),
             swizzle,
@@ -252,6 +269,8 @@ def make_tensordesc_arg(arg, metadata, _):
             expanded_shape,
             strides,
             padding,
+            allow_small_alloc,
+            _contiguous_bytes_at_base(arg.base) if allow_small_alloc else 0,
         )
 
     return [cu_tensor_map, *shape, *strides]

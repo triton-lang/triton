@@ -1,10 +1,14 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -312,10 +316,10 @@ Value emitMemoryThreadPredicate(
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo) {
   if (op->getParentOfType<ThreadScopeOp>()) {
     auto block = StringAttr::get(op->getContext(), "block");
-    auto domain = ThreadDomainAttr::get(op->getContext(), 0, 0,
-                                        freeVarMasks.lookup(block) &
-                                            (lookupNumCTAs(op) - 1));
-    return emitThreadPredicate(domain, rewriter, op->getLoc(), targetInfo);
+    llvm::MapVector<StringAttr, int32_t> residualMasks;
+    residualMasks[block] = freeVarMasks.lookup(block) & (lookupNumCTAs(op) - 1);
+    return emitRedundantThreadPredicate(residualMasks, rewriter, op->getLoc(),
+                                        targetInfo);
   }
   return emitRedundantThreadPredicate(freeVarMasks, rewriter, op->getLoc(),
                                       targetInfo);
@@ -1182,7 +1186,18 @@ SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
 
 Value packLLVector(Location loc, ValueRange vals, RewriterBase &rewriter) {
   assert(vals.size() > 0);
-  auto vecType = vec_ty(vals[0].getType(), vals.size());
+  Type elemTy = vals[0].getType();
+  unsigned bits = getIntOrFloatOrPtrBitWidth(elemTy);
+  if (bits < 32 && vals.size() * bits > 32) {
+    assert(llvm::isPowerOf2_64(vals.size()) && "expected a power-of-two pack");
+    // Join 32-bit groups so the backend can reuse packed producer results.
+    size_t half = vals.size() / 2;
+    Value lo = packLLVector(loc, vals.take_front(half), rewriter);
+    Value hi = packLLVector(loc, vals.take_back(half), rewriter);
+    auto mask = llvm::to_vector(llvm::seq<int32_t>(0, vals.size()));
+    return LLVM::ShuffleVectorOp::create(rewriter, loc, lo, hi, mask);
+  }
+  auto vecType = vec_ty(elemTy, vals.size());
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value vec = b.undef(vecType);
   for (int i = 0; i < vals.size(); i++) {
@@ -1281,7 +1296,7 @@ static bool atomicResultHasOrderingBarrier(Operation *op) {
 }
 
 void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
-                                  RewriterBase &rewriter,
+                                  MemSyncScope memScope, RewriterBase &rewriter,
                                   const TargetInfoBase &targetInfo) {
   // The region's entry/exit barriers already provide this ordering.
   if (op->getParentOfType<triton::gpu::ThreadScopeOp>())
@@ -1298,6 +1313,11 @@ void insertAtomicOrderingBarriers(Operation *op, MemSemantic memOrdering,
   OpBuilder::InsertionGuard guard(rewriter);
   if (stages.beforeMemoryEffects) {
     rewriter.setInsertionPoint(op);
+    // Every warp releases its own writes; the barrier then orders them all
+    // before the atomic, whichever thread issues it.
+    if (triton::gpu::lookupNumWarps(op) > 1 ||
+        triton::gpu::lookupNumCTAs(op) > 1)
+      targetInfo.releaseBeforeAtomicBarrier(op->getLoc(), rewriter, memScope);
     emitBarrier();
   }
   if (stages.afterMemoryEffects) {

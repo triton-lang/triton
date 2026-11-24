@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
@@ -562,6 +563,115 @@ static PyTypeObject PyCUtensorMapType = {
 };
 // clang-format on
 
+// Compare the last element's byte offset with the existing 128 KiB cutoff.
+// Virtual shapes and strides can overflow even a 64-bit span.
+static bool tensorMapSpanIsSmall(int rank, int elemSize, const uint64_t *shape,
+                                 const uint64_t *strides) {
+  const uint64_t maxOffset = 128 * 1024 - 2;
+  uint64_t remaining = maxOffset;
+  for (int i = 0; i < rank; ++i) {
+    uint64_t stride = i == 0 ? (uint64_t)elemSize : strides[i - 1];
+    uint64_t extent = shape[i] - 1;
+    if (stride && extent > remaining / stride)
+      return false;
+    remaining -= extent * stride;
+  }
+  return true;
+}
+
+#if CUDA_VERSION < 13050
+// The bundled CUDA headers predate cuTensorMapSetAllocationClass (CUDA 13.5).
+typedef enum { CU_TENSOR_MAP_ALLOC_CLASS_SMALL = 1 } CUtensorMapAllocClass;
+#define CU_DEVICE_ATTRIBUTE_TENSOR_MAP_LARGE_TENSOR_MIN_SIZE                   \
+  ((CUdevice_attribute)160)
+#endif
+
+static CUresult tensorMapHasBackingWindow(CUdeviceptr ptr,
+                                          uint64_t contiguousBytes,
+                                          bool *covered) {
+  *covered = false;
+  CUdevice device;
+  CUresult status = cuCtxGetDevice(&device);
+  if (status != CUDA_SUCCESS)
+    return status;
+  int minBytes;
+  status = cuDeviceGetAttribute(
+      &minBytes, CU_DEVICE_ATTRIBUTE_TENSOR_MAP_LARGE_TENSOR_MIN_SIZE, device);
+  if (status == CUDA_ERROR_INVALID_VALUE ||
+      status == CUDA_ERROR_NOT_SUPPORTED) {
+    int major;
+    status = cuDeviceGetAttribute(
+        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
+    if (status == CUDA_SUCCESS && major != 10 && major != 11 && major != 12)
+      return CUDA_SUCCESS;
+    minBytes = 128 * 1024;
+  }
+  if (status != CUDA_SUCCESS || minBytes <= 0)
+    return status;
+  if (contiguousBytes >= (uint64_t)minBytes) {
+    *covered = true;
+    return CUDA_SUCCESS;
+  }
+
+  // A legacy cudaMalloc/cuMemAlloc block stays mapped as one unit while a
+  // suballocation is live. VMM reservations can contain inaccessible pages.
+  unsigned int legacyIpcCapable = 0;
+  status = cuPointerGetAttribute(
+      &legacyIpcCapable, CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE, ptr);
+  if (status == CUDA_ERROR_INVALID_VALUE || status == CUDA_ERROR_NOT_SUPPORTED)
+    return CUDA_SUCCESS;
+  if (status != CUDA_SUCCESS || !legacyIpcCapable)
+    return status;
+
+  CUdeviceptr base;
+  size_t bytes;
+  status = cuMemGetAddressRange(&base, &bytes, ptr);
+  if (status == CUDA_ERROR_INVALID_VALUE ||
+      status == CUDA_ERROR_NOT_SUPPORTED || status == CUDA_ERROR_NOT_FOUND)
+    return CUDA_SUCCESS;
+  if (status != CUDA_SUCCESS)
+    return status;
+  if (ptr >= base && ptr - base <= bytes)
+    *covered = bytes - (ptr - base) >= (size_t)minBytes;
+  return CUDA_SUCCESS;
+}
+
+static CUresult setSmallTensorMapAllocationClass(CUtensorMap *map) {
+  typedef CUresult(CUDAAPI * SetAllocationClass)(
+      CUtensorMap *, CUtensorMapAllocClass, CUtensorMapAllocClass *);
+  // Called with the GIL held. Probe the loaded libcuda once because compat
+  // libraries with the same reported version may export different APIs.
+  static SetAllocationClass setAllocationClass;
+  static bool lookedUp;
+  if (!lookedUp) {
+    setAllocationClass = (SetAllocationClass)dlsym(
+        RTLD_DEFAULT, "cuTensorMapSetAllocationClass");
+    lookedUp = true;
+  }
+  if (setAllocationClass)
+    return setAllocationClass(map, CU_TENSOR_MAP_ALLOC_CLASS_SMALL, NULL);
+
+  CUdevice device;
+  CUresult res = cuCtxGetDevice(&device);
+  if (res != CUDA_SUCCESS)
+    return res;
+  int major;
+  res = cuDeviceGetAttribute(
+      &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device);
+  if (res != CUDA_SUCCESS)
+    return res;
+  // Only Blackwell has NVIDIA's documented bit-85 layout.
+  // https://docs.nvidia.com/datacenter/tesla/tesla-release-notes-595-91-07/index.html#known-issues
+  if (major == 10 || major == 11 || major == 12) {
+    uint64_t word;
+    char *selector = (char *)map + sizeof(word);
+    memcpy(&word, selector, sizeof(word));
+    word &= ~(UINT64_C(1) << 21);
+    memcpy(selector, &word, sizeof(word));
+  }
+  return CUDA_SUCCESS;
+}
+
 static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   unsigned long long global_address;
   int swizzle;
@@ -571,9 +681,12 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   PyObject *shape;
   PyObject *strides;
   int padding;
+  int check_tma_allocation = 0;
+  unsigned long long contiguous_bytes = 0;
 
-  if (!PyArg_ParseTuple(args, "KiiiOOOi", &global_address, &swizzle, &elemSize,
-                        &elemType, &blockSize, &shape, &strides, &padding)) {
+  if (!PyArg_ParseTuple(args, "KiiiOOOi|pK", &global_address, &swizzle,
+                        &elemSize, &elemType, &blockSize, &shape, &strides,
+                        &padding, &check_tma_allocation, &contiguous_bytes)) {
     return NULL;
   }
 
@@ -594,7 +707,13 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   blockSizeFast = PySequence_Fast(blockSize, "blockSize must be a sequence");
   if (!blockSizeFast)
     goto cleanup;
-  int rank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  Py_ssize_t blockRank = PySequence_Fast_GET_SIZE(blockSizeFast);
+  if (blockRank < 1 || blockRank > 5) {
+    PyErr_SetString(PyExc_ValueError,
+                    "tensor map rank must be between 1 and 5");
+    goto cleanup;
+  }
+  int rank = (int)blockRank;
 
   for (int i = 0; i < rank; ++i) {
     PyObject *item = PySequence_Fast_GET_ITEM(blockSizeFast, i);
@@ -646,6 +765,51 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
   shapeFast = NULL;
   Py_DECREF(stridesFast);
   stridesFast = NULL;
+
+  // cuTensorMapEncodeTiled requires 128 FP6 values. SM103 also accepts 64
+  // for a b6p2x16 store. Encode the unswizzled narrow map here.
+  if (elemType == CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B &&
+      blockSizeInt[0] == 64) {
+    CUdevice device;
+    int major, minor;
+    CUDA_CHECK_AND_RETURN_NULL(cuCtxGetDevice(&device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
+    CUDA_CHECK_AND_RETURN_NULL(cuDeviceGetAttribute(
+        &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+    if (major != 10 || minor != 3) {
+      PyErr_SetString(PyExc_ValueError,
+                      "64-value FP6 TMA stores require SM103");
+      goto cleanup;
+    }
+    uint32_t words[32] = {
+        [0] = (uint32_t)global_address,
+        [1] = global_address >> 32,
+        [2] = 0x680 | ((uint32_t)(rank - 1) << 4), // Tiled FP6, no swizzle.
+        [8] = shapeInt[0] - 1,
+        [13] = 63U << 24, // Innermost box size minus one.
+    };
+    bool valid = rank >= 2 && !swizzle && !padding && elemSize == 1 &&
+                 global_address && global_address % 16 == 0 && shapeInt[0] &&
+                 shapeInt[0] <= (1ULL << 32) && shapeInt[0] % 64 == 0;
+    for (int i = 0; i < rank - 1; ++i) {
+      uint64_t dim = shapeInt[i + 1], stride = stridesLL[i];
+      uint32_t box = blockSizeInt[i + 1];
+      valid &= dim && dim <= (1ULL << 32) && stride && stride % 16 == 0 &&
+               stride / 16 <= UINT32_MAX && box && box <= 256;
+      words[3 + i] = stride >> 4;
+      words[9 + i] = dim - 1;
+      words[14] |= (box - 1) << (8 * i);
+    }
+    if (!valid) {
+      PyErr_SetString(PyExc_ValueError, "invalid SM103 FP6 store tensor map");
+      goto cleanup;
+    }
+    _Static_assert(sizeof(words) == sizeof(CUtensorMap),
+                   "unexpected tensor map size");
+    memcpy(&desc->tensorMap, words, sizeof(words));
+    return (PyObject *)desc;
+  }
 
   CUtensorMapFloatOOBfill fill =
       (padding == 1) ? CU_TENSOR_MAP_FLOAT_OOB_FILL_NAN_REQUEST_ZERO_FMA
@@ -703,23 +867,21 @@ static PyObject *fillTMADescriptorTiled(PyObject *self, PyObject *args) {
     goto cleanup;
   }
 
-  // Follow the CUTLASS change for the driver version check
-  // https://github.com/NVIDIA/cutlass/commit/b7ecaa605dd70326900433695e11ebfec407edd2#diff-1dfcaf77b33258ff3175540718d9caff1cd471215f741ba42943ef00770e6d04
-  int driver_version = 0;
-  CUresult driver_version_result = cuDriverGetVersion(&driver_version);
-  assert(driver_version_result == CUDA_SUCCESS);
-
-  if (driver_version <= 13010) {
-    int max_byte_index = 0;
-    for (int i = 0; i < rank; ++i) {
-      int bytes_stride = i == 0 ? elemSize : stridesLL[i - 1];
-      max_byte_index += (shapeInt[i] - 1) * bytes_stride;
-    }
-    if (max_byte_index + 1 < 128 * 1024) {
-      uint64_t *desc_u64 = (uint64_t *)&desc->tensorMap;
-      desc_u64[1] &= ~(1llu << 21);
-    }
+  int driver_version;
+  CUDA_CHECK_AND_RETURN_NULL(cuDriverGetVersion(&driver_version));
+  // CUDA <= 13.1 also needs the CUTLASS small-tensor workaround (#9235).
+  bool forceSmall = driver_version <= 13010 &&
+                    tensorMapSpanIsSmall(rank, elemSize, shapeInt, stridesLL);
+  if (check_tma_allocation && !forceSmall) {
+    bool covered;
+    CUresult status =
+        tensorMapHasBackingWindow(global_address, contiguous_bytes, &covered);
+    CUDA_CHECK_AND_RETURN_NULL(status);
+    forceSmall = !covered;
   }
+  if (forceSmall)
+    CUDA_CHECK_AND_RETURN_NULL(
+        setSmallTensorMapAllocationClass(&desc->tensorMap));
 
   return (PyObject *)desc;
 

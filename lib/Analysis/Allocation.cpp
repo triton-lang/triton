@@ -55,7 +55,8 @@ unsigned getNumScratchElemsSwizzledCvt(const LinearLayout &srcLayout,
   // The smem has the same CGA layout as srcLayout, so use that instead.
   // Remove the number of elements duplicated in the CGA layout.
   auto nBlocks = product(triton::gpu::getCTASplitNum(
-      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout)));
+      gpu::GenericLinearEncodingAttr::get(ctx, srcLayout),
+      convertType<int64_t>(llvm::to_vector(srcLayout.getOutDimSizes()))));
   return smem.getTotalOutDimSize() / (reps * nBlocks);
 }
 
@@ -161,7 +162,7 @@ std::optional<uint16_t> getResultScratchBroadcastMask(Operation *op) {
   if (auto handoff = dyn_cast<gpu::ThreadHandoffOp>(op))
     return handoff.getSource().getBlock() &
            ~handoff.getDestination().getBlock();
-  if (!isa<AtomicOpInterface, AtomicPollOp, gpu::LocalAtomicScatterRMWOp>(op))
+  if (!isa<AtomicOpInterface, gpu::LocalAtomicScatterRMWOp>(op))
     return std::nullopt;
   if (op->getNumResults() == 0)
     return std::nullopt;
@@ -187,6 +188,11 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto scan = dyn_cast<ScanOp>(op)) {
+    auto ty = scan.getInputTypes().front();
+    return gpu::getCTASplitNum(ty.getEncoding(),
+                               ty.getShape())[scan.getAxis()] > 1;
+  }
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
     auto layout = gpu::toLinearLayout(histogram.getSrc().getType());
@@ -341,9 +347,6 @@ private:
         for (auto alloc : info.getAllocs()) {
           if (allocation->valueBuffer.contains(alloc))
             allocation->addAlias(value, alloc);
-          else if (auto argument = dyn_cast<BlockArgument>(alloc);
-                   argument && argument.getOwner()->getParentOp() == operation)
-            allocation->argumentAliases[value].insert(argument.getArgNumber());
         }
       }
     }

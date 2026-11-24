@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
+#include "triton/Analysis/CallGraph.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonInstrument/IR/Utility.h"
@@ -103,6 +104,21 @@ public:
         (hasSharedBuffers ? 1 : 0) + (hasTensorMemoryBuffers(mod) ? 1 : 0);
     // NVIDIA inserts a terminal cluster barrier after this pass.
     bool hasClusterBarriers = target == "nvidia" && ttg::lookupNumCTAs(mod) > 1;
+    if (hasClusterBarriers) {
+      // Expose implicit barriers to ConSan through the entire call chain.
+      DenseSet<Operation *> barrierCalls;
+      auto markCall = [&](CallOpInterface call, FunctionOpInterface callee) {
+        callee.walk([&](Operation *op) {
+          if (barrierCalls.contains(op) ||
+              (!isa<ttng::ClusterBarrierOp>(op) &&
+               hooks->getClusterBarrierStages(op).hasBarrier())) {
+            callee->removeAttr("noinline");
+            barrierCalls.insert(call);
+          }
+        });
+      };
+      CallGraph<int>(mod).walk<WalkOrder::PostOrder>(markCall, [](auto) {});
+    }
     int totalCaptures = tti::estimateConSanCaptureCount(
         numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
         getNumCommitKinds(mod, *hooks),

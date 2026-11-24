@@ -274,8 +274,9 @@ class CUDABackend(BaseBackend):
         capability = int(self._parse_arch(options.arch))
         codegen_fns = {
             "convert_custom_types":
-            cuda.convert_custom_float8_sm80 if capability >= 80 else cuda.convert_custom_float8_sm70, "min_dot_size":
-            min_dot_size(self.target)
+            cuda.convert_custom_float8_sm80 if capability >= 80 else cuda.convert_custom_float8_sm70,
+            "min_dot_size": min_dot_size(self.target),
+            "get_ptx_version": functools.partial(get_ptx_version_from_options, options, self.target.arch),
         }
         return codegen_fns
 
@@ -375,7 +376,6 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_reorder_instructions(pm)
         passes.ttir.add_loop_aware_cse(pm)
         passes.common.add_symbol_dce(pm)
-        nvidia.passes.ttnvgpuir.add_fence_insertion(pm, capability)
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         nvidia.passes.ttnvgpuir.add_hoist_mbarrier_lifecycle(pm, capability)
         passes.common.add_sccp(pm)
@@ -436,17 +436,15 @@ class CUDABackend(BaseBackend):
         if not any(is_enabled(options, mode) for mode in ("gsan", "consan")):
             passes.ttgpuir.add_optimize_thread_regions(pm)
         passes.convert.add_scf_to_cf(pm)
-        passes.gluon.add_inliner(pm)
         if is_enabled(options, "consan"):
             passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
+        passes.gluon.add_inliner(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttgpuir.add_membar(pm, capability, ptx_version)
-        nvidia.passes.ttnvgpuir.add_tmem_barrier_insertion(pm)
-        nvidia.passes.ttnvgpuir.add_optimize_mbarrier_arrivals(pm)
         if is_enabled(options, "consan"):
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
@@ -521,6 +519,7 @@ class CUDABackend(BaseBackend):
             expand_masked_div_rem=True,
             nvptx_compute_capability=0 if use_slp_vectorizer else capability,
             enable_nvptx_tti=True,
+            merge_nvptx_assert_blocks=is_enabled(options, "consan"),
         )
 
         # Get some metadata

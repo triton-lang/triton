@@ -46,6 +46,24 @@ def test_chained_comparison_range():
 
 @filecheck_test
 @gluon.jit
+def test_gdc_arch_exports():
+    # CHECK-LABEL: test_gdc_arch_exports
+    # CHECK: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    hopper.gdc.wait()
+    hopper.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    blackwell.gdc.wait()
+    blackwell.gdc.launch_dependents()
+    # CHECK-NEXT: tt.grid_dependency_wait
+    # CHECK-NEXT: tt.grid_dependency_launch_dependents
+    rubin.gdc.wait()
+    rubin.gdc.launch_dependents()
+
+
+@filecheck_test
+@gluon.jit
 def test_atomic_poll_tensor():
     # CHECK-LABEL: test_atomic_poll_tensor
     layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
@@ -1823,7 +1841,7 @@ def async_tma_kernel(input_desc, XBLOCK: ttgl.constexpr):
     mbarrier.invalidate(bar)
 
     tma.async_store(input_desc, [0, 0], smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[smem])
 
 
 @pytest.mark.parametrize("target", [HOPPER_TARGET, BLACKWELL_TARGET])
@@ -1861,7 +1879,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32_4 = arith.constant 0 : i32
     %c0_i32_5 = arith.constant 0 : i32
     ttng.async_tma_copy_local_to_global %arg0[%c0_i32_4, %c0_i32_5] %0 : !tt.tensordesc<128x128xf16, #shared>, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -1883,7 +1901,7 @@ def async_tma_blackwell_kernel(input_desc, XBLOCK: ttgl.constexpr):
     mbarrier.invalidate(bar)
 
     tma.async_scatter(input_desc, x_offsets, 0, smem)
-    tma.store_wait(0)
+    tma.store_wait(0, deps=[smem])
 
 
 def test_async_tma_blackwell():
@@ -1920,7 +1938,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     ttng.inval_barrier %1 : !ttg.memdesc<1xi64, #shared1, #smem, mutable>
     %c0_i32_3 = arith.constant 0 : i32
     ttng.async_tma_scatter %arg0[%2, %c0_i32_3] %0 : !tt.tensordesc<1x128xf16, #shared>, tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %0 : !ttg.memdesc<128x128xf16, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -2289,6 +2307,32 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 """)
 
 
+@pytest.mark.parametrize("kind", ["reduce", "scan", "map_elementwise"])
+def test_callback_rejects_indirect_load(kind, capfd):
+
+    @gluon.jit(noinline=True)
+    def enabled(ptr):
+        return ttgl.load(ptr) != 0
+
+    @gluon.jit
+    def choose(lhs, rhs):
+        return ttgl.where(enabled(lhs), lhs, rhs)
+
+    @gluon.jit
+    def kernel(ptr, KIND: ttgl.constexpr):
+        offsets = ttgl.arange(0, 32, layout=ttgl.BlockedLayout([1], [32], [4], [0]))
+        if KIND == "reduce":
+            ttgl.reduce(ptr + offsets, 0, choose)
+        elif KIND == "scan":
+            ttgl.associative_scan(ptr + offsets, 0, choose)
+        else:
+            ttgl.map_elementwise(choose, ptr + offsets, ptr + offsets + 1)
+
+    with pytest.raises(CompilationError):
+        run_parser(kernel, *make_args(MockTensor(ttgl.int32), kind))
+    assert f"'tt.load' op is not allowed in a tt.{kind} callback" in capfd.readouterr().err
+
+
 @gluon.jit
 def pair_add(a0, a1, b0, b1):
     return a0 + b0, a1 + b1
@@ -2641,6 +2685,59 @@ def test_bank_conflicts(reg_layout, shared_layout, shape, bitwidth, ref_conflict
         ttgl.static_assert(conflicts == ref_conflicts)
 
     run_parser(kernel, args=args, target=AMPERE_TARGET)
+
+
+@pytest.mark.parametrize("reg_layout, shared_layout, shape, bitwidth, ref_conflicts", [
+    # swizzled layouts:
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 3),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(8, 1, 4, order=[1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=8), ttgl.SwizzledSharedLayout(8, 1, 8, order=[1, 0]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(1, 1, 1, order=[1, 0]), [256, 64], 16, 7),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(4, 1, 8, order=[1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]),
+                           k_width=4), ttgl.SwizzledSharedLayout(4, 1, 16, order=[1, 0]), [256, 64], 16, 0),
+    # padded layouts:
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[512, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8], [512, 16]], [256, 64], [1, 0]), [256, 64], 16, 2),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout([[512, 16]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [16, 0], [32, 0], [64, 0],
+                                           [1, 0], [2, 0], [4, 0], [8, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout(
+         [[64, 8]], [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [2, 0], [1, 0], [8, 0], [4, 0], [16, 0], [32, 0],
+                     [64, 0], [128, 0]], [], [256, 64]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(1, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [64, 256], [0, 1]), [64, 256], 16, 0),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [32, 32, 16], True, [2, 2]), k_width=8),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 16]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 4]], [256, 64], [1, 0]), [256, 64], 16, 1),
+    (ttgl.DotOperandLayout(0, ttgl.amd.AMDMFMALayout(4, [16, 16, 32], True, [2, 2]), k_width=4),
+     ttgl.PaddedSharedLayout.with_identity_for([[64, 8]], [256, 64], [1, 0]), [256, 64], 16, 0),
+])
+def test_bank_conflicts_amd(reg_layout, shared_layout, shape, bitwidth, ref_conflicts):
+    dtype = {8: ttgl.int8, 16: ttgl.float16, 32: ttgl.float32}[bitwidth]
+    args = (ttgl.distributed_type(dtype, shape,
+                                  reg_layout), ttgl.shared_memory_descriptor_type(dtype, shape, shared_layout,
+                                                                                  shape), ref_conflicts)
+
+    @gluon.jit
+    def kernel(reg_type: ttgl.constexpr, shared_type: ttgl.constexpr, ref_conflicts: ttgl.constexpr):
+        conflicts: ttgl.constexpr = ttgl.bank_conflicts(reg_type, shared_type)
+        ttgl.static_assert(conflicts == ref_conflicts)
+
+    run_parser(kernel, args=args, target=HIP_TARGET_CDNA4)
 
 
 @pytest.mark.parametrize(
@@ -5673,8 +5770,8 @@ def test_nv_tma_descriptor_store_kernel(target):
         )
         smem = ttgl.allocate_shared_memory(ttgl.float32, [XBLOCK, XBLOCK], smem_layout)
         tma.async_store(input_desc, [0, 0], smem)
-        tma.store_wait(0)
-        tma.store_wait(0, read_only=True)
+        tma.store_wait(0, deps=[smem])
+        tma.store_wait(0, read_only=True, deps=[smem])
 
     ptr = MockTensor(ttgl.float32)
     module = run_parser(nv_tma_descriptor_store_kernel, *make_args(ptr), target)
@@ -5693,8 +5790,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %c0_i32_1 = arith.constant 0 : i32
     ttng.async_tma_copy_local_to_global %0[%c0_i32, %c0_i32_1] %1 : !tt.tensordesc<128x128xf32, #shared>, !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
-    ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %1 : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
+    ttng.async_tma_store_wait {pendings = 0 : i32, read_only} deps %1 : !ttg.memdesc<128x128xf32, #shared, #smem, mutable>
     tt.return
   }
 }
@@ -5736,7 +5833,7 @@ def test_nv_tma_descriptor_reduce_kernel(target, op_name, kind):
             tma.async_atomic_or(input_desc, [0, 0], smem)
         elif OP_NAME == "async_atomic_xor":
             tma.async_atomic_xor(input_desc, [0, 0], smem)
-        tma.store_wait(0)
+        tma.store_wait(0, deps=[smem])
 
     ptr = MockTensor(ttgl.int32)
     module = run_parser(nv_tma_descriptor_reduce_kernel, *make_args(ptr, op_name), target)
@@ -5955,11 +6052,11 @@ def tma_cache_policy_kernel(desc, pred, POLICY: ttgl.constexpr, KIND: ttgl.const
     if KIND == "store":
         if pred:
             hopper.tma.async_store(desc, [0] * len(shape), smem, cache_policy=POLICY)
-            hopper.tma.store_wait(0)
+            hopper.tma.store_wait(0, deps=[smem])
     elif KIND == "scatter":
         if pred:
             tma.async_scatter(desc, offsets, 0, smem, cache_policy=POLICY)
-            hopper.tma.store_wait(0)
+            hopper.tma.store_wait(0, deps=[smem])
 
 
 def make_tma_cache_policy_desc(rank=2, kind="load", multicast=False):

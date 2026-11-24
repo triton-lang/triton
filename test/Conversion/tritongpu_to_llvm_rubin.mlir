@@ -1,5 +1,4 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-optimize-mbarrier-arrivals --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=93' -cse | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' -cse | FileCheck %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
@@ -405,12 +404,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_f32x2
   // CHECK: llvm.insertelement {{.*}} : vector<2xf32>
-  // CHECK: llvm.bitcast {{.*}} : vector<2xf32> to i64
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2 $0, $1, $2;", "=l,l,l" {{.*}} : (i64, i64) -> i64
-  // CHECK: llvm.inline_asm {{.*}} "sub.f32x2 $0, $1, $2;", "=l,l,l" {{.*}} : (i64, i64) -> i64
-  // CHECK: llvm.inline_asm {{.*}} "mul.f32x2 $0, $1, $2;", "=l,l,l" {{.*}} : (i64, i64) -> i64
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
+  // CHECK: llvm.fsub {{.*}} : vector<2xf32>
+  // CHECK: llvm.fmul {{.*}} : vector<2xf32>
   // CHECK: llvm.inline_asm {{.*}} "fma.rn.f32x2 $0, $1, $2, $3;", "=l,l,l,l" {{.*}} : (i64, i64, i64) -> i64
-  // CHECK: llvm.bitcast {{.*}} : i64 to vector<2xf32>
   tt.func private @packed_arith_f32x2(
       %a: tensor<128x2xf32, #blocked>,
       %b: tensor<128x2xf32, #blocked>,
@@ -457,11 +454,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A3:.*]] = llvm.extractvalue %arg0[3]
   // CHECK: llvm.insertelement %[[A0]],
   // CHECK: llvm.insertelement %[[A1]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
   // CHECK: llvm.insertelement %[[A2]],
   // CHECK: llvm.insertelement %[[A3]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
-  // CHECK: llvm.inline_asm {{.*}} "mul.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
+  // CHECK: llvm.fmul {{.*}} : vector<2xf32>
   // CHECK-NOT: {{prmt|shfl\.sync}}
   // CHECK: llvm.inline_asm {{.*}} "add.e4m3x4.e2m1x4 $0, $1, $2;", "=r,h,r"
   // CHECK-NOT: {{prmt|shfl\.sync}}
@@ -486,18 +483,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_homogeneous_half
-  // CHECK: nvvm.addf {{.*}} : vector<2xf16>
-  // CHECK: nvvm.subf {{.*}} : vector<2xf16>
-  // CHECK: llvm.inline_asm {{.*}} "mul.f16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: nvvm.fma {{.*}}, rnd = <rn> : vector<2xf16>
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.fmin.f16x2"
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.fmax.f16x2"
-  // CHECK: nvvm.addf {{.*}} : vector<2xbf16>
-  // CHECK: nvvm.subf {{.*}} : vector<2xbf16>
-  // CHECK: llvm.inline_asm {{.*}} "mul.bf16x2 $0, $1, $2;", "=r,r,r"
-  // CHECK: nvvm.fma {{.*}}, rnd = <rn> : vector<2xbf16>
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.fmin.bf16x2"
-  // CHECK: llvm.call_intrinsic "llvm.nvvm.fmax.bf16x2"
+  // CHECK: llvm.fadd {{.*}} : vector<2xf16>
+  // CHECK: llvm.fsub {{.*}} : vector<2xf16>
+  // CHECK: llvm.fmul {{.*}} : vector<2xf16>
+  // CHECK: llvm.intr.fma{{.*}} : (vector<2xf16>, vector<2xf16>, vector<2xf16>) -> vector<2xf16>
+  // CHECK: llvm.call_intrinsic "llvm.minimumnum"{{.*}} : (vector<2xf16>, vector<2xf16>) -> vector<2xf16>
+  // CHECK: llvm.call_intrinsic "llvm.maximumnum"{{.*}} : (vector<2xf16>, vector<2xf16>) -> vector<2xf16>
+  // CHECK: llvm.fadd {{.*}} : vector<2xbf16>
+  // CHECK: llvm.fsub {{.*}} : vector<2xbf16>
+  // CHECK: llvm.fmul {{.*}} : vector<2xbf16>
+  // CHECK: llvm.intr.fma{{.*}} : (vector<2xbf16>, vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+  // CHECK: llvm.call_intrinsic "llvm.minimumnum"{{.*}} : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
+  // CHECK: llvm.call_intrinsic "llvm.maximumnum"{{.*}} : (vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
   tt.func private @packed_arith_homogeneous_half(
       %f16a: tensor<128x2xf16, #blocked>,
       %f16b: tensor<128x2xf16, #blocked>,
@@ -572,8 +569,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @packed_arith_mixed
-  // CHECK: llvm.inline_asm {{.*}} "mul.f16x2 $0, $1, $2;", "=r,r,r" {{.*}} : (i32, i32) -> i32
-  // CHECK: nvvm.fma {{.*}}, rnd = <rn> : vector<2xbf16>
+  // CHECK: llvm.fmul {{.*}} : vector<2xf16>
+  // CHECK: llvm.intr.fma{{.*}} : (vector<2xbf16>, vector<2xbf16>, vector<2xbf16>) -> vector<2xbf16>
   // CHECK: llvm.inline_asm {{.*}} "add.f32x2.f16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
   // CHECK: llvm.inline_asm {{.*}} "add.f32x2.bf16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
   // CHECK: llvm.inline_asm {{.*}} "sub.f32x2.f16x2.f32x2 $0, $1, $2;", "=l,r,l" {{.*}} : (i32, i64) -> i64
@@ -702,14 +699,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[A3:.*]] = llvm.extractvalue %arg0[3]
   // CHECK: llvm.insertelement %[[A0]],
   // CHECK: llvm.insertelement %[[A1]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
   // CHECK: llvm.insertelement %[[A2]],
   // CHECK: llvm.insertelement %[[A3]],
-  // CHECK: llvm.inline_asm {{.*}} "add.f32x2
+  // CHECK: llvm.fadd {{.*}} : vector<2xf32>
   tt.func private @packed_arith_x2_register_order(
       %a: tensor<2x256xf32, #blocked>,
       %b: tensor<2x256xf32, #blocked>) -> tensor<2x256xf32, #blocked> {
     %0 = ttng.packed_arith add %a, %b : (tensor<2x256xf32, #blocked>, tensor<2x256xf32, #blocked>) -> tensor<2x256xf32, #blocked>
     tt.return %0 : tensor<2x256xf32, #blocked>
+  }
+}
+
+// -----
+
+#bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:107", "ttng.two-ctas" = true} {
+  // CHECK-LABEL: @early_a_release
+  tt.func @early_a_release(%early: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>, %full: !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>) {
+    // CHECK: tcgen05.commit.cta_group::2.mbarrier::arrive::one.sync_restrict::shared::read::mma::a.shared::cluster.multicast::cluster.b64
+    ttng.tc_gen5_commit %early {early_a_release} : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    // CHECK: tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::cluster.multicast::cluster.b64
+    ttng.tc_gen5_commit %full : !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
+    tt.return
   }
 }

@@ -165,7 +165,7 @@ tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) const {
       continue;
     }
     auto [stage, cluster] = it->second;
-    assert(cluster != Cluster{} && "Op with invalid cluster!");
+    assert(cluster != clusters.end() && "Op with invalid cluster!");
     assert(stage < numStages && "Op with invalid stage!");
     int clusterId = *cluster;
     assert(clusterId == std::distance(clusters.begin(),

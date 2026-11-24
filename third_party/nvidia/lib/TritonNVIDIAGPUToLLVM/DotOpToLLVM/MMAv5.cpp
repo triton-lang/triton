@@ -167,6 +167,10 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
     uint32_t shift : 2;
   };
   auto getTypeEncoding = [&](Type type) {
+    if (isa<Float6E2M3FNType>(type))
+      return 3;
+    if (isa<Float6E3M2FNType>(type))
+      return 4;
     if (type.isF16())
       return 0;
     if (type.isBF16())
@@ -190,8 +194,8 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   desc.transposeB = transposeB;
   desc.M = M >> 4;
   desc.N = N >> 3;
-  desc.aType = getTypeEncoding(op.getA().getType().getElementType());
-  desc.bType = getTypeEncoding(op.getB().getType().getElementType());
+  desc.aType = getTypeEncoding(op.getAElementType());
+  desc.bType = getTypeEncoding(op.getBElementType());
   Type dstElType = op.getD().getType().getElementType();
   if (dstElType.isInteger(32)) {
     desc.dType = 2;
@@ -410,14 +414,14 @@ void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
-                     Value barrier, Value pred, bool twoCTAs,
-                     ValueRange descs) {
+                     Value barrier, Value pred, bool twoCTAs, ValueRange descs,
+                     bool earlyARelease = false) {
   PTXBuilder ptxBuilder;
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value mask;
   for (uint16_t broadcastBits : ttng::getCTABroadcastMasks(twoCTAs, descs)) {
     Value descMask =
-        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+        LLVM::NVIDIA::createMulticastMask(loc, rewriter, broadcastBits);
     mask = mask ? b.or_(descMask, mask) : descMask;
   }
 
@@ -429,7 +433,10 @@ void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   ptxOperands.push_back(barrierOperand);
   std::string opcode =
       "@$0 tcgen05.commit.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
-      ".mbarrier::arrive::one.shared::cluster";
+      ".mbarrier::arrive::one";
+  if (earlyARelease)
+    opcode += ".sync_restrict::shared::read::mma::a";
+  opcode += ".shared::cluster";
   if (mask)
     opcode += ".multicast::cluster";
   opcode += ".b64 [$1]";
@@ -499,13 +506,12 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
-  Value isWarp0 = tb.icmp_eq(warpId, tb.i32_val(0));
+  Value warpId = triton::gpu::WarpIdOp::create(rewriter, loc);
+  pred = tb.and_(pred, tb.icmp_eq(warpId, tb.i32_val(0)));
   if (twoCTAs) {
     Value cluster0 = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter);
     pred = tb.and_(pred, cluster0);
   }
-  pred = tb.and_(pred, isWarp0);
 
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();
@@ -702,12 +708,13 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
   SmallVector<Value> commitDescs = op.getCompletionDescs();
 
   DotConversion dot;
-  Type srcElementTy = aTensorTy.getElementType();
+  Type srcElementTy = op.getAElementType();
   if (srcElementTy.isF16() || srcElementTy.isBF16()) {
     dot.kind = "f16";
   } else if (srcElementTy.isF32()) {
     dot.kind = "tf32";
-  } else if (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementTy)) {
+  } else if (isa<Float6E2M3FNType, Float6E3M2FNType, Float8E4M3FNType,
+                 Float8E5M2Type>(srcElementTy)) {
     dot.kind = "f8f6f4";
   } else if (dTensorTy.getElementType().isInteger(32)) {
     // PTX uses "i8" for integer operations (both signed and unsigned)
@@ -726,7 +733,9 @@ LogicalResult convertDot(const LLVMTypeConverter &typeConverter,
 
   // 2xfp8 requires M = 128 for 1CTA or 256 for 2CTA, which corresponds to
   // the condition mmaSizeM == 128 here
-  if (targetFeatures.supports2xFp8Tcgen05MMA() &&
+  bool hasFp6 = isa<Float6E2M3FNType, Float6E3M2FNType>(srcElementTy) ||
+                isa<Float6E2M3FNType, Float6E3M2FNType>(op.getBElementType());
+  if (!hasFp6 && targetFeatures.supports2xFp8Tcgen05MMA() &&
       aTensorTy.getElementTypeBitWidth() == 8 &&
       aTensorTy.getDimSize(1) >= 64 && mmaSizeM == 128) {
     dot.mmaSizeK = 64;
@@ -829,6 +838,8 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   bool hasFp4PaddedOperand = isFp4Padded(aTensorTy) || isFp4Padded(bTensorTy);
 
   if (!targetFeatures.supports4xFp4Tcgen05MMA() || hasFp4PaddedOperand ||
+      NVMMASharedEncodingAttr::isPackedFp6(aTensorTy.getEncoding()) ||
+      NVMMASharedEncodingAttr::isPackedFp6(bTensorTy.getEncoding()) ||
       // We need to disable MMA_K = 128 for NVFP4 on Rubin when MMA_N < 128,
       // which requires a special unpacked layout for scales B in TMEM
       // (currently undocumented). tensorMemoryScalesToLinearLayout and lowering
@@ -847,7 +858,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   SmallVector<Value> commitDescs = op.getCompletionDescs();
   bool useK96 =
-      targetFeatures.supportsK96Tcgen05MMA() && twoCTAs && opKindIsMXFP4 &&
+      targetFeatures.supportsK96Tcgen05MMA() && opKindIsMXFP4 &&
       !hasFp4PaddedOperand && blockK % 256 == 0 &&
       isa<SharedMemorySpaceAttr>(aTensorTy.getMemorySpace()) &&
       ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&
@@ -856,7 +867,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
       // Repeated MN tiles or subviews must not interleave unrelated words.
       ttng::getTMemSubSliceOffset(op.getAScale().getType(), 4, 1) == 4 &&
       ttng::getTMemSubSliceOffset(op.getBScale().getType(), 4, 1) ==
-          std::max(2u, mmaSizeN / 32);
+          std::max(twoCTAs ? 2u : 4u, mmaSizeN / 32);
   if (useK96) {
     // K96 tiles must come in pairs to leave a K64-aligned remainder.
     int numK96 = 2 * (blockK / 192);
@@ -986,11 +997,16 @@ private:
 
 struct TCGen5CommitOpConversion
     : public ConvertOpToLLVMPattern<ttng::TCGen5CommitOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+  TCGen5CommitOpConversion(LLVMTypeConverter &converter, PatternBenefit benefit,
+                           const ttng::TargetFeatures &targetFeatures)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        targetFeatures(targetFeatures) {}
 
   LogicalResult
   matchAndRewrite(ttng::TCGen5CommitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    if (op.getEarlyARelease() && !targetFeatures.supportsEarlyARelease())
+      return op.emitOpError("Early A release requires Rubin");
     Location loc = op.getLoc();
     TritonLLVMOpBuilder b(loc, rewriter);
 
@@ -1008,10 +1024,13 @@ struct TCGen5CommitOpConversion
     }
 
     createMMACommit(rewriter, op.getLoc(), smemObj.getBase(), pred, twoCTAs,
-                    op.getDescs());
+                    op.getDescs(), op.getEarlyARelease());
     rewriter.eraseOp(op);
     return success();
   }
+
+private:
+  ttng::TargetFeatures targetFeatures;
 };
 
 } // namespace
@@ -1026,7 +1045,8 @@ void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       const TargetInfo &targetInfo) {
   patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
       typeConverter, benefit, targetInfo.getTargetFeatures());
-  patterns.add<TCGen5CommitOpConversion>(typeConverter, benefit);
+  patterns.add<TCGen5CommitOpConversion>(typeConverter, benefit,
+                                         targetInfo.getTargetFeatures());
 }
 
 } // namespace NVIDIA

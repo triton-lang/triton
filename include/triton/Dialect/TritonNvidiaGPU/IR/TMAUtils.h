@@ -7,7 +7,7 @@ namespace mlir::triton::nvidia_gpu {
 
 inline bool isFp4Padded(Attribute encoding) {
   auto mmaEnc = dyn_cast<gpu::NVMMASharedEncodingAttr>(encoding);
-  return mmaEnc && mmaEnc.getFp4Padded();
+  return mmaEnc && mmaEnc.isPaddedFp4();
 }
 
 inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
@@ -17,7 +17,7 @@ inline SmallVector<int64_t> getTMABlockShape(Attribute encoding,
   auto mmaEnc = cast<gpu::NVMMASharedEncodingAttr>(encoding);
   return gpu::getTMABlockShape(
       shapePerCTA, mmaEnc.getElementBitWidth(), mmaEnc.getSwizzlingByteWidth(),
-      mmaEnc.getFp4Padded(), mmaEnc.getTransposed(), packedSize, mode);
+      mmaEnc.isPaddedFp4(), mmaEnc.getTransposed(), packedSize, mode);
 }
 
 inline SmallVector<int64_t>
@@ -33,6 +33,9 @@ getTMABlockShape(TensorDescInterface ty, bool packedSize, gpu::TMAMode mode) {
       gpu::getShapePerCTA(ty.getSharedLayout(), ty.getShape()), packedSize,
       mode);
 }
+
+// CTA-rank bits that the origin of a TMA shared-memory subview may change.
+uint32_t getTMASubviewCTAMask(gpu::MemDescType type);
 
 // Maps message starts, before the descriptor's affine subview translation.
 struct TMAMessageLayouts {

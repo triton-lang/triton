@@ -1193,11 +1193,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // CHECK-LABEL:   tt.func public @test_atomic_rmw(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-// CHECK:           %[[VAL_2:.*]] = arith.constant true
 // CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f16>, i32
 // CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<f16>
-// CHECK:           %[[VAL_6:.*]] = tt.atomic_rmw fadd, acq_rel, gpu, %[[VAL_1]], %[[VAL_5]], %[[VAL_2]] : (!tt.ptr<f16>, f16, i1) -> f16
+// CHECK:           %[[VAL_6:.*]] = tt.atomic_rmw fadd, acq_rel, gpu, %[[VAL_1]], %[[VAL_5]] : (!tt.ptr<f16>, f16) -> f16
 // CHECK:           tt.return
 // CHECK:         }
 
@@ -1235,11 +1234,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 
 // CHECK-LABEL:   tt.func public @test_atomic_rmw_bf16(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %[[VAL_1:.*]]: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
-// CHECK:           %[[VAL_2:.*]] = arith.constant true
 // CHECK:           %[[VAL_3:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<bf16>, i32
 // CHECK:           %[[VAL_5:.*]] = tt.load %[[VAL_4]] : !tt.ptr<bf16>
-// CHECK:           %[[VAL_6:.*]] = tt.atomic_rmw fadd, acq_rel, gpu, %[[VAL_1]], %[[VAL_5]], %[[VAL_2]] : (!tt.ptr<bf16>, bf16, i1) -> bf16
+// CHECK:           %[[VAL_6:.*]] = tt.atomic_rmw fadd, acq_rel, gpu, %[[VAL_1]], %[[VAL_5]] : (!tt.ptr<bf16>, bf16) -> bf16
 // CHECK:           tt.return
 // CHECK:         }
 
@@ -1612,3 +1610,82 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_6:.*]] = tt.load %[[VAL_5]] : tensor<1024x32x!tt.ptr<f32>>
 // CHECK:           tt.return %[[VAL_6]] : tensor<1024x32xf32>
 // CHECK:         }
+
+// -----
+// A hint on a pointer argument (offset 0) stays on the base pointer.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @annotate_pointer_arg(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: tensor<1024xf32>) {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.annotate %arg0 {tt.divisibility = dense<16> : tensor<1xi32>} : !tt.ptr<f32>
+    %1 = tt.get_program_id x : i32
+    %2 = arith.muli %1, %c1024_i32 : i32
+    %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %4 = tt.addptr %0, %2 : !tt.ptr<f32>, i32
+    %5 = tt.splat %4 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %6 = tt.addptr %5, %3 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    tt.store %6, %arg1 : tensor<1024x!tt.ptr<f32>>
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func @annotate_pointer_arg(
+// CHECK-SAME:                                  %[[ARG0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %[[ARG1:.*]]: tensor<1024xf32>) {
+// CHECK:           %[[BASE:.*]] = tt.annotate %[[ARG0]] {tt.divisibility = dense<16> : tensor<1xi32>} : !tt.ptr<f32>
+// CHECK:           %[[OFFSET:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32>
+// CHECK:           %[[SPLAT:.*]] = tt.splat %[[BASE]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[SPLAT]], %[[OFFSET]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           tt.store %[[PTR]], %[[ARG1]] : tensor<1024x!tt.ptr<f32>>
+
+// -----
+
+// A hint on a pointer with a non-zero offset does not apply to the base and is
+// dropped.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @annotate_pointer_tensor(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: tensor<1024xf32>) {
+    %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %2 = tt.addptr %1, %0 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %3 = tt.annotate %2 {tt.contiguity = dense<1024> : tensor<1xi32>} : tensor<1024x!tt.ptr<f32>>
+    tt.store %3, %arg1 : tensor<1024x!tt.ptr<f32>>
+    tt.return
+  }
+}
+
+// CHECK-LABEL:   tt.func @annotate_pointer_tensor(
+// CHECK-SAME:                                     %[[ARG0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %[[ARG1:.*]]: tensor<1024xf32>) {
+// CHECK-NOT:       tt.annotate
+// CHECK:           %[[SPLAT:.*]] = tt.splat %[[ARG0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[SPLAT]], %{{.*}} : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           tt.store %[[PTR]], %[[ARG1]] : tensor<1024x!tt.ptr<f32>>
+
+// -----
+
+// A hint on an integer stride argument stays on the stride, and the offsets
+// computed from it are accumulated into the fat-pointer offset.
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @annotate_stride_arg(%arg0: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %arg1: i32) -> tensor<1024xf32> {
+    %0 = tt.annotate %arg1 {tt.divisibility = dense<16> : tensor<1xi32>} : i32
+    %1 = tt.get_program_id x : i32
+    %2 = arith.muli %1, %0 : i32
+    %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %4 = tt.splat %0 : i32 -> tensor<1024xi32>
+    %5 = arith.muli %3, %4 : tensor<1024xi32>
+    %6 = tt.addptr %arg0, %2 : !tt.ptr<f32>, i32
+    %7 = tt.splat %6 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %8 = tt.addptr %7, %5 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+    %9 = tt.load %8 : tensor<1024x!tt.ptr<f32>>
+    tt.return %9 : tensor<1024xf32>
+  }
+}
+
+// CHECK-LABEL:   tt.func @annotate_stride_arg(
+// CHECK-SAME:                                 %[[ARG0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}, %[[ARG1:.*]]: i32) -> tensor<1024xf32> {
+// CHECK:           %[[STRIDE:.*]] = tt.annotate %[[ARG1]] {tt.divisibility = dense<16> : tensor<1xi32>} : i32
+// CHECK:           %[[ROW:.*]] = arith.muli %{{.*}}, %[[STRIDE]] : i32
+// CHECK:           %[[ROW_SPLAT:.*]] = tt.splat %[[ROW]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[STRIDE_SPLAT:.*]] = tt.splat %[[STRIDE]] : i32 -> tensor<1024xi32>
+// CHECK:           %[[COL:.*]] = arith.muli %{{.*}}, %[[STRIDE_SPLAT]] : tensor<1024xi32>
+// CHECK:           %[[OFFSET:.*]] = arith.addi %[[COL]], %[[ROW_SPLAT]] : tensor<1024xi32>
+// CHECK:           %[[BASE:.*]] = tt.splat %[[ARG0]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[PTR:.*]] = tt.addptr %[[BASE]], %[[OFFSET]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+// CHECK:           tt.load %[[PTR]] : tensor<1024x!tt.ptr<f32>>

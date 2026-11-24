@@ -230,20 +230,25 @@ Rewrite:
 
 - ``x / y`` becomes ``embed(x) * inv(embed(y))``, then ``unembed``
 
-Here ``inv`` is:
-
-- the true modular inverse for odd payloads
-- a parity-preserving involution for even payloads
+For a nonzero denominator payload ``d = 2^k * t`` with ``t`` odd, ``inv(d)``
+is ``2^k`` times the modular inverse of ``t`` modulo ``2^w``. For a zero
+payload, ``inv(0) = 0``.
 
 Exact preserved properties:
 
 - ``x / 1 = x``
 - ``1 / (1 / x) = x``
+- ``inv(a * b) = inv(a) * inv(b)`` for all payloads
 - for odd payloads, the usual modular inverse laws hold
+- ``(u * x) / (u * y) = x / y`` whenever ``embed(u)`` is odd, for any ``y``
+
+Subtracting the row maximum in softmax multiplies each weight by the same
+exponential factor. Its payload is odd, so it cancels in the division even
+when the sum of the weights has an even payload.
 
 Important caveats:
 
-- ``x / x = 1`` is not guaranteed for all payloads.
+- For ``embed(x) = 2^k * t`` with ``t`` odd, ``embed(x / x) = 2^(2k)`` modulo ``2^w``.
 - Division by zero does not produce IEEE infinities or traps.
 - This rewrite is chosen for algebraic checking, not numeric realism.
 
@@ -289,6 +294,66 @@ Important caveat:
 
 - There is no special fused-rounding behavior.
 
+Opt-in Expression Boundaries
+===========================
+
+Use ``tl.fpsan.barrier(x)`` (or ``gl.fpsan.barrier(x)`` in Gluon) to make an
+intermediate result significant to a FpSan comparison. The input must be a
+floating-point scalar or tensor; its type, shape, and layout are preserved.
+
+With FpSan enabled, the barrier applies a deterministic, non-homomorphic
+transformation to each element's payload. For example:
+
+.. code-block:: python
+
+   left = tl.fpsan.barrier(a * b) * c
+   right = a * tl.fpsan.barrier(b * c)
+
+   unfused = tl.fpsan.barrier(a * b) + c
+   fused = tl.fma(a, b, c)
+
+These pairs can have different FpSan results. Without the barriers, each pair
+has identical payload algebra. Put the barrier around the intermediate whose
+boundary matters: wrapping only the final result does not distinguish
+expressions that already have identical payloads.
+
+Every barrier uses the same transformation, independent of source location.
+Equivalent annotated computations therefore still agree across kernels. Each
+call applies the transformation again; nested barriers are not redundant.
+As with other FpSan checks, different computations can collide for particular
+inputs, so a matching result is not proof of equivalence.
+
+When FpSan is disabled, this function returns its input unchanged and emits no
+operation. It does not enforce rounding, prevent fusion or reassociation in
+normal compilation, or synchronize execution.
+
+Local Homomorphic Casts
+======================
+
+``tl.fpsan.homomorphic_cast(x, dtype)`` (also available in Gluon) explicitly
+retains the low payload bits when converting to a narrower floating-point type.
+It preserves addition and multiplication across the conversion. Other casts
+retain their existing FpSan semantics.
+
+Use a barrier to mark how far such a cast may move without changing the FpSan
+signature:
+
+.. code-block:: python
+
+   result = tl.fpsan.homomorphic_cast(tl.fpsan.barrier(a * b), tl.float16)
+
+The barrier mixes high payload bits into low bits before they are discarded.
+Moving the downcast ahead of the barrier therefore generally changes the result,
+including when the narrowed value is cast back to the original width before
+the barrier. This is a signature distinction, not a compiler optimization
+restriction; collisions remain possible.
+
+The source and destination must be floating-point types, and the destination
+must be the same width or narrower. Same-width conversions preserve the payload.
+Widening is rejected because signed extension is not a ring homomorphism.
+Without FpSan, this function performs an ordinary floating-point cast, with the
+optional ``fp_downcast_rounding`` argument interpreted as for ``tl.cast``.
+
 ----------------
 Unary Math Ops
 ----------------
@@ -302,13 +367,59 @@ Supported operation:
 
 Rewrite:
 
-- modular exponentiation by a fixed odd generator in payload space
+- For a ``w``-bit input payload ``u``, the output payload is ``3**u mod 2**w``.
+  Its period is ``2**(w-2)``, the maximum for an odd base at these widths.
+  Exponentiation commutes with truncation to a narrower payload ring.
+  For example, a homomorphic cast of FP32 ``exp2`` to FP8 can produce
+  64 distinct payloads.
 
 Exact preserved properties:
 
 - ``exp2(x + y) = exp2(x) * exp2(y)``
 - ``exp2(0) = 1``
 - ``exp2(-x) = 1.0 / exp2(x)``
+
+Compact exponentials for FP8 probabilities
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Online softmax centers scores around a running maximum. Changing the shard
+count changes that maximum. A later multiplication by
+``alpha = exp2(old_max - new_max)`` compensates for the change, provided the
+weights survive the intervening FP8 store and load.
+
+Use ``gl.fpsan.compact_exp2`` for the FP32 probabilities and each correction
+factor. For a separate merge kernel written in Triton, use
+``tl.fpsan.compact_exp2(local_max - global_max)`` for the merge weights.
+Each explicit call uses base ``1 + 2**25`` under FPSan. Its powers have the form
+``1 + ((u % 128) << 25)`` modulo ``2**32``. Gluon can encode every such
+payload and masked zero in one FP8 element.
+
+.. code-block:: python
+
+   alpha = gl.fpsan.compact_exp2(old_max - maximum)
+   weights = gl.fpsan.compact_exp2(scores - maximum[:, None])
+   p = gl.fpsan.probability_cast(weights, gl.float8e4nv, expect_zero=mask)
+   p_tile.store(p)
+   tcgen05_mma(p_tile, v_tile, acc, a_type="fpsan_probability", mbarriers=[done])
+
+Use ``b_type="fpsan_probability"`` when P is the right operand. For a
+register tensor use ``gl.fpsan.probability_cast(p, gl.float32)`` to expand
+it. Each consumer decodes the byte it reads. Copies preserve the code.
+The decoder multiplies the recovered payload by an odd, format-specific
+constant, making the FP8 conversion observable while commuting with alpha.
+Packing other nonzero inputs yields a disjoint set of lossy codes.
+The same operand tags work on ``tcgen05_mma_scaled``. FPSan expands the
+probability before multiplying it by the block scale in the FP32 payload
+ring. The shard identity assumes each token retains the same scale and
+that the value at the cast is a compact power or zero. Computing a scale
+from shard-dependent probabilities can change the quantization itself.
+Keep arithmetic on the expanded values. Native execution uses the ordinary
+exponential, cast and MMA.
+
+The compact exponential has period 128. For an exponent difference divisible
+by 128, alpha equals one. For a difference divisible by 64, alpha equals
+its inverse. Accumulation can further cancel differences. Exercise multiple
+maximum differences when checking rescaling.
 
 ``exp``
 =======

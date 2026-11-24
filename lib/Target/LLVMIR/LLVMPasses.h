@@ -6,6 +6,11 @@ namespace llvm {
 
 class TargetIRAnalysis;
 
+struct MergeNVPTXAssertBlocksPass
+    : OptionalPassInfoMixin<MergeNVPTXAssertBlocksPass> {
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+};
+
 // Use generic optimization defaults with selectively validated NVIDIA hooks.
 TargetIRAnalysis createTritonNVPTXTargetIRAnalysis();
 
