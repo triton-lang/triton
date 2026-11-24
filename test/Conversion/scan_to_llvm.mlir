@@ -1,6 +1,6 @@
 // RUN: split-file %s %t
-// RUN: triton-opt %t/tuple.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TUPLE
-// RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
+// RUN: triton-opt %t/tuple.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TUPLE --implicit-check-not=nvvm.barrier
+// RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=TUPLE --implicit-check-not=rocdl.s.barrier
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TRANSPOSE
 // RUN: triton-opt %t/cross-cta.mlir --allocate-shared-memory --triton-nvidia-gpu-membar=compute-capability=90 | FileCheck %s --check-prefix=SCRATCH-REUSE
@@ -8,8 +8,8 @@
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
-// RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
-// RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
+// RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS --implicit-check-not="{{shfl|nvvm.barrier}}"
+// RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS --implicit-check-not="{{ds.bpermute|ds.swizzle|permlane|rocdl.s.barrier}}"
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
 
 // RUN: triton-opt %t/tiny-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TINY-TOTALS
@@ -53,30 +53,20 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // require separate, aligned shared-memory allocations.
 #tuple = #ttg.linear<{register = [[8, 0], [16, 0], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], warp = [[4, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
-// The i32 operand uses one scratch tile and the i64 operand uses two.
-// Each operand conversion synchronizes before loads and before scratch reuse.
+// Both operands share the first barrier. Only i64 reuses scratch for a second tile.
 // TUPLE: ttg.shared = 2048 : i32
 // TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
 // TUPLE: llvm.getelementptr %arg2[1024]
-// TUPLE: nvvm.barrier
+// TUPLE: llvm.store {{.*}}i64>, !llvm.ptr<3>
+// TUPLE: llvm.store {{.*}}i32>, !llvm.ptr<3>
+// TUPLE: [[BARRIER:nvvm.barrier|rocdl.s.barrier]]
+// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// TUPLE: nvvm.barrier
+// TUPLE: [[BARRIER]]
+// TUPLE: llvm.store {{.*}}i64>, !llvm.ptr<3>
+// TUPLE: [[BARRIER]]
 // TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// TUPLE-COUNT-2: nvvm.barrier
-// TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// TUPLE-NOT: nvvm.barrier
 // TUPLE: llvm.return
-// AMD-TUPLE: ttg.shared = 2048 : i32
-// AMD-TUPLE-LABEL: llvm.func {{.*}}@test_scan_tuple_reverse
-// AMD-TUPLE: llvm.getelementptr %arg2[1024]
-// AMD-TUPLE: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i32>
-// AMD-TUPLE: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// AMD-TUPLE-COUNT-2: rocdl.s.barrier
-// AMD-TUPLE: llvm.load {{.*}} : !llvm.ptr<3> -> vector<{{.*}}i64>
-// AMD-TUPLE-NOT: rocdl.s.barrier
-// AMD-TUPLE: llvm.return
 tt.func private @test_scan_tuple_reverse(%a: tensor<128x8xi32, #tuple>, %b: tensor<128x8xi64, #tuple>) -> (tensor<128x8xi32, #tuple>, tensor<128x8xi64, #tuple>) {
   %a_out, %b_out = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = true}> ({
   ^bb0(%a1: i32, %b1: i64, %a2: i32, %b2: i64):
@@ -310,29 +300,27 @@ tt.func private @test_scan_shuffle_down_gapped(%arg: tensor<4x8xi32, #gapped>) -
 //--- interwarp-groups.mlir
 
 #columns = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
-// Both operands share one store-to-load barrier and retain their complete table.
-// INTERWARP-GROUPS: ttg.shared = 49152 : i32
+!values = tensor<64x64xf32, #columns>
+!keys = tensor<64x64xi64, #columns>
+!counts = tensor<64x64xi32, #columns>
+// Each lane scans two columns of 64 totals. All three fields share a 128-bit vector.
+// INTERWARP-GROUPS: ttg.shared = 65536 : i32
 // INTERWARP-GROUPS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
-// INTERWARP-GROUPS-NOT: shfl
-// INTERWARP-GROUPS: nvvm.barrier
-// INTERWARP-GROUPS-NOT: {{shfl|nvvm.barrier}}
+// INTERWARP-GROUPS: {{st.shared::cta.v4.b32|llvm.store .*vector<4xi32>}}
+// INTERWARP-GROUPS: {{nvvm.barrier|rocdl.s.barrier}}
+// INTERWARP-GROUPS-COUNT-128: llvm.load {{.*}} !llvm.ptr<3> -> vector<4xi32>
 // INTERWARP-GROUPS: llvm.return
-// AMD-INTERWARP-GROUPS: ttg.shared = 49152 : i32
-// AMD-INTERWARP-GROUPS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
-// AMD-INTERWARP-GROUPS-NOT: {{ds.bpermute|ds.swizzle|permlane}}
-// AMD-INTERWARP-GROUPS: rocdl.s.barrier
-// AMD-INTERWARP-GROUPS-NOT: {{ds.bpermute|ds.swizzle|permlane|rocdl.s.barrier}}
-// AMD-INTERWARP-GROUPS: llvm.return
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
-  tt.func private @test_scan_interwarp_groups(%values: tensor<128x32xf32, #columns>, %keys: tensor<128x32xi64, #columns>) -> (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>) {
-    %result:2 = "tt.scan"(%values, %keys) <{axis = 0 : i32, reverse = false}> ({
-    ^bb0(%a: f32, %ka: i64, %b: f32, %kb: i64):
+  tt.func private @test_scan_interwarp_groups(%values: !values, %keys: !keys, %counts: !counts) -> (!values, !keys, !counts) {
+    %result:3 = "tt.scan"(%values, %keys, %counts) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%a: f32, %ka: i64, %na: i32, %b: f32, %kb: i64, %nb: i32):
       %same = arith.cmpi eq, %ka, %kb : i64
       %sum = arith.addf %a, %b : f32
       %value = arith.select %same, %sum, %b : f32
-      tt.scan.return %value, %kb : f32, i64
-    }) : (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>) -> (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>)
-    tt.return %result#0, %result#1 : tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>
+      %count = arith.addi %na, %nb : i32
+      tt.scan.return %value, %kb, %count : f32, i64, i32
+    }) : (!values, !keys, !counts) -> (!values, !keys, !counts)
+    tt.return %result#0, %result#1, %result#2 : !values, !keys, !counts
   }
 }
 
