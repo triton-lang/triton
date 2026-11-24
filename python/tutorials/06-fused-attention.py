@@ -171,8 +171,19 @@ def _maybe_make_tensor_desc(desc_or_ptr, shape, strides, block_shape):
         return tl.make_tensor_descriptor(desc_or_ptr, shape, strides, block_shape)
 
 
+NUM_SMS = triton.runtime.driver.active.utils.get_device_properties(DEVICE.index)["multiprocessor_count"]
+
+
+def _balance_causal(args):
+    # See the BALANCE branch of _attn_fwd. Decided here, once BLOCK_M is known, so that every other
+    # grid compiles to the same kernel as without it.
+    num_tiles = triton.cdiv(args["N_CTX"], args["BLOCK_M"]) * args["Z"] * args["H"]
+    return is_cuda() and args["STAGE"] == 3 and 0 < num_tiles - NUM_SMS < NUM_SMS
+
+
 @triton.autotune(configs=list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM", "FP8_OUTPUT", "warp_specialize"],
                  prune_configs_by={'early_config_prune': prune_invalid_configs})
+@triton.heuristics({"NUM_SMS": lambda args: NUM_SMS, "BALANCE": _balance_causal})
 @triton.jit
 def _attn_fwd(sm_scale, M,  #
               Z, H, desc_q, desc_k, desc_v, desc_o, N_CTX,  #
@@ -183,11 +194,26 @@ def _attn_fwd(sm_scale, M,  #
               STAGE: tl.constexpr,  #
               warp_specialize: tl.constexpr,  #
               IS_HOPPER: tl.constexpr,  #
+              NUM_SMS: tl.constexpr,  #
+              BALANCE: tl.constexpr,  #
               ):
     dtype = tl.float8e5 if FP8_OUTPUT else tl.float16
     tl.static_assert(BLOCK_N <= HEAD_DIM)
     start_m = tl.program_id(0)
     off_hz = tl.program_id(1)
+    if BALANCE:
+        # A causal q-block costs start_m + 1 KV blocks, and the grid launches the q-blocks of each head
+        # from light to heavy. With between NUM_SMS and 2 * NUM_SMS tiles, program NUM_SMS + i shares an
+        # SM with program i. Rank the tiles from heavy to light: programs [extra, NUM_SMS) run alone and
+        # take the heaviest ones, and each shared SM gets one heavier tile (program NUM_SMS + i) and one
+        # lighter tile (program i), so the shared SMs carry about the same work.
+        num_m = tl.num_programs(0)
+        num_tiles = num_m * Z * H
+        extra = num_tiles - NUM_SMS
+        pid = start_m + num_m * off_hz
+        rank = tl.where(pid < extra, num_tiles - 1 - pid, pid - extra)
+        start_m = num_m - 1 - rank // (Z * H)
+        off_hz = rank % (Z * H)
     off_z = off_hz // H
     off_h = off_hz % H
 
