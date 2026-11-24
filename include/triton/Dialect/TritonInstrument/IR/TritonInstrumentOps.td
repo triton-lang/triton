@@ -93,6 +93,26 @@ def TTI_ExperimentalClusterCTAIdOp
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def TTI_ExperimentalGatherScatterCTAMasksOp
+    : TTI_Op<"experimental_gather_scatter_cta_masks", [Pure]> {
+  let summary = "Compute per-thread CTA masks for a shared-memory gather or scatter";
+  let description = [{
+    For each element of `indices`, replace its coordinate along `axis` with
+    the index value. The shared layout in `memdesc` gives the target CTA
+    for those coordinates. Skip elements where the optional `mask` is false.
+
+    The result is an i32 tensor indexed by [warp, lane] in the issuing
+    partition. Bit k is set if any active element of that thread targets
+    CTA k, before applying the descriptor's affine CTA offset.
+  }];
+  let arguments = (ins TypeAttrOf<TTG_MemDescType>:$memdesc, TT_IntTensor:$indices,
+                       Optional<TT_BoolTensor>:$mask, I32Attr:$axis);
+  let results = (outs I32Tensor:$result);
+  let assemblyFormat = [{
+    $indices (`,` $mask^)? attr-dict `:` type($indices) (`,` type($mask)^)? `->` type($result)
+  }];
+}
+
 def TTI_ExperimentalLocalGatherOp
     : TTI_Op<"experimental_local_gather"> {
   let summary = "Gather elements from shared memory with logical base offsets";
