@@ -61,22 +61,22 @@ warp_size = gl.constexpr(64)
 
 @gluon.jit
 def elementwise_kernel(  #
-        a_ptr, b_ptr, c_ptr, xnumel, ynumel,  #
-        xstride_a, ystride_a, xstride_b, ystride_b, xstride_c, ystride_c,  #
-        XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
+        a_ptr, b_ptr, c_ptr, numel_x, numel_y,  #
+        a_stride_x, a_stride_y, b_stride_x, b_stride_y, c_stride_x, c_stride_y,  #
+        BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, layout: gl.constexpr,  #
 ):
     pid = gl.program_id(0)
-    xoffs = pid * XBLOCK + gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
-    a_ptrs = a_ptr + xstride_a * xoffs[:, None]
-    b_ptrs = b_ptr + xstride_b * xoffs[:, None]
-    c_ptrs = c_ptr + xstride_c * xoffs[:, None]
+    offs_x = pid * BLOCK_X + gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
+    a_ptrs = a_ptr + a_stride_x * offs_x[:, None]
+    b_ptrs = b_ptr + b_stride_x * offs_x[:, None]
+    c_ptrs = c_ptr + c_stride_x * offs_x[:, None]
 
-    for yoff in range(0, ynumel, YBLOCK):
-        yoffs = yoff + gl.arange(0, YBLOCK, gl.SliceLayout(0, layout))
-        mask = (xoffs < xnumel)[:, None] & (yoffs < ynumel)[None, :]
-        a_val = gl.load(a_ptrs + ystride_a * yoffs[None, :], mask=mask)
-        b_val = gl.load(b_ptrs + ystride_b * yoffs[None, :], mask=mask)
-        gl.store(c_ptrs + ystride_c * yoffs[None, :], a_val + b_val, mask=mask)
+    for off_y in range(0, numel_y, BLOCK_Y):
+        offs_y = off_y + gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
+        mask = (offs_x < numel_x)[:, None] & (offs_y < numel_y)[None, :]
+        a_val = gl.load(a_ptrs + a_stride_y * offs_y[None, :], mask=mask)
+        b_val = gl.load(b_ptrs + b_stride_y * offs_y[None, :], mask=mask)
+        gl.store(c_ptrs + c_stride_y * offs_y[None, :], a_val + b_val, mask=mask)
 
 
 # %%
@@ -85,8 +85,8 @@ def elementwise_kernel(  #
 # bytes of all elements that the program owns.
 #
 # The hardware only checks that an offset is below `num_records`. An offset can
-# be wrong for the kernel and still be in range. For example, when `ynumel` is
-# not a multiple of `YBLOCK`, the last loop iteration has lanes whose offsets
+# be wrong for the kernel and still be in range. For example, when `numel_y` is
+# not a multiple of `BLOCK_Y`, the last loop iteration has lanes whose offsets
 # point into the data of the next row. So we still need to mask for certain
 # dimensions. The compiler applies the mask without branches. It replaces the
 # offsets of masked-off lanes with an out-of-bounds offset, and the hardware
@@ -97,60 +97,60 @@ def elementwise_kernel(  #
 
 
 @gluon.jit
-def make_buffer_descriptor(ptr, xoff, xnumel, xstride, XBLOCK: gl.constexpr):
-    nrows = gl.minimum(xnumel - xoff, XBLOCK)
-    nbytes = nrows * xstride * ptr.dtype.element_ty.primitive_bitwidth // 8
-    return cdna4.buffer.make_buffer_descriptor(ptr + xoff * xstride, nbytes)
+def make_buffer_descriptor(ptr, off_x, numel_x, stride_x, BLOCK_X: gl.constexpr):
+    nrows = gl.minimum(numel_x - off_x, BLOCK_X)
+    nbytes = nrows * stride_x * ptr.dtype.element_ty.primitive_bitwidth // 8
+    return cdna4.buffer.make_buffer_descriptor(ptr + off_x * stride_x, nbytes)
 
 
 @gluon.jit
 def elementwise_w_buffer_kernel(  #
-        a_ptr, b_ptr, c_ptr, xnumel, ynumel,  #
-        xstride_a, ystride_a, xstride_b, ystride_b, xstride_c, ystride_c,  #
-        XBLOCK: gl.constexpr, YBLOCK: gl.constexpr, layout: gl.constexpr,  #
+        a_ptr, b_ptr, c_ptr, numel_x, numel_y,  #
+        a_stride_x, a_stride_y, b_stride_x, b_stride_y, c_stride_x, c_stride_y,  #
+        BLOCK_X: gl.constexpr, BLOCK_Y: gl.constexpr, layout: gl.constexpr,  #
 ):
     pid = gl.program_id(0)
-    xoff = pid * XBLOCK
-    a_desc = make_buffer_descriptor(a_ptr, xoff, xnumel, xstride_a, XBLOCK)
-    b_desc = make_buffer_descriptor(b_ptr, xoff, xnumel, xstride_b, XBLOCK)
-    c_desc = make_buffer_descriptor(c_ptr, xoff, xnumel, xstride_c, XBLOCK)
+    off_x = pid * BLOCK_X
+    a_desc = make_buffer_descriptor(a_ptr, off_x, numel_x, a_stride_x, BLOCK_X)
+    b_desc = make_buffer_descriptor(b_ptr, off_x, numel_x, b_stride_x, BLOCK_X)
+    c_desc = make_buffer_descriptor(c_ptr, off_x, numel_x, c_stride_x, BLOCK_X)
 
-    xidx = gl.arange(0, XBLOCK, gl.SliceLayout(1, layout))
-    yidx = gl.arange(0, YBLOCK, gl.SliceLayout(0, layout))
-    a_offs = xstride_a * xidx[:, None] + ystride_a * yidx[None, :]
-    b_offs = xstride_b * xidx[:, None] + ystride_b * yidx[None, :]
-    c_offs = xstride_c * xidx[:, None] + ystride_c * yidx[None, :]
+    idx_x = gl.arange(0, BLOCK_X, gl.SliceLayout(1, layout))
+    idx_y = gl.arange(0, BLOCK_Y, gl.SliceLayout(0, layout))
+    a_offs = a_stride_x * idx_x[:, None] + a_stride_y * idx_y[None, :]
+    b_offs = b_stride_x * idx_x[:, None] + b_stride_y * idx_y[None, :]
+    c_offs = c_stride_x * idx_x[:, None] + c_stride_y * idx_y[None, :]
 
-    for yoff in range(0, ynumel, YBLOCK):
-        mask = (yoff + yidx < ynumel)[None, :]
-        a_val = cdna4.buffer.load(a_desc, a_offs, mask, soffset=yoff * ystride_a)
-        b_val = cdna4.buffer.load(b_desc, b_offs, mask, soffset=yoff * ystride_b)
-        cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=yoff * ystride_c)
+    for off_y in range(0, numel_y, BLOCK_Y):
+        mask = (off_y + idx_y < numel_y)[None, :]
+        a_val = cdna4.buffer.load(a_desc, a_offs, mask, soffset=off_y * a_stride_y)
+        b_val = cdna4.buffer.load(b_desc, b_offs, mask, soffset=off_y * b_stride_y)
+        cdna4.buffer.store(a_val + b_val, c_desc, c_offs, mask, soffset=off_y * c_stride_y)
 
 
-def elementwise(A, B, C, kernel, XBLOCK=32, YBLOCK=256):
+def elementwise(A, B, C, kernel, BLOCK_X=32, BLOCK_Y=256):
     assert A.shape == B.shape == C.shape
-    xnumel, ynumel = A.shape
+    numel_x, numel_y = A.shape
 
     # In this layout, each lane accesses 4 consecutive fp32 values, which is one
     # 128-bit access.
     layout = gl.BlockedLayout([1, 4], [1, warp_size], [4, 1], [1, 0])
-    grid = (triton.cdiv(xnumel, XBLOCK), )
+    grid = (triton.cdiv(numel_x, BLOCK_X), )
     return kernel[grid](
-        A, B, C, xnumel, ynumel,  #
+        A, B, C, numel_x, numel_y,  #
         *A.stride(), *B.stride(), *C.stride(),  #
-        XBLOCK, YBLOCK, layout)
+        BLOCK_X, BLOCK_Y, layout)
 
 
-@pytest.mark.parametrize("xnumel, ynumel", [(1000, 2000), (4000, 120)])
-@pytest.mark.parametrize("XBLOCK, YBLOCK", [(32, 256), (64, 128)])
+@pytest.mark.parametrize("numel_x, numel_y", [(1000, 2000), (4000, 120)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 256), (64, 128)])
 @pytest.mark.parametrize("kernel", [elementwise_kernel, elementwise_w_buffer_kernel])
 @pytest.mark.skipif(not is_cdna4(), reason="Requires CDNA4")
-def test_elementwise(xnumel, ynumel, XBLOCK, YBLOCK, kernel):
-    a = torch.randn(xnumel, ynumel, device="cuda")
-    b = torch.randn(xnumel, ynumel, device="cuda")
+def test_elementwise(numel_x, numel_y, BLOCK_X, BLOCK_Y, kernel):
+    a = torch.randn(numel_x, numel_y, device="cuda")
+    b = torch.randn(numel_x, numel_y, device="cuda")
     c = torch.empty_like(a)
-    elementwise(a, b, c, kernel, XBLOCK, YBLOCK)
+    elementwise(a, b, c, kernel, BLOCK_X, BLOCK_Y)
     torch.testing.assert_close(a + b, c, atol=0, rtol=0)
 
 
@@ -222,9 +222,9 @@ def get_throughput(ms, C):
 if __name__ == "__main__":
     print("Benchmarking elementwise add")
     print("============================")
-    xnumel, ynumel = 16 * 1024, 16 * 1024
-    A = torch.randn(xnumel, ynumel, device="cuda")
-    B = torch.randn(xnumel, ynumel, device="cuda")
+    numel_x, numel_y = 16 * 1024, 16 * 1024
+    A = torch.randn(numel_x, numel_y, device="cuda")
+    B = torch.randn(numel_x, numel_y, device="cuda")
     C = torch.empty_like(A)
 
     for kernel in [elementwise_kernel, elementwise_w_buffer_kernel]:
