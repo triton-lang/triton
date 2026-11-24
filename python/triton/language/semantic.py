@@ -1955,6 +1955,15 @@ class TritonSemantic(Generic[TensorTy]):
             return input
         return self.make_tensor(self.builder.create_fpsan_barrier(input.handle), input.type)
 
+    def fpsan_compact_exp2(self, input: TensorTy) -> TensorTy:
+        if not input.dtype.is_fp32():
+            raise ValueError(f"fpsan.compact_exp2 requires an FP32 input, got {input.dtype}")
+        if is_enabled(self.builder.options, "fpsan"):
+            handle = self.builder.create_fpsan_compact_exp2(input.handle)
+        else:
+            handle = self.builder.create_exp2(input.handle)
+        return self.make_tensor(handle, input.type)
+
     def fpsan_homomorphic_cast(self, input: TensorTy, dst_ty: tl.dtype,
                                fp_downcast_rounding: Optional[str] = None) -> TensorTy:
         dst_ty = dst_ty.scalar

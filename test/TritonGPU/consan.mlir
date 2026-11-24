@@ -1,6 +1,94 @@
 // RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --implicit-check-not=cluster_waiting --implicit-check-not=always_use_warp_shuffle
 // RUN: env TRITON_CONSAN_INIT_ALLOCATIONS=0 triton-opt %s -split-input-file -allow-unregistered-dialect -tritoninstrument-prepare-consan-captures="target=nvidia" -tritoninstrument-concurrency-sanitizer | FileCheck %s --check-prefix=NO-INIT
 
+#poll_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#poll_smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:107"} {
+  // A nonblocking query validates initialization but does not mark its caller
+  // as waiting. Only its successful result can publish the barrier's writes.
+  // CHECK-LABEL: @poll_completion_visibility
+  // CHECK-NOT: tt.call @__triton_consan_set_waiting
+  // CHECK-NOT: tt.call @__triton_consan_check_all_active_waiting
+  // CHECK: tt.call @__triton_consan_verify_barrier_initialized
+  // CHECK: %[[DONE:.*]], %{{.*}} = ttng.barrier_test_wait_report
+  // CHECK: %[[ACQUIRE:.*]] = arith.andi %{{.*}}, %[[DONE]] : i1
+  // CHECK: tti.experimental_lock_acquire %{{.*}}, %[[ACQUIRE]]
+  // CHECK-NOT: tt.call @__triton_consan_set_waiting
+  // CHECK: tt.call @__triton_consan_clear_waiting{{.*}}({{.*}}%[[ACQUIRE]]
+  // CHECK: ttng.inval_barrier
+  // NO-INIT-LABEL: @poll_completion_visibility
+  // NO-INIT: ttng.barrier_test_wait_report
+  tt.func @poll_completion_visibility(%pred: i1, %out: !tt.ptr<i1>) {
+    %zero = arith.constant 0 : i32
+    %bar = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    %done, %report = ttng.barrier_test_wait_report %bar, %zero, %pred : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable> -> (i1, i1)
+    tt.store %out, %done : !tt.ptr<i1>
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
+#retry_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#retry_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 16, rank = 1}>
+#retry_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#retry_smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:107"} {
+  // A retry advances primary parity while conditional parity stays unchanged.
+  // Keep separate tracking columns and resolve the report after the real load.
+  // CHECK-LABEL: tt.func private @__triton_consan_verify_and_update_barrier_state
+  // CHECK: tti.experimental_lock_release {{.*}} {ctaLocal}
+  // CHECK: ttng.wait_barrier
+  // CHECK: %{{.*}}, %[[FAILED:.*]] = ttng.barrier_test_wait_report
+  // CHECK: tti.experimental_lock_acquire {{.*}} {ctaLocal}
+  // CHECK: %[[FAILED_TENSOR:.*]] = tt.splat %[[FAILED]]
+  // CHECK: arith.select %[[FAILED_TENSOR]],
+  // CHECK-LABEL: @conditional_retry_visibility
+  // CHECK: tti.experimental_buffer_descriptors [256, 256], [8, 8], shared_mem
+  // CHECK: ttg.warp_specialize
+  // CHECK: ttng.wait_barrier {{.*}}, %{{.*}}, conditional
+  // CHECK: tt.call @__triton_consan_transfer_visible_accesses
+  // CHECK: ttg.local_load
+  // CHECK: partition0
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+  // CHECK: ttng.wait_barrier {{.*}}, %{{.*}} :
+  // CHECK: ttng.async_tma_copy_global_to_local
+  // CHECK: tt.call @__triton_consan_verify_and_update_barrier_state
+  // NO-INIT-LABEL: @conditional_retry_visibility
+  // NO-INIT: ttng.wait_barrier {{.*}}, %{{.*}}, conditional
+  tt.func @conditional_retry_visibility(%invalid: !tt.tensordesc<128xf16, #retry_shared>, %valid: !tt.tensordesc<128xf16, #retry_shared>, %out: tensor<128x!tt.ptr<f16>, #retry_blocked>) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %mem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128xf16, #retry_shared, #retry_smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 256 : i32} : () -> !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>
+    ttg.warp_specialize(%invalid, %valid, %mem, %bar) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 264 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      ttng.wait_barrier %bar, %zero, %true, conditional : !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>
+      %result = ttg.local_load %mem : !ttg.memdesc<128xf16, #retry_shared, #retry_smem, mutable> -> tensor<128xf16, #retry_blocked>
+      tt.store %out, %result : tensor<128x!tt.ptr<f16>, #retry_blocked>
+      ttg.warp_yield
+    }
+    partition0(%bad: !tt.tensordesc<128xf16, #retry_shared>, %good: !tt.tensordesc<128xf16, #retry_shared>, %dst: !ttg.memdesc<128xf16, #retry_shared, #retry_smem, mutable>, %full: !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>) num_warps(1) {
+      %worker_zero = arith.constant 0 : i32
+      %worker_true = arith.constant true
+      ttng.barrier_expect %full, 256, %worker_true : !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>
+      ttng.async_tma_copy_global_to_local %bad[%worker_zero] %dst, %full, %worker_true reportValidity = per_16B_fp16 : !tt.tensordesc<128xf16, #retry_shared>, !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable> -> !ttg.memdesc<128xf16, #retry_shared, #retry_smem, mutable>
+      ttng.wait_barrier %full, %worker_zero : !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>
+      ttng.barrier_expect %full, 256, %worker_true : !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>
+      ttng.async_tma_copy_global_to_local %good[%worker_zero] %dst, %full, %worker_true reportValidity = per_16B_fp16 : !tt.tensordesc<128xf16, #retry_shared>, !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable> -> !ttg.memdesc<128xf16, #retry_shared, #retry_smem, mutable>
+      ttg.warp_return
+    } : (!tt.tensordesc<128xf16, #retry_shared>, !tt.tensordesc<128xf16, #retry_shared>, !ttg.memdesc<128xf16, #retry_shared, #retry_smem, mutable>, !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>) -> ()
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #retry_bar, #retry_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 #smem = #ttg.shared_memory

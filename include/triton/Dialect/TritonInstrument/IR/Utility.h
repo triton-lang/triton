@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <array>
@@ -227,11 +228,15 @@ struct AuxDataMap {
   // Packed descriptors for tracked mbarrier allocations. Barriers are shared
   // memory descriptors.
   RegionToValueMap barriers;
+  llvm::SmallPtrSet<Operation *, 8> conditionalWaits;
 
   // scratch, <Cbar x K x i64>
   // Packed barrier lifecycle state. Zero means invalid/uninitialized. Bit 0 is
   // phase, bits [1..20] are the initial arrival count, bits [21..40] are the
   // current arrival count, and bits [41..61] hold a signed tx-count.
+  // Bit 63 reserves slots while hardware reports are resolved. awaitReports
+  // tests this flag by comparing the entire packed i64 word with signed zero;
+  // a negative tx-count in bits [41..61] alone does not make the word negative.
   RegionToValueMap barrierStates;
 
   // scratch, <Cbuf x B x Cmask x iV>

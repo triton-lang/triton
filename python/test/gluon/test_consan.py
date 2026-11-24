@@ -263,6 +263,129 @@ def test_mbarrier_arrive_multicast_completion(device, monkeypatch):
     torch.testing.assert_close(output, torch.arange(2, device=device, dtype=torch.int32))
 
 
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires Hopper or newer")
+@pytest.mark.parametrize("case", ["complete", "incomplete", "disabled", "uninitialized", "disabled-uninitialized"])
+@pytest.mark.parametrize("num_warps", [1, 4])
+@pytest.mark.parametrize("warp_specialized", [False, True])
+def test_mbarrier_query_visibility(case, num_warps, warp_specialized, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_mbarrier_query_visibility, (case, num_warps, warp_specialized, device, False))
+        if case in ("incomplete", "disabled", "uninitialized"):
+            assert_expected_cuda_failure(result.exc)
+            expected = "before initialization" if case == "uninitialized" else "outstanding writes"
+            assert expected in result.driver_stderr_output
+        else:
+            assert result.exc is None, result.exc
+            assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.instrumentation_mode = "consan"
+
+    @gluon.jit
+    def worker(desc, out, CASE: ttgl.constexpr):
+        bar = mbarrier.allocate_mbarrier()
+        if CASE == "uninitialized":
+            rubin.mbarrier.test_wait_validity(bar, 0)
+        elif CASE == "disabled-uninitialized":
+            done, valid = rubin.mbarrier.test_wait_validity(bar, 0, pred=False)
+            ttgl.device_assert(~done & ~valid, "disabled query must be false")
+            mbarrier.init(bar, count=1)
+            mbarrier.invalidate(bar)
+        else:
+            # Leave one arrival pending so an incomplete poll cannot acquire
+            # the TMA write, even if the hardware transfer has already finished.
+            mbarrier.init(bar, count=2)
+            smem = ttgl.allocate_shared_memory(ttgl.float32, [128], desc.layout)
+            mbarrier.expect(bar, 512)
+            tma.async_load(desc, [0], bar, smem)
+            if CASE != "incomplete":
+                mbarrier.arrive(bar)
+            done, valid = rubin.mbarrier.test_wait_validity(bar, 0, pred=CASE != "disabled")
+            if CASE == "complete":
+                while not done:
+                    done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
+                ttgl.device_assert(valid, "ordinary TMA should not report invalid data")
+            else:
+                ttgl.device_assert(~done & ~valid,
+                                   "incomplete or disabled query must return done=false and valid=false")
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+            value = smem.load(layout)
+            ttgl.store(out + ttgl.arange(0, 128, layout), value)
+            mbarrier.invalidate(bar)
+
+    @gluon.jit
+    def idle():
+        pass
+
+    @gluon.jit
+    def kernel(desc, out, CASE: ttgl.constexpr, WS: ttgl.constexpr, WARPS: ttgl.constexpr):
+        if WS:
+            ttgl.warp_specialize([(idle, ()), (worker, (desc, out, CASE))], [WARPS])
+        else:
+            worker(desc, out, CASE)
+
+    src = torch.arange(128, device=device, dtype=torch.float32)
+    out = torch.empty_like(src)
+    shared = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=32, rank=1)
+    desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(src, [128], shared)
+    kernel[(1, )](desc, out, case, warp_specialized, num_warps, num_warps=4 if warp_specialized else num_warps,
+                  debug=True)
+    if case == "complete":
+        torch.testing.assert_close(out, src)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin validity reporting")
+@pytest.mark.parametrize("producer_warps", [1, 4])
+def test_mbarrier_conditional_retry_visibility(producer_warps, device, run_wrapper):
+    if run_wrapper:
+        result = run_in_process(test_mbarrier_conditional_retry_visibility, (producer_warps, device, False))
+        assert result.exc is None, result.exc
+        assert result.driver_stderr_output == ""
+        return
+    knobs.compilation.instrumentation_mode = "consan"
+
+    @gluon.jit
+    def producer(invalid, valid, smem, full):
+        for attempt in ttgl.static_range(2):
+            mbarrier.expect(full, 256)
+            if attempt == 0:
+                rubin.tma.async_load(invalid, [0], full, smem, report_validity="per_16B_fp16")
+            else:
+                rubin.tma.async_load(valid, [0], full, smem, report_validity="per_16B_fp16")
+            rubin.mbarrier.wait(full, attempt)
+            done, valid_data = rubin.mbarrier.test_wait_validity(full, attempt)
+            ttgl.device_assert(done & (valid_data == (attempt == 1)), "unexpected validity report")
+
+    @gluon.jit
+    def consumer(out, smem, full):
+        # Conditional parity 0 must acquire the retry's primary-parity-1 writes.
+        rubin.mbarrier.wait(full, 0, phase_type="conditional")
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+        ttgl.store(out + ttgl.arange(0, 128, layout), smem.load(layout))
+
+    @gluon.jit
+    def kernel(invalid, valid, out, WARPS: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.float16, [128], valid.layout)
+        full = mbarrier.allocate_mbarrier()
+        wide = mbarrier.allocate_mbarrier()
+        # An unrelated v0-layout counter must not be queried for a v1 report.
+        mbarrier.init(wide, count=512)
+        mbarrier.arrive(wide, count=512)
+        mbarrier.wait(wide, 0)
+        mbarrier.invalidate(wide)
+        mbarrier.init(full, count=1)
+        ttgl.warp_specialize([(consumer, (out, smem, full)), (producer, (invalid, valid, smem, full))], [WARPS])
+        mbarrier.invalidate(full)
+
+    shared = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=16, rank=1)
+    invalid = -torch.zeros(128, dtype=torch.float16, device=device)
+    valid = torch.ones_like(invalid)
+    out = torch.empty_like(valid)
+    invalid_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(invalid, [128], shared)
+    valid_desc = gluon.nvidia.hopper.TensorDescriptor.from_tensor(valid, [128], shared)
+    kernel[(1, )](invalid_desc, valid_desc, out, producer_warps, debug=True)
+    torch.testing.assert_close(out, valid)
+
+
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9, reason="Requires hopper or newer")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_async_tma_kernel(FAILURE, device, run_wrapper, monkeypatch, num_ctas):

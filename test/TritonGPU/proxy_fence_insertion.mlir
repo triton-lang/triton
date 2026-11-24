@@ -1,5 +1,43 @@
 // RUN: triton-opt %s --convert-scf-to-cf -triton-nvidia-gpu-proxy-fence-insertion --split-input-file -allow-unregistered-dialect | FileCheck %s
 
+#poll_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#poll_shared = #ttg.nvmma_shared<{swizzlingByteWidth = 0, transposed = false, elementBitWidth = 32, rank = 1}>
+#poll_bar = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#poll_smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // A successful polling loop acquires cp.async writes just like a blocking
+  // wait. Forwarding them to TMA requires a generic-to-async proxy fence.
+  // CHECK-LABEL: @copy_poll_then_tma_store
+  // CHECK: ttng.barrier_test_wait_report
+  // CHECK: ttng.fence_async_shared {bCluster = false}
+  // CHECK-NEXT: ttng.async_tma_copy_local_to_global
+  tt.func @copy_poll_then_tma_store(%src: tensor<128x!tt.ptr<i32>, #poll_blocked>, %desc: !tt.tensordesc<128xi32, #poll_shared>) {
+    %zero = arith.constant 0 : i32
+    %true = arith.constant true
+    %false = arith.constant false
+    %mem = ttg.local_alloc {allocation.offset = 0 : i32} : () -> !ttg.memdesc<128xi32, #poll_shared, #poll_smem, mutable>
+    %bar = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    ttng.init_barrier %bar, 1 : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    ttg.async_copy_global_to_local %src, %mem : tensor<128x!tt.ptr<i32>, #poll_blocked> -> <128xi32, #poll_shared, #poll_smem, mutable>
+    ttng.async_copy_mbarrier_arrive %bar : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    ttng.arrive_barrier %bar, 1 : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    %complete = scf.while (%done = %false) : (i1) -> i1 {
+      %pending = arith.xori %done, %true : i1
+      scf.condition(%pending) %done : i1
+    } do {
+    ^bb0(%previous: i1):
+      %done, %report = ttng.barrier_test_wait_report %bar, %zero : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable> -> (i1, i1)
+      scf.yield %done : i1
+    }
+    ttng.async_tma_copy_local_to_global %desc[%zero] %mem : !tt.tensordesc<128xi32, #poll_shared>, !ttg.memdesc<128xi32, #poll_shared, #poll_smem, mutable>
+    ttng.async_tma_store_wait {pendings = 0 : i32}
+    ttng.inval_barrier %bar : !ttg.memdesc<1xi64, #poll_bar, #poll_smem, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>

@@ -506,11 +506,8 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  if (triton::gpu::lookupNumWarps(rewriter.getInsertionBlock()->getParent()) >
-      1) {
-    Value warpId = triton::gpu::WarpIdOp::create(rewriter, loc);
-    pred = tb.and_(pred, tb.icmp_eq(warpId, tb.i32_val(0)));
-  }
+  Value warpId = triton::gpu::WarpIdOp::create(rewriter, loc);
+  pred = tb.and_(pred, tb.icmp_eq(warpId, tb.i32_val(0)));
   if (twoCTAs) {
     Value cluster0 = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter);
     pred = tb.and_(pred, cluster0);
