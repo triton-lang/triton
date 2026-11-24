@@ -158,6 +158,10 @@ public:
     return {ClusterBarrierOp::create(b, b.getLoc()).getOperation()};
   }
 
+  BarrierStages getClusterBarrierStages(Operation *op) const override {
+    return ttng::getClusterBarrierStages(op);
+  }
+
   bool hasUnsummarizableCalleeState(Operation *op) const override {
     if (isa<ClusterBarrierOp>(op))
       return true;

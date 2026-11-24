@@ -446,3 +446,46 @@ tt.func @gsan_descriptor_predicate(%desc: !tt.tensordesc<4x4xf32>, %x: i32, %y: 
   tti.experimental_gsan_tensordesc_access %desc[%x, %y], false, %true : !tt.tensordesc<4x4xf32>
   tt.return
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: @single_warp_id
+  tt.func @single_warp_id() -> i32 {
+    // CHECK: %[[ZERO:.*]] = arith.constant 0 : i32
+    // CHECK: tt.return %[[ZERO]]
+    %id = ttg.warp_id
+    tt.return %id : i32
+  }
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  llvm.func @use(i32)
+
+  // CHECK-LABEL: @partition_warp_id
+  llvm.func @partition_warp_id() {
+    ttg.warp_specialize()
+    default {
+      ttg.warp_yield
+    }
+    // CHECK: partition0
+    partition0() num_warps(1) {
+      // CHECK: %[[ZERO:.*]] = llvm.mlir.constant(0 : i32)
+      // CHECK: llvm.call @use(%[[ZERO]])
+      %id = ttg.warp_id
+      llvm.call @use(%id) : (i32) -> ()
+      ttg.warp_return
+    }
+    // CHECK: partition1
+    partition1() num_warps(2) {
+      // CHECK: %[[ID:.*]] = ttg.warp_id
+      // CHECK: llvm.call @use(%[[ID]])
+      %id = ttg.warp_id
+      llvm.call @use(%id) : (i32) -> ()
+      ttg.warp_return
+    } : () -> ()
+    llvm.return
+  }
+}

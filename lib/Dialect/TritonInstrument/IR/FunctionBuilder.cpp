@@ -80,7 +80,8 @@ namespace ProxyAccessBits {
 constexpr unsigned readOffset = MAX_NUM_BASE_THREADS;
 constexpr unsigned fencedOffset = 2 * MAX_NUM_BASE_THREADS;
 constexpr uint64_t writeMask = (1ull << MAX_NUM_BASE_THREADS) - 1;
-constexpr uint64_t seenMask = writeMask | (writeMask << readOffset);
+constexpr uint64_t readMask = writeMask << readOffset;
+constexpr uint64_t seenMask = writeMask | readMask;
 static_assert(2 * fencedOffset <= 64);
 } // namespace ProxyAccessBits
 
@@ -3635,12 +3636,16 @@ void FunctionBuilder::createFenceProxyAccessesCall(ImplicitLocOpBuilder &b,
     pred = arith::ConstantIntOp::create(b, 1, 1);
   ValueType visibility = auxData.proxyAccessVisibility.at(insertPoint);
   auto visibilityType = cast<RankedTensorType>(visibility.type);
+  ValueType writes =
+      auxData.writeVisibility[(int)MemType::SHARED_MEM].at(insertPoint);
+  auto writeType = cast<RankedTensorType>(writes.type);
   SmallVector<Value> args = {arith::ConstantIntOp::create(b, thread, 32), pred,
-                             visibility.value};
+                             visibility.value, writes.value};
   createCallToCachedFunction(
       b, "fence_proxy_accesses", args, /*assertInfo=*/std::nullopt,
-      {visibilityType, (uint64_t)cluster},
-      [visibilityType, cluster](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+      {visibilityType, (uint64_t)cluster, writeType},
+      [visibilityType, cluster, writeType](ImplicitLocOpBuilder &fb,
+                                           Block *entryBlock) {
         Value threadVal = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
         Value visibilityPtr = entryBlock->getArgument(2);
@@ -3659,8 +3664,22 @@ void FunctionBuilder::createFenceProxyAccessesCall(ImplicitLocOpBuilder &b,
               fb, mask,
               createCTASetMask(fb, visibilityType, /*dim=*/0, currentCTA));
         }
+        // A fence covers seen reads and writes visible to the fencing thread.
+        Value writes = tti::createLoadScratchMemory(
+            fb, fb.getLoc(), entryBlock->getArgument(3), writeType);
+        Value thread = adjustIntegerWidth(
+            fb, threadVal, cast<IntegerType>(writeType.getElementType()));
+        Value shiftByThread = triton::SplatOp::create(fb, writeType, thread);
+        Value visible = arith::TruncIOp::create(
+            fb, writeType.cloneWith(std::nullopt, fb.getI1Type()),
+            arith::ShRUIOp::create(fb, writes, shiftByThread));
+        Value reads = tti::createConstIntTensor(
+            fb, fb.getLoc(), ProxyAccessBits::readMask, visibilityType);
         Value seenMask = tti::createConstIntTensor(
             fb, fb.getLoc(), ProxyAccessBits::seenMask, visibilityType);
+        seenMask = arith::SelectOp::create(
+            fb, convertAndBroadcast(fb, visible, {0, 1, 2}, visibilityType),
+            seenMask, reads);
         Value seen = arith::AndIOp::create(fb, visibility, seenMask);
         Value shift = tti::createConstIntTensor(
             fb, fb.getLoc(), ProxyAccessBits::fencedOffset, visibilityType);

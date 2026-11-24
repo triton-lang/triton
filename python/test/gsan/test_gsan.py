@@ -2235,7 +2235,7 @@ def test_bulk_async_store_destination_range(fresh_knobs, take_copy, words, granu
         smem = gl.allocate_shared_memory(gl.int32, [256], gl.SwizzledSharedLayout(1, 1, 1, [0]),
                                          gl.full((256, ), 17, gl.int32, layout))
         hopper.bulk.async_store(out + 4, smem, WORDS, pred=pred)
-        hopper.bulk.store_wait(0, read_only=False)
+        hopper.bulk.store_wait(0, read_only=False, deps=[smem])
 
     pool = create_mem_pool(shadow_granularity=granularity)
     with torch.cuda.use_mem_pool(pool):

@@ -959,7 +959,8 @@ private:
         }
         if (func == entryPoint)
           return WalkResult::advance();
-        if (isa<CallOpInterface>(op))
+        // Bulk prefetch only changes L2 residency and has no ConSan state.
+        if (isa<CallOpInterface, ttng::PrefetchBulkOp>(op))
           return WalkResult::advance();
 
         bool hasUnsupportedAllocation =
@@ -1048,19 +1049,27 @@ private:
 
   LogicalResult instrumentMemoryOperations(ImplicitLocOpBuilder &b,
                                            tti::FunctionBuilder &funcBuilder) {
-    SmallVector<ttng::ClusterBarrierOp> clusterBarriers;
-    // Resolving reports can split blocks and add retry edges. Keep the source
-    // operations stable while instrumentation changes their control flow.
-    SmallVector<Operation *> operations;
-    entryPoint.walk([&](Operation *op) { operations.push_back(op); });
-    for (Operation *op : operations) {
-      CriticalSectionListener listener;
-      b.setListener(&listener);
-
+    // The snapshot remains stable when report resolution or cluster
+    // rendezvous instrumentation splits blocks and adds retry edges.
+    for (auto [op, stages] : auxData.operations) {
       int thread = getCurrentThread(op, hooks, auxData.threadLayout);
       int baseThread = getBaseThread(thread, auxData.threadLayout);
+      auto rendezvous = [&] {
+        bool partitionScoped =
+            static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
+        funcBuilder.createClusterBarrierRendezvousCall(
+            b, auxData.getClusterBarrierSlot(op), baseThread,
+            getThreadPeersMask(baseThread, auxData.threadLayout),
+            partitionScoped, /*publishVisibility=*/stages.hasBarrier(), op);
+      };
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
+      // A relaxed cluster barrier participates in deadlock detection only.
+      if (stages.beforeMemoryEffects || isa<ttng::ClusterBarrierOp>(op))
+        rendezvous();
+
+      CriticalSectionListener listener;
+      b.setListener(&listener);
       if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
         // Place insert point after specific ops:
         // allocs - we want to
@@ -1180,11 +1189,6 @@ private:
             asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
             MemType::SHARED_MEM, op);
       }
-      if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-        if (!llvm::is_contained(auxData.internalClusterBarriers, op))
-          clusterBarriers.push_back(clusterBarrier);
-      }
-
       if (isa<ttg::WarpYieldOp, ttg::WarpReturnOp>(op) &&
           !auxData.activeMasks.empty()) {
         auto wsOp = op->getParentOfType<ttg::WarpSpecializeOp>();
@@ -1223,24 +1227,18 @@ private:
 
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
+      if (stages.betweenMemoryEffects) {
+        // ConSan has published the local scratch write. Lowering synchronizes
+        // it before the peer reads.
+        b.setInsertionPoint(op);
+        rendezvous();
+      }
+      if (stages.afterMemoryEffects) {
+        b.setInsertionPointAfter(op);
+        rendezvous();
+      }
       if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
         instrumentLocalScatter(b, scatter, funcBuilder);
-    }
-
-    // Cluster rendezvous polling introduces control-flow blocks, so add it
-    // after the operation walk rather than invalidating the walk iterators.
-    for (ttng::ClusterBarrierOp clusterBarrier : clusterBarriers) {
-      Operation *op = clusterBarrier.getOperation();
-      int thread = getCurrentThread(op, hooks, auxData.threadLayout);
-      int baseThread = getBaseThread(thread, auxData.threadLayout);
-      bool partitionScoped =
-          static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
-      b.setLoc(op->getLoc());
-      b.setInsertionPoint(op);
-      funcBuilder.createClusterBarrierRendezvousCall(
-          b, auxData.getClusterBarrierSlot(op), baseThread,
-          getThreadPeersMask(baseThread, auxData.threadLayout), partitionScoped,
-          /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
     }
     return success();
   }
@@ -1254,8 +1252,7 @@ private:
         ttg::lookupNumCTAs(scatter) > 1 && hooks.supportsCrossCTASharedMemory();
     auto synchronize = [&] {
       if (crossCTA) {
-        SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
-        llvm::append_range(auxData.internalClusterBarriers, barriers);
+        hooks.createInitClusterBarrier(b);
       } else {
         ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::Local);
       }
@@ -1619,8 +1616,10 @@ private:
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
-          if (effect.rw == RW::Write && auxData.hasAsyncCopyMbarriers &&
-              opInfo->commitKind == CommitKind::AsyncCp)
+          if (effect.rw == RW::Write &&
+              opInfo->commitKind == CommitKind::AsyncCp &&
+              (auxData.hasAsyncCopyMbarriers ||
+               auxData.hasAsyncProxyFenceTracking))
             funcBuilder.createPublishWriteVisibilityCall(
                 b, bufferMask, 0, pred, memType, op, effectCTAs);
           funcBuilder.createStageAccessForCommitCall(

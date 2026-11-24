@@ -564,7 +564,11 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   if (!conditionalWaits.empty() && numCTAs != 1)
     return entryPoint.emitError("ConSan conditional reports require one CTA");
   int numMBarriers = barrierRegions.size();
-  entryPoint.walk([&](ClusterBarrierOp op) {
+  entryPoint.walk([&](Operation *op) {
+    BarrierStages stages = hooks.getClusterBarrierStages(op);
+    operations.emplace_back(op, stages);
+    if (!stages.hasBarrier() && !isa<ClusterBarrierOp>(op))
+      return;
     Region *group = getClusterBarrierGroupRegion(op);
     clusterBarrierSlots.try_emplace(group,
                                     numMBarriers + clusterBarrierSlots.size());

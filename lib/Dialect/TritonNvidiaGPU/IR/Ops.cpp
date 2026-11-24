@@ -951,6 +951,18 @@ int64_t AsyncBulkCopyGlobalToLocalOp::getNumBytesPerCTA() {
   return getNumBytes() / (1u << llvm::popcount(layout.splitMask));
 }
 
+LogicalResult PrefetchBulkOp::verify() {
+  auto space = cast<PointerType>(getElementTypeOrSelf(getPtr().getType()))
+                   .getAddressSpace();
+  if (space != PtrAddrSpace::Global && space != PtrAddrSpace::Constant)
+    return emitOpError("requires a global-memory source pointer");
+  APInt numBytes;
+  if (matchPattern(getNumBytes(), m_ConstantInt(&numBytes)) &&
+      numBytes.getZExtValue() % 16 != 0)
+    return emitOpError("byte count must be a multiple of 16");
+  return success();
+}
+
 static LogicalResult verifyBulkCopy(Operation *op, gpu::MemDescType sharedTy,
                                     PointerType ptrTy, int64_t numBytes,
                                     bool isStore) {

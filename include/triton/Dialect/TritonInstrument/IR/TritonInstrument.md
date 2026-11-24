@@ -361,7 +361,8 @@ The common hook implementation covers these TritonGPU operations:
   `AsyncCp` commit counts and recorded as a generic-side proxy access.
 - `ttg.async_commit_group`: commits staged `AsyncCp` accesses.
 - `ttg.async_wait`: clears `AsyncCp` entries beyond the pending-count threshold
-  and transfers write visibility.
+  and transfers write visibility. A proxy fence covers a copy only after its
+  write is visible to the fencing thread.
 - `ttg.local_load` and `ttg.local_gather`: barrier-tracked shared-memory
   reads. A gather conservatively covers its full source descriptor because its
   indices are runtime values.
