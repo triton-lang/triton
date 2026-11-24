@@ -43,11 +43,9 @@ public:
     Value src = localAllocOp.getSrc();
     auto srcType = cast<RankedTensorType>(src.getType());
     auto srcLayout = srcType.getEncoding();
-    auto accTMemEncoding = dyn_cast<TensorMemoryEncodingAttr>(
-        tcGen5MMAOp.getD().getType().getEncoding());
+    auto accType = tcGen5MMAOp.getD().getType();
+    auto accEnc = cast<TensorMemoryEncodingAttr>(accType.getEncoding());
     auto cgaLayout = triton::gpu::getCGALayout(lhs.getType().getEncoding());
-    // TMem encoding for A operand is the same as for D (Acc), with colStride 1,
-    // i.e. densely packed in TMEM.
     unsigned elemBitWidth = lhs.getType().getElementTypeBitWidth();
     if (!llvm::is_contained({8, 16, 32}, elemBitWidth)) {
       return failure();
@@ -56,16 +54,24 @@ public:
     if (isFp4Padded(lhs.getType().getEncoding())) {
       return failure();
     }
-    const unsigned colStride = 1;
+    unsigned blockM = accEnc.getBlockM();
+    bool twoCTAs = accEnc.getTwoCTAs();
+    int64_t blockN = lhs.getType().getDimSize(1);
+    // Each 64-row half computes a different part of N and needs all of K.
+    if (twoCTAs && blockM == 64)
+      blockN *= 2;
+    if (blockN > kMaxTMemBlockN)
+      return failure();
     auto aTMemEncoding = TensorMemoryEncodingAttr::get(
-        context, accTMemEncoding.getBlockM(), lhs.getType().getShape()[1],
-        colStride, cgaLayout, accTMemEncoding.getTwoCTAs());
+        context, blockM, blockN, /*colStride=*/1, cgaLayout, twoCTAs);
     Attribute tensorMemorySpace =
         triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
     ttg::MemDescType lhsMemDescType = ttg::MemDescType::get(
         lhs.getType().getShape(), lhs.getType().getElementType(), aTMemEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
+    if (!areTMemRowsAligned(lhsMemDescType, accType))
+      return failure();
     bool layoutTmemCompatible =
         isDistributedLayoutTMemCompatible(tcGen5MMAOp, srcType, lhsMemDescType);
     Attribute newLayout = srcLayout;

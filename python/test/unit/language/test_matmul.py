@@ -1122,7 +1122,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
 
 
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 64), (128, 64, 128), (64, 128, 32), (128, 256, 32),
-                                                       (256, 64, 32)])
+                                                       (256, 64, 32), (64, 512, 32)])
 @pytest.mark.parametrize("a_trans", [False, True])
 @pytest.mark.parametrize("dtype_src_str", ["float32", "float16", "float8e5"])
 @pytest.mark.skipif(is_hip() or torch.cuda.get_device_capability()[0] != 10, reason="Requires compute capability == 10")
@@ -1158,9 +1158,13 @@ def test_lhs_in_tmem(BLOCK_M, BLOCK_N, BLOCK_K, a_trans, dtype_src_str, device, 
     atol = 0.03
     rtol = 0.03
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
-    pattern = r"%\w+\s*=\s*ttng\.tmem_alloc[\s\S]*?tng\.tc_gen5_mma\s+%\w+,"
-    ttgir = k.asm["ttgir"]
-    assert re.search(pattern, ttgir)
+    lhs = re.search(r"ttng\.tc_gen5_mma [^:]*:\s*!ttg\.memdesc<([^>]*)>", k.asm["ttgir"])
+    assert lhs
+    if (BLOCK_M, BLOCK_N) == (64, 512):
+        # D switches TMEM rows between N tiles while A stays on the same rows.
+        assert "#smem" in lhs[1]
+    elif not a_trans:
+        assert "#ttng.tensor_memory" in lhs[1]
 
 
 @triton.jit
