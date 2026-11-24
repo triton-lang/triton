@@ -1,5 +1,8 @@
 import os
+import signal
+import subprocess
 import sys
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.connection import Client
 from pathlib import Path
@@ -600,3 +603,347 @@ def test_wrap_tensordesc_is_noop_without_tensordesc():
 
     wrapped = wrap_handle_tensordesc_impl(launcher, {0: "i32", 1: ("i64", "constexpr")}, None, lambda *_: [])
     assert wrapped is launcher
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_concurrent_cleans_process_group_on_startup_failure(tmp_path, monkeypatch):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = "import pathlib, time; time.sleep(1); pathlib.Path(%r).touch()" % str(survived)
+    leader = ("import pathlib, subprocess, sys, time; "
+              "p = subprocess.Popen([sys.executable, '-c', %r]); "
+              "pathlib.Path(%r).write_text(str(p.pid)); time.sleep(30)" % (worker, str(ready)))
+    real_popen = subprocess.Popen
+    processes = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), "first process did not start its worker"
+        return process
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    commands = [([sys.executable, "-c", leader], str(tmp_path), os.environ.copy()),
+                ([str(tmp_path / "does-not-exist")], str(tmp_path), os.environ.copy())]
+    try:
+        with pytest.raises(FileNotFoundError):
+            _test_runner._concurrent(commands)
+        assert len(processes) == 1 and processes[0].returncode is not None
+        time.sleep(1.2)
+        assert not survived.exists(), "worker survived its test runner"
+    finally:
+        if processes and processes[0].poll() is None:
+            processes[0].kill()
+            processes[0].wait()
+        # The worker exits after writing its marker even on the broken baseline.
+        if ready.exists() and not survived.exists():
+            time.sleep(1.2)
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_cleans_children_when_wait_raises(tmp_path, monkeypatch):
+    real_popen = subprocess.Popen
+    processes = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def fail_wait(*args):
+        raise RuntimeError("wait failed")
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    monkeypatch.setattr(_test_runner.os, "waitid", fail_wait)
+    command = ([sys.executable, "-c", "import time; time.sleep(30)"], str(tmp_path), os.environ.copy())
+    try:
+        with pytest.raises(RuntimeError, match="wait failed"):
+            _test_runner._concurrent([command, command])
+        assert len(processes) == 2
+        assert all(process.returncode is not None for process in processes)
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
+def test_concurrent_keeps_success_status_and_signal_handlers(tmp_path):
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    command = ([sys.executable, "-c", "pass"], str(tmp_path), os.environ.copy())
+    assert _test_runner._concurrent([command, command]) == 0
+    assert {sig: signal.getsignal(sig) for sig in before} == before
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
+def test_concurrent_cleans_group_when_runner_receives_sigterm(tmp_path):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = f"import pathlib, time; time.sleep(2); pathlib.Path({str(survived)!r}).touch()"
+    dash_c = "-c"
+    leader = ("import os, pathlib, subprocess, sys, time; "
+              f"p = subprocess.Popen([sys.executable, {dash_c!r}, {worker!r}]); "
+              f"pathlib.Path({str(ready)!r}).write_text(str(os.getpid()) + \" \" + str(p.pid)); time.sleep(4)")
+    command = ("import os, sys; from triton import _test_runner; "
+               f"_test_runner._concurrent([([sys.executable, {dash_c!r}, {leader!r}], "
+               "os.getcwd(), os.environ.copy())])")
+    runner = subprocess.Popen([sys.executable, "-c", command], cwd=tmp_path, env=os.environ.copy())
+    try:
+        deadline = time.monotonic() + 30
+        while not ready.exists() and runner.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), "runner did not start its worker"
+        runner.send_signal(signal.SIGTERM)
+        assert runner.wait(timeout=10) == 128 + signal.SIGTERM
+        time.sleep(2.2)
+        assert not survived.exists(), "worker survived the terminated runner"
+    finally:
+        if runner.poll() is None:
+            runner.kill()
+            runner.wait()
+        # The leader and worker are bounded even if the assertion fails.
+        if ready.exists() and not survived.exists():
+            time.sleep(4.2)
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_cleans_group_after_leader_exits(tmp_path, monkeypatch):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = (f"import pathlib, time; pathlib.Path({str(ready)!r}).touch(); time.sleep(1.5); "
+              f"pathlib.Path({str(survived)!r}).touch()")
+    leader = ("import pathlib, subprocess, sys, time; "
+              f"subprocess.Popen([sys.executable, '-c', {worker!r}]); "
+              f"p = pathlib.Path({str(ready)!r}); deadline = time.monotonic() + 5; "
+              "exec('while not p.exists() and time.monotonic() < deadline:\\n time.sleep(0.01)'); "
+              "sys.exit(0 if p.exists() else 3)")
+    real_popen = subprocess.Popen
+    processes = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        if len(processes) == 2:
+            real_wait = process.wait
+            first = True
+
+            def fail_once(*args, **kwargs):
+                nonlocal first
+                if first:
+                    first = False
+                    raise RuntimeError("second wait failed")
+                return real_wait(*args, **kwargs)
+
+            process.wait = fail_once
+        return process
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    commands = [([sys.executable, "-c", leader], str(tmp_path), os.environ.copy()),
+                ([sys.executable, "-c", "pass"], str(tmp_path), os.environ.copy())]
+    try:
+        with pytest.raises(RuntimeError, match="second wait failed"):
+            _test_runner._concurrent(commands)
+        assert len(processes) == 2 and processes[0].returncode == 0
+        assert all(process.returncode is not None for process in processes)
+        time.sleep(1.7)
+        assert not survived.exists(), "worker survived after its leader exited"
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP, signal.SIGINT])
+def test_concurrent_defers_signal_until_child_is_registered(tmp_path, monkeypatch, signum):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = f"import pathlib, time; time.sleep(1.5); pathlib.Path({str(survived)!r}).touch()"
+    leader = ("import pathlib, subprocess, sys, time; "
+              f"subprocess.Popen([sys.executable, '-c', {worker!r}]); "
+              f"pathlib.Path({str(ready)!r}).touch(); time.sleep(10)")
+    real_popen = subprocess.Popen
+    processes = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists(), "child did not start"
+        os.kill(os.getpid(), signum)
+        return process
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    command = ([sys.executable, "-c", leader], str(tmp_path), os.environ.copy())
+    expected = KeyboardInterrupt if signum == signal.SIGINT else SystemExit
+    try:
+        with pytest.raises(expected):
+            _test_runner._concurrent([command])
+        assert len(processes) == 1 and processes[0].returncode is not None
+        time.sleep(1.7)
+        assert not survived.exists(), "worker survived a signal during startup"
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_cleans_leftover_workers_on_success(tmp_path):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = (f"import pathlib, time; pathlib.Path({str(ready)!r}).touch(); time.sleep(1.5); "
+              f"pathlib.Path({str(survived)!r}).touch()")
+    leader = ("import pathlib, subprocess, sys, time; "
+              f"subprocess.Popen([sys.executable, '-c', {worker!r}]); "
+              f"p = pathlib.Path({str(ready)!r}); deadline = time.monotonic() + 5; "
+              "exec('while not p.exists() and time.monotonic() < deadline:\\n time.sleep(0.01)'); "
+              "sys.exit(0 if p.exists() else 3)")
+    command = ([sys.executable, "-c", leader], str(tmp_path), os.environ.copy())
+    assert _test_runner._concurrent([command]) == 0
+    time.sleep(1.7)
+    assert not survived.exists(), "worker survived a successful runner"
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_requires_default_sigchld_before_start(tmp_path):
+    previous = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+    command = ([sys.executable, "-c", "pass"], str(tmp_path), os.environ.copy())
+    try:
+        with pytest.raises(RuntimeError, match="default SIGCHLD"):
+            _test_runner._concurrent([command])
+    finally:
+        signal.signal(signal.SIGCHLD, previous)
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_cleans_exited_leader_group_when_later_wait_fails(tmp_path, monkeypatch):
+    ready = tmp_path / "ready"
+    survived = tmp_path / "survived"
+    worker = (f"import pathlib, time; pathlib.Path({str(ready)!r}).touch(); time.sleep(1.5); "
+              f"pathlib.Path({str(survived)!r}).touch()")
+    leader = ("import pathlib, subprocess, sys, time; "
+              f"subprocess.Popen([sys.executable, '-c', {worker!r}]); "
+              f"p = pathlib.Path({str(ready)!r}); deadline = time.monotonic() + 5; "
+              "exec('while not p.exists() and time.monotonic() < deadline:\\n time.sleep(0.01)'); "
+              "sys.exit(0 if p.exists() else 3)")
+    real_waitid = os.waitid
+    real_popen = subprocess.Popen
+    processes = []
+    calls = 0
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def fail_second_wait(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("second waitid failed")
+        return real_waitid(*args)
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    monkeypatch.setattr(_test_runner.os, "waitid", fail_second_wait)
+    commands = [([sys.executable, "-c", leader], str(tmp_path), os.environ.copy()),
+                ([sys.executable, "-c", "import time; time.sleep(10)"], str(tmp_path), os.environ.copy())]
+    try:
+        with pytest.raises(RuntimeError, match="second waitid failed"):
+            _test_runner._concurrent(commands)
+        assert len(processes) == 2 and processes[0].returncode == 0
+        assert all(process.returncode is not None for process in processes)
+        time.sleep(1.7)
+        assert not survived.exists(), "worker survived the later wait failure"
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_defers_another_signal_during_cleanup(tmp_path, monkeypatch):
+    real_popen = subprocess.Popen
+    real_killpg = os.killpg
+    processes = []
+    signaled = False
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def signal_during_cleanup(pid, sig):
+        nonlocal signaled
+        if not signaled:
+            signaled = True
+            os.kill(os.getpid(), signal.SIGTERM)
+        return real_killpg(pid, sig)
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    monkeypatch.setattr(_test_runner.os, "killpg", signal_during_cleanup)
+    command = ([sys.executable, "-c", "import time; time.sleep(10)"], str(tmp_path), os.environ.copy())
+    missing = ([str(tmp_path / "does-not-exist")], str(tmp_path), os.environ.copy())
+    try:
+        with pytest.raises(FileNotFoundError):
+            _test_runner._concurrent([command, command, missing])
+        assert signaled and len(processes) == 2
+        assert all(process.returncode is not None for process in processes)
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                real_killpg(process.pid, signal.SIGKILL)
+                process.wait()
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_defers_signal_during_reaping(tmp_path, monkeypatch):
+    real_popen = subprocess.Popen
+    processes = []
+
+    def launch(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        if len(processes) == 1:
+            real_wait = process.wait
+            first = True
+
+            def signal_then_wait(*args, **kwargs):
+                nonlocal first
+                if first:
+                    first = False
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return real_wait(*args, **kwargs)
+
+            process.wait = signal_then_wait
+        return process
+
+    monkeypatch.setattr(_test_runner.subprocess, "Popen", launch)
+    command = ([sys.executable, "-c", "pass"], str(tmp_path), os.environ.copy())
+    with pytest.raises(SystemExit) as raised:
+        _test_runner._concurrent([command, command])
+    assert raised.value.code == 128 + signal.SIGTERM
+    assert len(processes) == 2 and all(process.returncode is not None for process in processes)
+
+
+@pytest.mark.skipif(not hasattr(os, "waitid"), reason="unreaped process groups require waitid")
+def test_concurrent_starts_all_commands_and_preserves_exit_status(tmp_path):
+
+    def command(index, other, status):
+        script = ("import pathlib, sys, time; "
+                  f"pathlib.Path({str(tmp_path / index)!r}).touch(); "
+                  f"other = pathlib.Path({str(tmp_path / other)!r}); "
+                  "deadline = time.monotonic() + 5; "
+                  "exec('while not other.exists() and time.monotonic() < deadline:\\n time.sleep(0.01)'); "
+                  f"sys.exit({status} if other.exists() else 90)")
+        return [sys.executable, "-c", script], str(tmp_path), os.environ.copy()
+
+    assert _test_runner._concurrent([command("one", "two", 2), command("two", "one", 5)]) == 5
