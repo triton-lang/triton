@@ -7,8 +7,8 @@ scale factor per block, as in the OCP microscaling (MX) formats. CDNA4 and
 CDNA5 GPUs support matrix multiplication for MX formats, with scaled MFMA and
 scaled WMMA instructions.
 
-In this tutorial, we will show to use them in Gluon. And use an MLP-like kernel,
-where we multiply fp8 activations by mxfp4 weights, as an example.
+In this tutorial, we will show how to use them in Gluon, with an MLP-like
+kernel, where we multiply fp8 activations by mxfp4 weights, as an example.
 """
 
 import importlib

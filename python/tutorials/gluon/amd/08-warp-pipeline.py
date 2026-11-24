@@ -54,14 +54,13 @@ if __name__ == "__main__" and not is_cdna5():
 warp_size = gl.constexpr(32)
 
 # %%
-# All our previous tutorials assume 4 warps. Now we will switch to use 8 warps.
-# On CDNA5 GPUs, each workgroup processor (WGP) is partitioned into 4 SIMDs,
-# each with its own set of 1024 vector registers (VGPRs). When the kernel is
-# launched with 8 warps, 2 warps will be assigned to each SIMD, and each can use
-# up to 512 VGPRs. The assignment is done in round-robin fashion, so warps 0
-# and 4 will be assigned to the same SIMD. The SIMD can issue instructions for
-# both warps, which gives an opportunity to overlap the execution of different
-# warps.
+# All our previous tutorials assume 4 warps. Now we will switch to 8 warps. On
+# CDNA5 GPUs, each workgroup processor (WGP) is partitioned into 4 SIMDs, each
+# with its own set of 1024 vector registers (VGPRs). When the kernel is launched
+# with 8 warps, 2 warps will be assigned to each SIMD, and each can use up to
+# 512 VGPRs. The assignment is done in round-robin fashion, so warps 0 and 4
+# will be assigned to the same SIMD. The SIMD can issue instructions for both
+# warps, which gives an opportunity to overlap the execution of different warps.
 #
 # To control what can be overlapped, we can use `warp_pipeline_stage` in Gluon
 # to split a loop into stages. Operations within the scope of a stage will be

@@ -2,10 +2,10 @@
 Async Copy
 ==========
 
-This tutorial covers async copies on AMD GPUs. Async copies is an important
-memory operation allows the kernel to overlap memory access with compute for
-software pipelining. Despite the name, async copies on AMD GPUs behave quite
-differently from NVIDIA's async copies - Warps wait for the completion of memory
+This tutorial covers async copies on AMD GPUs. Async copy is an important
+memory operation that allows the kernel to overlap memory access with compute
+for software pipelining. Despite the name, async copies on AMD GPUs behave quite
+differently from NVIDIA's async copies: warps wait for the completion of memory
 instructions with wait counters instead of using the mbarrier mechanism.
 
 Different types of memory instructions have separate counters. This
@@ -16,8 +16,8 @@ happen in the background. However, only some of the counters are
 directly visible in Gluon, while others are managed by the compiler.
 
 In this tutorial, we only discuss the memory instructions between global memory
-and shared memory on CDNA4 and CDNA5, and focus on these Gluon can control
-explicitly.
+and shared memory on CDNA4 and CDNA5, and focus on the ones that Gluon can
+control explicitly.
 """
 
 import contextlib
@@ -93,7 +93,7 @@ if __name__ == "__main__" and is_cdna4():
 #
 # For loads into registers, as in this kernel, the compiler manages the wait
 # counters. It inserts each wait right before the consumer instruction. A kernel
-# can also load data from global memory directly to shared memory. In this case
+# can also load data from global memory directly to shared memory. In this case,
 # the kernel needs to wait for these copies itself. Gluon exposes this operation
 # as `global_load_to_shared`. `commit_group` groups the copies issued since the
 # last commit, and `wait_group(n)` waits until at most `n` groups are still in
@@ -294,10 +294,7 @@ if __name__ == "__main__" and is_cdna4():
 # the current warp, and other warps copy other parts of the tile. So the warps
 # need to meet at a CTA barrier, `s_barrier`, before they read the tile. Another
 # barrier keeps a copy from overwriting a buffer that other warps may still
-# read. These barriers are inserted by the compiler analysis.
-
-# %%
-# Next, we build a software-pipelined version of the kernel.
+# read. These barriers are inserted by the compiler.
 
 
 @gluon.jit
@@ -464,12 +461,11 @@ if __name__ == "__main__" and is_cdna4():
 # Gluon, they are available as `global_to_shared` in `cdna5.async_copy`, and
 # they use the same `commit_group` and `wait_group` as on CDNA4.
 #
-# Another thing changed in CDNA5 changes are  wait counters. CDNA5 offers the
-# following counters:
+# CDNA5 offers the following counters:
 #
 # - `loadcnt` counts global loads into registers.
 # - `storecnt` counts global stores.
-# - `asynccnt` counts async copies between global memory and shared memory,
+# - `asynccnt` counts async copies between global memory and shared memory.
 # - `tensorcnt` counts TDM copies, which we introduce in the next tutorial.
 # - `dscnt` counts shared memory accesses.
 #
@@ -547,7 +543,7 @@ if __name__ == "__main__" and is_cdna5():
 #   s_wait_asynccnt 0x0
 # ```
 #
-# The copy instruction is `global_load_async_to_lds_b128`. Like a global load,
+# The load instruction is `global_load_async_to_lds_b128`. Like a global load,
 # it takes a 64-bit address in `v[2:3]`. Unlike CDNA4, it also takes a shared
 # memory address for each lane, here in `v24`, and it doesn't use `M0`. The
 # kernel doesn't set `M0` at all.
@@ -555,7 +551,7 @@ if __name__ == "__main__" and is_cdna5():
 # The wait also differs. `wait_group` becomes `s_wait_asynccnt`, which only
 # waits for async copies, and never for stores or loads into registers.
 #
-# Since each lane has its own shared memory address, one copy instruction
+# Since each lane has its own shared memory address, one load instruction
 # doesn't have to fill consecutive shared memory. On CDNA4, the layout that
 # spreads the lanes of a warp over 8 rows fails to compile on a tile with 256
 # columns. On CDNA5, it works.

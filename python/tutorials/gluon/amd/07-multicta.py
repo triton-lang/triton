@@ -41,9 +41,9 @@ if __name__ == "__main__" and not is_cdna5():
 warp_size = gl.constexpr(32)
 
 # %%
-# In a multi-CTA kernel, the programming model levels up from the CTA to CGA.
-# When we launch the kernel and ask for the program ID, Gluon gives the ID of
-# the current CGA instead of the CTA. Within a CGA, we can use layouts to
+# In a multi-CTA kernel, the programming model levels up from the CTA to the
+# CGA. When we launch the kernel and ask for the program ID, Gluon gives the ID
+# of the current CGA instead of the CTA. Within a CGA, we can use layouts to
 # distribute a tensor over the CTAs, just like we did for warps. And similarly,
 # these CTAs work on the tensor collectively.
 
@@ -85,7 +85,7 @@ if __name__ == "__main__":
 #
 # We can launch a multi-CTA kernel with `num_ctas`, just like `num_warps`.
 # On CDNA5, a CGA can have up to 16 CTAs, so `num_ctas` should be at most 16.
-# Also considering linear layouts, it can only be a power of two.
+# Because of linear layouts, it must also be a power of two.
 
 # %%
 # AMD GPUs don't have distributed shared memory like NVIDIA GPUs, so a CTA can't
@@ -93,17 +93,17 @@ if __name__ == "__main__":
 # exchange data through global memory. To do so, these CTAs first need to write
 # out their own data partition, synchronize, and then load the data owned by the
 # other CTAs. This process can be implemented using different layouts for write
-# and read. And the synchronization primitive is exposed as barrier primitives:
+# and read. The synchronization is exposed as two barrier primitives:
 # `cluster.arrive` which signals the arrival, and `cluster.wait` which blocks
 # until every CTA of the cluster has arrived.
 #
-# Another thing to notice is the stores and the loads will need the `"gpu"`
-# scope. The scope tells the hardware which cache level must handle the access.
-# With the default scope, a store completes when it reaches the cache of a WGP,
-# The other CTAs of the cluster run on other WGPs, so they might not see the
-# store, or they might read old data from their own cache. The barrier doesn't
-# flush any cache. So we store and load with the `"gpu"` scope, which
-# becomes visible to all WGPs.
+# Another thing to notice is that the stores and loads need the `"gpu"` scope.
+# The scope tells the hardware which cache level must handle the access. With
+# the default scope, a store completes when it reaches the cache of a WGP. The
+# other CTAs of the cluster run on other WGPs, so they might not see the store,
+# or they might read old data from their own cache. The barrier doesn't flush
+# any cache. We store and load with the `"gpu"` scope, so the data becomes
+# visible to all WGPs.
 #
 # Let's use a sum reduction to show it. The input `x` has shape
 # `[M * num_ctas, N]`, and each CTA owns one private `[M, N]` tile of it. We
@@ -164,8 +164,8 @@ def test_sum(num_ctas):
 
 
 # %%
-# Async copies and TDM copies also work in a cluster. For TDM, we can specify
-# how we can distribute CTAs in the shared memory layout
+# Async copies and TDM copies also work in a cluster. For TDM, we specify how to
+# distribute the CTAs in the shared memory layout.
 
 
 @gluon.jit

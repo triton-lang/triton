@@ -218,8 +218,8 @@ if __name__ == "__main__":
 # indices must also be a power of 2.
 
 # %%
-# We can use standard global load to achieve similar gather-style load but TDM
-# gather provides a much better performance. Let's compare them for a large
+# We can use standard global loads to achieve a similar gather-style load, but
+# TDM gather provides much better performance. Let's compare them for a large
 # tensor copy.
 
 
@@ -311,7 +311,7 @@ if __name__ == "__main__":
 # Each output tile runs the K loop of the matmul in `05-mfma-wmma-scaled.py`.
 # The expert of the tile decides the offset of the `W` descriptors in the
 # stacked weights. With `GATHER`, the row indices of a tile are loaded once, and
-# gather the `A` tile of every K block. With `SCATTER`, the output tile is
+# they gather the `A` tile of every K block. With `SCATTER`, the output tile is
 # scattered to its rows.
 #
 # TDM gather doesn't support partitioned layouts, so with `GATHER`, `A` uses the

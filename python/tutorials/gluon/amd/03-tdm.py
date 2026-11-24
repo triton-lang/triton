@@ -5,7 +5,7 @@ TDM in Gluon
 CDNA5 GPUs add TDM, a hardware unit that copies tiles of a tensor between
 global memory and shared memory (LDS).
 
-With async copies, the warps do all the work of a copy. Each copy instruction
+With async copies, the warps do all the work of a copy. Each load instruction
 moves 16 bytes per lane. On CDNA5, a warp has 32 lanes, so a warp needs 16
 instructions to copy 8 KB, for example an 8x256 fp32 part of a tile. For each
 instruction, the warp computes per-lane offsets and masks in registers and
@@ -504,17 +504,18 @@ if __name__ == "__main__":
 
 # %%
 # TDM can also prefetch a block into the L2 cache with `tdm.prefetch`, which is
-# also called L2 prefetch. On CDNA5 GPUs, Each workgroup processor (WGP) has its
+# also called L2 prefetch. On CDNA5 GPUs, each workgroup processor (WGP) has its
 # own data cache, which shares the same SRAM with the shared memory. Behind the
 # WGP caches is the L2 cache, which sits on the two Fabric and Cache Dies (FCDs)
-# on one GPU. When there is data in L2 cache, later loads can cached instead of
-# going all the way to the HBM.
+# on one GPU. When there is data in L2 cache, later loads can be served from L2
+# instead of going all the way to the HBM.
 #
 # Gluon's `tdm.prefetch` takes a descriptor and the offsets of a block, just
 # like a TDM load, but it doesn't write anything into shared memory. It can be
-# treated a memory access without destination in shared memory. The compiler
-# splits the block into chunks of 256 bytes, spreads them over the lanes, warps
-# and CTAs, and issues one `global_prefetch_b8` instruction for each piece.
+# treated as a memory access without a destination in shared memory. The
+# compiler splits the block into chunks of 256 bytes, spreads them over the
+# lanes, warps and CTAs, and issues one `global_prefetch_b8` instruction for
+# each chunk.
 #
 # By default, a prefetch is non-speculative. The hardware translates the address
 # even if the translation is not cached, and the compiler keeps the addresses
@@ -603,7 +604,7 @@ if __name__ == "__main__":
 # may not always be helpful - we can also do double buffering to hide memory
 # latency. Moreover, L2 prefetch may compete with TDM for memory bandwidth.
 # But it can still be helpful in cases where we may not be able to use shared
-# memory to buffer another future requests.
+# memory to buffer future requests.
 
 # %%
 # The main takeaway here is to use TDM on CDNA5 whenever a kernel copies tiles

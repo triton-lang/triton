@@ -5,13 +5,13 @@ MFMA and WMMA
 AMD GPUs run matrix multiplications on dedicated matrix cores. CDNA4 GPUs use
 matrix fused-multiply-add (MFMA) instructions, and CDNA5 GPUs use wave matrix
 multiply-accumulate (WMMA) instructions. Both read their operands from registers
-and accumulate in registers. As they can't consume shared memory (LDS) directly,
+and accumulate in registers. They can't consume shared memory (LDS) directly,
 so the kernel needs extra instructions to load every operand from LDS into
 registers.
 
-This tutorial will introduces MFMA/WMMA and its layouts with the bf16 data type.
+This tutorial introduces MFMA/WMMA and their layouts with the bf16 data type.
 We will also cover different ways to load the operands from LDS and demonstrate
-its importance for performance.
+their importance for performance.
 """
 
 import importlib
@@ -55,15 +55,15 @@ warp_size = gl.constexpr(64 if is_cdna4() else 32)
 # with an MFMA layout as parent. These layouts control which MFMA instructions
 # the compiler generates.
 #
-# The operand data type and `instr_shape` of `AMDMFMALayout` decides the MFMA
+# The operand data type and `instr_shape` of `AMDMFMALayout` decide the MFMA
 # instruction to be used. `instr_shape` is the shape of the instruction in
 # [M, N, K] format for one warp. With multiple warps, the `warps_per_cta` of
 # `AMDMFMALayout` describes how to distribute them over the accumulator along
 # the M and N dimensions.
 #
-# The instruction shape and warp distribution decides a basic MFMA tile. When
-# the accumulator is larger than the MFMA tile, there will be multiple MFMA
-# tiles to cover the entire tensor.
+# The instruction shape and warp distribution decide a basic MFMA tile. When the
+# accumulator is larger than the MFMA tile, there will be multiple MFMA tiles to
+# cover the entire tensor.
 
 
 @gluon.jit
@@ -102,7 +102,7 @@ def mfma(A, B, instr_shape, warps_per_cta):
 @pytest.mark.parametrize("M, N, K", [(32, 32, 32), (64, 64, 64)])
 # For bf16, CDNA4 has two MFMA instruction shapes:
 # - `v_mfma_f32_16x16x32_bf16`
-# - `v_mfma_f32_32x32x16_bf16`.
+# - `v_mfma_f32_32x32x16_bf16`
 @pytest.mark.parametrize("instr_shape", [[16, 16, 32], [32, 32, 16]])
 # [2,2] = 2 warps along M and 2 warps along N
 # [4,1] = 4 warps along M and 1 warp along N
@@ -154,17 +154,18 @@ if __name__ == "__main__" and is_cdna4():
 # of a column in 4 registers.
 
 # %%
-# Knowing the MFMA layouts can help us implement some optimizations, like reduce
-# layout conversions. Layout conversion can happen in kernels like attention,
-# where there are a chain of two MFMAs, and the output of the first one, will
-# become an operand of the second one. As shown above, the accumulator layout
-# differs from the operand layout, so the compiler has to convert between them.
-# We can use some fields on the `AMDMFMALayout` to match these two layouts.
+# Knowing the MFMA layouts can help us implement some optimizations, like
+# reducing layout conversions. Layout conversion can happen in kernels like
+# attention, where there is a chain of two MFMAs, and the output of the first
+# one becomes an operand of the second one. As shown above, the accumulator
+# layout differs from the operand layout, so the compiler has to convert between
+# them. We can use some fields on the `AMDMFMALayout` to match these two
+# layouts.
 
 # %%
-# The first one is with `transposed=True`, each lane of the accumulator holds
-# 4 consecutive elements of a row instead of a column. This makes it closer to
-# the layout of operand A in the next MFMA, as both becomes row-major now.
+# The first one is `transposed=True`. With it, each lane of the accumulator
+# holds 4 consecutive elements of a row instead of a column. This makes it
+# closer to the layout of operand A in the next MFMA, as both become row-major.
 
 if __name__ == "__main__" and is_cdna4():
     acc_layout = gl.amd.AMDMFMALayout(  #
@@ -234,11 +235,11 @@ def test_mfma_chain():
 # All layouts shown above are for registers. Real kernels usually load the data
 # into shared memory with async copies first, and then copy it from shared
 # memory to registers. In Triton, this process is all handled by compiler
-# optimization. While in Gluon, the kernel can control how shared memory / LDS
-# is used.
+# optimization. In Gluon, the kernel can control how shared memory / LDS is
+# used.
 #
 # Similarly, Gluon needs extra layouts for LDS on AMD. These layouts determine
-# which LDS instructions the compiler uses. And also determines whether there
+# which LDS instructions the compiler uses. They also determine whether there
 # will be bank conflicts.
 #
 # On CDNA4, there are two kinds of LDS reads for MFMA operands. A regular read,
@@ -279,7 +280,7 @@ def mfma_smem_kernel(a_ptr, b_ptr, c_ptr,  #
     # Load data from shared memory to registers
     a = a_smem.load(gl.DotOperandLayout(0, mfma_layout, 8))
     if B_K_CONTIGUOUS:
-        # When B is K contiguous in shared memory, we need to permute
+        # When B is K-contiguous in shared memory, we need to permute
         # from [N, K] to [K, N] - this is a requirement for the `mfma` op.
         # The permutation itself is free. It only generates the ds_read
         # instructions without extra shuffles.
@@ -399,19 +400,19 @@ if __name__ == "__main__" and is_cdna4():
 # layout, we can let `vec` be `k_width`, and let `per_phase` be the
 # number of rows in one 256-byte line of banks, and `max_phase` be the
 # number of rows that a group reads divided by `per_phase`. For example, in our
-# 256x64 bf16 case, a row has 128 bytes which is 32 banks. So 2 rows can occupy
+# 256x64 bf16 case, a row has 128 bytes, which is 32 banks. So 2 rows can occupy
 # the full 64 banks. Therefore, we can set `per_phase=2`. And as we know
 # `ds_read_b128` has 16 lanes per group, and these lanes will read 16 different
-# rows (see above MFMA operand layout), so `max_phase` can be
+# rows (see the MFMA operand layout above), so `max_phase` can be
 # `16 / per_phase` = 8.
 #
 # For a padded layout, the heuristic is simpler. We just pad a fixed amount
 # after every row. The pad amount is the number of different columns that a
 # group reads. In our case, there are 64 elements per row, so we pad every
 # 64 elements. And one lane loads 8 elements at once, so that's 8 different
-# columns. Recall the group and operand layout, we have lanes 4-7 and
-# lane 12-15 on column 0-7, and lanes 20-23 and 24-27 on column 8-15, so that's
-# 16 different columns in total.
+# columns. Recall the group and operand layout, we have lanes 0-3 and 12-15 on
+# columns 0-7, and lanes 20-23 and 24-27 on columns 8-15, so that's 16 different
+# columns in total.
 
 if __name__ == "__main__" and is_cdna4():
     swizzled_layout = gl.SwizzledSharedLayout(  #
@@ -428,7 +429,7 @@ if __name__ == "__main__" and is_cdna4():
 # in the async copy tutorial, a load instruction has no shared memory address
 # for each lane, so the data it writes into shared memory needs to be
 # consecutive. This means we cannot add padding between the rows. You can see
-# the padded layout above fails to compile with async copies.
+# that the padded layout above fails to compile with async copies.
 
 
 @gluon.jit
@@ -458,25 +459,25 @@ if __name__ == "__main__" and is_cdna4():
 
 # %%
 # There is a trick to work around this. Instead of adding gaps within one load
-# instruction, we add them between instructions or across warps, given a tile
-# is composed of multiple instructions. And we can carefully shuffle elements
+# instruction, we add them between instructions or across warps, since a tile is
+# composed of multiple instructions. And we can carefully shuffle elements
 # across instructions to avoid bank conflicts.
 #
-# Still use our 256x64 tile and `k_width=8` example, and with `ds_read_b128`
-# for shared memory and `buffer_load_dwordx4 ... lds` for global memory. As we
-# can't pad inside one load instruction, we have to set the interval to be 512
-# which is 1KB, exactly the amount one `buffer_load_dwordx4 ... lds` writes.
-# Similar as before, consider one group of lanes will touch 16 columns, we can
-# still use padding amount to be 16. As the tile has 64 columns, with padding
-# amount 512 elements, we basically pad after every 8 rows. It still has bank
-# conflict, because lanes 0-3 and 20-23 still fall into these 8 rows together.
+# We still use our 256x64 tile and `k_width=8` example, with `ds_read_b128` for
+# shared memory and `buffer_load_dwordx4 ... lds` for global memory. As we can't
+# pad inside one load instruction, we have to set the interval to 512 values,
+# which is 1 KB, exactly the amount one `buffer_load_dwordx4 ... lds` writes. As
+# before, one group of lanes touches 16 columns, so we can still use a padding
+# amount of 16. As the tile has 64 columns, with an interval of 512 values, we
+# pad after every 8 rows. It still has bank conflicts, because lanes 0-3 and
+# 20-23 still fall into these 8 rows together.
 #
 # Next we need to reorder rows. As in our heuristics for padded layouts, we add
-# a padding after every row. The goal to shuffle rows it to achieve the exact
-# same pattern, by placing each row 1 KB apart, so that each of them will be
-# will be put into a new load instruction. And we will fill the rest of the rows
-# in a similar manner. After reordering, rows will be look like below. We still
-# pad every 8 rows, across the 1 KB boundary.
+# a padding after every row. The goal of shuffling the rows is to achieve the
+# exact same pattern, by placing each row 1 KB apart, so that each of them is
+# put into a new load instruction. And we will fill the rest of the rows in a
+# similar manner. After reordering, the rows look like this. We still pad every
+# 8 rows, across the 1 KB boundary.
 #
 # ```
 # row 000
@@ -513,9 +514,9 @@ def get_smem_layout_for_async_copies(shape, dtype):
 
     # Number of elements per row: [0, 1], [0, 2], [0, 4], ... [0, 32]
     col_bases = [[0, 2**i] for i in range(cols.bit_length() - 1)]
-    # Distribute 1 row from every 16 row slot: [16, 0], [32, 0], [64, 0]
+    # Distribute 1 row from every 16-row slot: [16, 0], [32, 0], [64, 0]
     row_bases = [[16 * 2**i, 0] for i in range(rows_per_copy.bit_length() - 1)]
-    # Fill remaining rows in the 16 row slot
+    # Fill remaining rows in the 16-row slot
     row_bases += [[1, 0], [2, 0], [4, 0], [8, 0]]
     # Fill the rest of rows
     row_bases += [[2**i, 0] for i in range((16 * rows_per_copy).bit_length() - 1, rows.bit_length() - 1)]
@@ -528,7 +529,7 @@ def get_smem_layout_for_async_copies(shape, dtype):
 
 # %%
 # The async copy has to write the rows in the same order. As `BlockedLayout`
-# can't describe this reordering, so we also build a linear layout for it:
+# can't describe this reordering, we also build a linear layout for it:
 
 
 @gluon.constexpr_function
@@ -557,9 +558,9 @@ if __name__ == "__main__" and is_cdna4():
     bank_conflicts_kernel[(1, )](a_layout, smem_layout, 0)
 
 # %%
-# Now we combine these features into a pipelined matmul kernel. To re-use all
-# optimization ideas we discussed so far, we only use 256x256x64 blocks and
-# 4 warps setting. But ideas here can be generalized to other block sizes.
+# Now we combine these features into a pipelined matmul kernel. To reuse all
+# optimization ideas we discussed so far, we only use 256x256x64 blocks and 4
+# warps. But ideas here can be generalized to other block sizes.
 
 
 @gluon.aggregate
@@ -690,11 +691,11 @@ def test_matmul_cdna4(M, N, K):
 
 # %%
 # MFMAs can only start after their operands are read from LDS. When a group of
-# LDS is issued, there is no need to wait for all of it to complete. One
-# technique we can use in Gluon is subtiling, which we split these LDS into
-# smaller groups and start MFMAs earlier. There are many ways to split the LDS
-# reads along M/N/K dimension. Here we will demonstrate how to split it along
-# K dimension.
+# LDS reads is issued, there is no need to wait for all of it to complete. One
+# technique we can use in Gluon is subtiling, where we split these LDS reads
+# into smaller groups and start MFMAs earlier. There are many ways to split the
+# LDS reads along the M, N or K dimension. Here we will demonstrate how to split
+# it along the K dimension.
 
 
 @gluon.jit
@@ -788,16 +789,16 @@ if __name__ == "__main__" and is_cdna4():
 # CDNA5 WMMA
 # ----------
 #
-# CDNA5 replaces MFMA with WMMA. Most of concepts and optimizations we
-# introduced above apply to WMMA, but with slight differences, especially given
-# CDNA5 is using warp size 32.
+# CDNA5 replaces MFMA with WMMA. Most of the concepts and optimizations we
+# introduced above apply to WMMA, but with slight differences, especially since
+# CDNA5 uses a warp size of 32.
 #
-# Similarly WMMA is exposed in Gluon as `wmma(a, b, acc)`. The accumulator and
+# Similarly, WMMA is exposed in Gluon as `wmma(a, b, acc)`. The accumulator and
 # the operands need specific layouts based on `AMDWMMALayout`. `AMDWMMALayout`
 # describes the placement of the warps in a different way - instead of
-# `warps_per_cta`, it uses linear layout's style bases, `warp_bases`. For
-# example `warp_bases=[[0, 1], [1, 0]]` is equivalent to `warps_per_cta=[2, 2]`
-# in `AMDWMMALayout`
+# `warps_per_cta`, it uses linear-layout-style bases, `warp_bases`. For example
+# `warp_bases=[[0, 1], [1, 0]]` is equivalent to `warps_per_cta=[2, 2]` in
+# `AMDMFMALayout`.
 
 if __name__ == "__main__" and is_cdna5():
     wmma_layout = gl.amd.AMDWMMALayout(  #
@@ -865,11 +866,11 @@ def test_wmma(M, N, K, warp_bases):
 # lanes per warp, `ds_load_b128` can be served in 2 groups instead of 4 now.
 #
 # Moreover, as mentioned before, async copies also changed on CDNA5. On CDNA4,
-# an async copy can only writes to consecutive LDS addresses for lanes in a
-# warp. On CDNA5, an async copy takes a shared memory address for each
-# lane, so it no longer has this requirement. This makes it easier to use the
-# padded layouts. Moreover, CDNA5 also adds TDM, makes copies a lot easier.
-# There is no need to consider the layout details for global memory any more.
+# an async copy can only write to consecutive LDS addresses for lanes in a warp.
+# On CDNA5, an async copy takes a shared memory address for each lane, so it no
+# longer has this requirement. This makes it easier to use the padded layouts.
+# CDNA5 also adds TDM, which makes copies a lot easier. There is no need to
+# consider the layout details for global memory anymore.
 
 
 @gluon.jit
@@ -927,10 +928,10 @@ if __name__ == "__main__" and is_cdna5():
 # %%
 # When using TDM, we still need to consider bank conflicts. TDM only supports
 # padding but not swizzling on CDNA5, and it adds the padding on the fly while
-# it writes the tile. We can use the similar heuristics as on CDNA4 to decide
-# the padded layout. The interval stays one row of 64 values. For the amount, we
-# can count the different columns that a group reads as well. On CDNA5, a group
-# has 16 consecutive lanes, all read columns 0-7, so the amount can be set to 8.
+# it writes the tile. We can use similar heuristics as on CDNA4 to decide the
+# padded layout. The interval stays one row of 64 values. For the amount, we can
+# count the different columns that a group reads as well. On CDNA5, a group has
+# 16 consecutive lanes, which all read columns 0-7, so the amount can be 8.
 
 if __name__ == "__main__" and is_cdna5():
     padded_layout = gl.PaddedSharedLayout.with_identity_for(  #
@@ -941,9 +942,9 @@ if __name__ == "__main__" and is_cdna5():
 
 # %%
 # Only considering bank conflicts on CDNA5 is not enough. Another new aspect of
-# conflicts on LDS is "partition conflict". On CDNA5, a WGP has 4 SIMDs, which
-# are the units that run the warps. Warp `i` runs on SIMD `i % 4`, and the 4
-# SIMDs work in two pairs, SIMDs 0 and 2, and SIMDs 1 and 3. Each pair has its
+# conflicts on LDS is the "partition conflict". On CDNA5, a WGP has 4 SIMDs,
+# which are the units that run the warps. Warp `i` runs on SIMD `i % 4`, and the
+# 4 SIMDs work in two pairs, SIMDs 0 and 2, and SIMDs 1 and 3. Each pair has its
 # own port into the LDS.
 #
 # Behind the ports, the 320 KB of LDS consists of 5 physical partitions of
@@ -952,10 +953,10 @@ if __name__ == "__main__" and is_cdna5():
 # the LDS bandwidth.
 #
 # The simple `warp_bases=[[0, 1], [1, 0]]` layout runs into this problem, where
-# warp 0 and 1 sit on different SIMD pairs but load tiles of the same row,
+# warps 0 and 1 sit on different SIMD pairs but load tiles of the same row,
 # which live in the same partition. Let's say we split A by rows A0 and A1. So
-# we can see here W0 and W1 both access the same A0 from 2 SIMD pairs. Same
-# issue happens for B as well.
+# we can see here W0 and W1 both access the same A0 from 2 SIMD pairs. B has no
+# such issue, because warps 0 and 2, which read B0, are on the same pair.
 #
 # ```
 #     B0  B1
@@ -964,11 +965,12 @@ if __name__ == "__main__" and is_cdna5():
 # ```
 #
 # To avoid it, the two SIMD pairs must read different rows of A and B, and these
-# rows must also sit in different partitions. We can further split A0 rows into
-# 2 halves, A00 and A01, as well as A1. Here we have 4 splits of A, and we can
-# arrange them shown below, where each step, W0 and W1 access different halves
-# of A. Apart from this splitting, A0 and A1 will still needs to be placed in
-# partitioned, which is handled by the compiler's shared memory allocator.
+# rows must also sit in different partitions. We can further split A0 into two
+# halves, A00 and A01, and A1 into A10 and A11. Here we have 4 splits of A, and
+# we can arrange them as shown below, where in each step, the two SIMD pairs
+# access different halves of A. Apart from this splitting, A0 and A1 still need
+# to be placed in different partitions, which is handled by the compiler's
+# shared memory allocator.
 #
 # ```
 #      step 1    step 2

@@ -207,16 +207,12 @@ if __name__ == "__main__":
 # instruction takes a 32-bit offset in one VGPR, `v25`, the descriptor in
 # `s[16:19]`, and `soffset` in `s4`.
 #
-# For masked global load, the compiler has to generate a branch for each load
+# For masked global loads, the compiler has to generate a branch for each load
 # instruction to check if the addresses are in bounds. That's why many branches
-# appear in the generated assembly code. However in the buffer version, the
-# bounds check is done natively by the hardware so all most of the branches are
-# eliminated.
+# appear in the generated assembly code. However, in the buffer version, the
+# bounds check is done natively by the hardware, so almost all of the branches
+# are eliminated.
 #
-
-# %%
-# Next, we measure the bandwidth of the two kernels on an MI355X GPU.
-
 
 def get_throughput(ms, C):
     tbytes = 3 * C.numel() * C.element_size() / 1e12
