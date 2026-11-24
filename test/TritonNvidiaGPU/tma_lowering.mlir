@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering | FileCheck %s --check-prefixes=CHECK,STORE
+// RUN: triton-opt %s -split-input-file --triton-nvidia-tma-lowering --allocate-shared-memory --triton-nvidia-gpu-proxy-fence-insertion | FileCheck %s --check-prefixes=STORE,FENCE
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
@@ -55,10 +56,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-// CHECK-LABEL: tma_store
-//       CHECK: ttg.local_alloc {{.*}} -> !ttg.memdesc<128x256xf32, #shared, #smem>
-//       CHECK: ttng.fence_async_shared {bCluster = false}
-//       CHECK: ttng.async_tma_copy_local_to_global
+// STORE-LABEL: tma_store
+//       STORE: [[SRC:%.*]] = ttg.local_alloc {{.*}} -> !ttg.memdesc<128x256xf32, #shared, #smem>
+//       FENCE-NEXT: ttng.fence_async_shared {bCluster = false}
+//       STORE-NEXT: ttng.async_tma_copy_local_to_global
+//       STORE-NEXT: ttng.async_tma_store_wait {pendings = 0 : i32} deps [[SRC]]
   tt.func public @tma_store(%arg0: !tt.tensordesc<128x256xf32, #nvmma_128>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
     tt.descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<128x256xf32, #nvmma_128>, tensor<128x256xf32, #blocked>
     tt.return
@@ -91,10 +93,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
-// CHECK-LABEL: tma_reduce
-//       CHECK: ttg.local_alloc {{.*}} -> !ttg.memdesc<128x256xf32, #shared, #smem>
-//       CHECK: ttng.fence_async_shared {bCluster = false}
-//       CHECK: ttng.async_tma_reduce add
+// STORE-LABEL: tma_reduce
+//       STORE: ttg.local_alloc {{.*}} -> !ttg.memdesc<128x256xf32, #shared, #smem>
+//       FENCE-NEXT: ttng.fence_async_shared {bCluster = false}
+//       STORE-NEXT: ttng.async_tma_reduce add
   tt.func public @tma_reduce(%arg0: !tt.tensordesc<128x256xf32, #nvmma_128>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
     tt.descriptor_reduce add, %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<128x256xf32, #nvmma_128>, tensor<128x256xf32, #blocked>
     tt.return
@@ -124,12 +126,12 @@ tt.func @tma_gather(%arg0: !tt.tensordesc<1x128xbf16, #nvmma_128>, %arg1: tensor
   tt.return %0 : tensor<32x128xbf16, #blocked1>
 }
 
-// CHECK-LABEL: @tma_scatter
+// STORE-LABEL: @tma_scatter
 tt.func @tma_scatter(%arg0: !tt.tensordesc<1x128xbf16, #nvmma_128>, %arg1: tensor<32xi32, #offsets>, %arg2: i32, %arg3: tensor<32x128xbf16, #blocked1>) {
-  // CHECK-NEXT: [[SRC:%.*]] = ttg.local_alloc %arg3
-  // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
-  // CHECK-NEXT: ttng.async_tma_scatter %arg0[%arg1, %arg2] [[SRC]]
-  // CHECK-NEXT: ttng.async_tma_store_wait {pendings = 0 : i32}
+  // STORE-NEXT: [[SRC:%.*]] = ttg.local_alloc %arg3
+  // FENCE-NEXT: ttng.fence_async_shared {bCluster = false}
+  // STORE-NEXT: ttng.async_tma_scatter %arg0[%arg1, %arg2] [[SRC]]
+  // STORE-NEXT: ttng.async_tma_store_wait {pendings = 0 : i32}
   tt.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<1x128xbf16, #nvmma_128>, tensor<32xi32, #offsets>, i32, tensor<32x128xbf16, #blocked1>
   tt.return
 }

@@ -7,7 +7,9 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -2772,7 +2774,9 @@ struct AsyncTDMIntrinsicWaitConversion
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     ROCDL::WaitTensorcntOp::create(rewriter, loc, op.getCount());
-    rewriter.eraseOp(op);
+    // ROCDL::WaitTensorcntOp produces no value, but the result AsyncToken may
+    // still have uses, so replace it with a dummy instead of erasing the op.
+    rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
 };

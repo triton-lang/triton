@@ -188,6 +188,11 @@ bool hasCrossCTAScratch(Operation *op) {
   }
   if (auto reduce = dyn_cast<ReduceOp>(op))
     return !ReduceOpHelper(reduce).isReduceWithinCTA();
+  if (auto scan = dyn_cast<ScanOp>(op)) {
+    auto ty = scan.getInputTypes().front();
+    return gpu::getCTASplitNum(ty.getEncoding(),
+                               ty.getShape())[scan.getAxis()] > 1;
+  }
   if (auto histogram = dyn_cast<HistogramOp>(op)) {
     auto block = StringAttr::get(op->getContext(), "block");
     auto layout = gpu::toLinearLayout(histogram.getSrc().getType());
@@ -342,9 +347,6 @@ private:
         for (auto alloc : info.getAllocs()) {
           if (allocation->valueBuffer.contains(alloc))
             allocation->addAlias(value, alloc);
-          else if (auto argument = dyn_cast<BlockArgument>(alloc);
-                   argument && argument.getOwner()->getParentOp() == operation)
-            allocation->argumentAliases[value].insert(argument.getArgNumber());
         }
       }
     }

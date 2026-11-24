@@ -8,7 +8,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-using ::mlir::triton::gpu::BlockedEncodingAttr;
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);

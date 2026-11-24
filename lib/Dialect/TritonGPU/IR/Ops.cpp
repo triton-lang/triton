@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/DebugStringHelper.h"
@@ -1755,6 +1756,20 @@ ParseResult BarrierOp::parse(OpAsmParser &parser, OperationState &result) {
 LogicalResult BarrierOp::verify() {
   if (isWarp() && getAddrSpace() != AddrSpace::Local)
     return emitOpError("warp scope supports only the local address space");
+  return success();
+}
+
+LogicalResult WarpIdOp::canonicalize(WarpIdOp op, PatternRewriter &rewriter) {
+  if (maybeLookupNumWarps(op) != 1)
+    return failure();
+  auto func = op->getParentOfType<FunctionOpInterface>();
+  if (!func)
+    return failure();
+  Operation *zero = func->getDialect()->materializeConstant(
+      rewriter, rewriter.getI32IntegerAttr(0), op.getType(), op.getLoc());
+  if (!zero)
+    return failure();
+  rewriter.replaceOp(op, zero->getResults());
   return success();
 }
 

@@ -190,11 +190,29 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    rewriter.setInsertionPoint(op);
-    Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
-                            ifOp.getCondition(), pred);
-    ifOp.getConditionMutable().assign(cnd);
-    return op;
+    auto isPureRegion = [](Region &region) {
+      return region.empty() ||
+             llvm::all_of(region.front().without_terminator(),
+                          [](Operation &op) { return isPure(&op); });
+    };
+    bool elseIsPure = isPureRegion(ifOp.getElseRegion());
+    if (elseIsPure || isPureRegion(ifOp.getThenRegion())) {
+      rewriter.setInsertionPoint(op);
+      Value cnd = ifOp.getCondition();
+      if (elseIsPure) {
+        // We can execute the else branch whenever cond && pred is false
+        cnd = getPredMask(rewriter, cnd.getType(), cnd, pred);
+      } else {
+        // We can execute the then branch whenever cond || !pred is true
+        Value vTrue =
+            arith::ConstantIntOp::create(rewriter, op->getLoc(), 1, 1);
+        Value inactivePred =
+            arith::XOrIOp::create(rewriter, op->getLoc(), pred, vTrue);
+        cnd = arith::OrIOp::create(rewriter, op->getLoc(), cnd, inactivePred);
+      }
+      ifOp.getConditionMutable().assign(cnd);
+      return op;
+    }
   }
   if (auto predicatedOp = dyn_cast<tt::PredicatedOpInterface>(op)) {
     rewriter.setInsertionPoint(op);

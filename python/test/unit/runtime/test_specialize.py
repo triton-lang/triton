@@ -1,3 +1,4 @@
+import builtins
 import numpy
 import pytest
 import torch
@@ -159,6 +160,29 @@ def gluon_tensordescriptors_to_specialize():
             layout=NVMMASharedLayout(0, tensor.dtype.itemsize * 8, len(tensor.shape)),
         ) for tensor in tensors_to_specialize() if tensor.shape[-1] % 16 == 0 and tensor.dtype.itemsize <= 4
     ]
+
+
+def test_hip_pointer_range_without_importing_torch(monkeypatch):
+
+    class Tensor:
+
+        def untyped_storage(self):
+            pytest.fail("Only torch.Tensor storage should be inspected")
+
+    tensor = torch.empty(2**31 - 1, dtype=torch.uint8, device="meta")
+    large_storage_view = torch.empty(2**31, dtype=torch.uint8, device="meta")[:1]
+    parameter = torch.nn.Parameter(torch.empty(1))
+    original_import = builtins.__import__
+
+    def forbid_torch(name, *args, **kwargs):
+        assert name != "torch" and not name.startswith("torch."), "HIP specialization imported torch"
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", forbid_torch)
+    assert not HIPBackend.is_within_2gb(Tensor())
+    assert HIPBackend.is_within_2gb(tensor)
+    assert not HIPBackend.is_within_2gb(large_storage_view)
+    assert HIPBackend.is_within_2gb(parameter)
 
 
 def test_specialize_gluon_fp4_descriptor_without_active_target(monkeypatch):

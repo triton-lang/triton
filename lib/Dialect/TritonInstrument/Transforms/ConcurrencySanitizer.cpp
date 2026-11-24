@@ -1,4 +1,5 @@
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
@@ -473,7 +474,8 @@ bool canInitializeAllocation(Value alloc) {
 uint16_t getBlockBroadcastMask(Value alloc) {
   auto allocTy = cast<ttg::MemDescType>(alloc.getType());
   auto kBlock = StringAttr::get(alloc.getContext(), "block");
-  return toLinearLayout(allocTy).getFreeVariableMasks().lookup(kBlock);
+  return toLinearLayoutIgnoringPadding(allocTy).getFreeVariableMasks().lookup(
+      kBlock);
 }
 
 Value createCTABitset(ImplicitLocOpBuilder &b, uint32_t pattern,
@@ -765,6 +767,12 @@ Value getMemEffectCTAs(ImplicitLocOpBuilder &b, Operation *op) {
     }
     return getLocalMemoryRecipientCTAs(b, messageToShared, broadcastMask);
   }
+  if (auto bulk = dyn_cast<ttng::AsyncBulkCopyGlobalToLocalOp>(op)) {
+    if (bulk.getMulticast())
+      return getRecipientCTAsForBroadcastMasks(
+          b, {getBlockBroadcastMask(bulk.getResult())});
+    return currentCTAMask(b);
+  }
   if (isa<ttng::CLCTryCancelOp>(op))
     return allCTAsMask(b);
   if (isa<ttng::MMAv5OpInterface, ttng::TMEMCopyOp>(op))
@@ -826,7 +834,7 @@ Value getBarrierRecipientCTAs(ImplicitLocOpBuilder &b, Operation *op) {
   }
   if (auto arriveOp = dyn_cast<ttng::AsyncCopyMbarrierArriveOp>(op))
     return getLeaderCTA(b, arriveOp.getBarrier());
-  if (auto tmaLoad = dyn_cast<ttng::TMALoadLikeOpInterface>(op)) {
+  if (auto tmaLoad = dyn_cast<ttng::AsyncLoadOpInterface>(op)) {
     if (tmaLoad.getMulticast())
       return getMulticastBarrierRecipientCTAs(b, tmaLoad.getResult(),
                                               tmaLoad.getBarrier());
@@ -880,12 +888,44 @@ public:
     b.setInsertionPointToStart(&entryPoint.getBody().front());
     if (failed(instrumentMemoryOperations(b, funcBuilder)))
       return failure();
+    markSingleCTALocks();
     auxData.createStartupClusterBarrier(hooks);
     initializeAllocations();
     return success();
   }
 
 private:
+  void markSingleCTALocks() {
+    if (ttg::lookupNumCTAs(module) != 1)
+      return;
+
+    // The shadow lock is allocated per program. With one CTA, each captured
+    // pointer still refers to that CTA's lock. Worker partitions can contend
+    // with each other, while async engines never acquire the shadow lock.
+    auto markLock = [&](auto lock) {
+      Operation *op = lock.getOperation();
+      // Warp groups join at the end of warp_specialize. In the entry function
+      // only the default group runs outside those regions. A private helper
+      // may still run on a worker. Preserve the explicit initialization store
+      // whenever a subsequent worker can acquire the lock.
+      bool defaultGroupOnly = op->getParentOfType<tt::FuncOp>() == entryPoint &&
+                              !op->getParentOfType<ttg::WarpSpecializeOp>() &&
+                              op != auxData.lockInitialization;
+      if (auxData.threadLayout.numBaseThreads == 1 || defaultGroupOnly)
+        lock.setUncontended(true);
+      else
+        lock.setCtaLocal(true);
+    };
+    for (const auto &entry : auxData.lock.values) {
+      for (Operation *user : entry.second.value.getUsers()) {
+        if (auto acquire = dyn_cast<tti::ExperimentalLockAcquireOp>(user))
+          markLock(acquire);
+        else if (auto release = dyn_cast<tti::ExperimentalLockReleaseOp>(user))
+          markLock(release);
+      }
+    }
+  }
+
   bool isCTALocalScratch(Operation *op) const {
     if (!op->hasAttr("allocation.size"))
       return true;
@@ -919,7 +959,8 @@ private:
         }
         if (func == entryPoint)
           return WalkResult::advance();
-        if (isa<CallOpInterface>(op))
+        // Bulk prefetch only changes L2 residency and has no ConSan state.
+        if (isa<CallOpInterface, ttng::PrefetchBulkOp>(op))
           return WalkResult::advance();
 
         bool hasUnsupportedAllocation =
@@ -1008,15 +1049,25 @@ private:
 
   LogicalResult instrumentMemoryOperations(ImplicitLocOpBuilder &b,
                                            tti::FunctionBuilder &funcBuilder) {
-    SmallVector<ttng::ClusterBarrierOp> clusterBarriers;
-    WalkResult walkResult = entryPoint.walk([&](Operation *op) -> WalkResult {
-      CriticalSectionListener listener;
-      b.setListener(&listener);
-
+    for (auto [op, stages] : auxData.operations) {
       int thread = getCurrentThread(op, hooks, auxData.threadLayout);
       int baseThread = getBaseThread(thread, auxData.threadLayout);
+      auto rendezvous = [&] {
+        bool partitionScoped =
+            static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
+        funcBuilder.createClusterBarrierRendezvousCall(
+            b, auxData.getClusterBarrierSlot(op), baseThread,
+            getThreadPeersMask(baseThread, auxData.threadLayout),
+            partitionScoped, /*publishVisibility=*/stages.hasBarrier(), op);
+      };
       b.setLoc(op->getLoc());
       b.setInsertionPoint(op);
+      // A relaxed cluster barrier participates in deadlock detection only.
+      if (stages.beforeMemoryEffects || isa<ttng::ClusterBarrierOp>(op))
+        rendezvous();
+
+      CriticalSectionListener listener;
+      b.setListener(&listener);
       if (isa<ttg::LocalAllocOp, ttng::TMEMAllocOp>(op)) {
         // Place insert point after specific ops:
         // allocs - we want to
@@ -1032,12 +1083,12 @@ private:
         b.setListener(nullptr);
         instrumentBarrierWait(op, info->alloc, info->phase, info->pred, thread,
                               baseThread, funcBuilder);
-        return WalkResult::advance();
+        continue;
       }
 
       if (failed(instrumentMemEffects(b, op, thread, funcBuilder))) {
         b.setListener(nullptr);
-        return WalkResult::interrupt();
+        return failure();
       }
       b.setLoc(op->getLoc());
       if (auto info = hooks.getAsyncProxyFenceInfo(op)) {
@@ -1137,11 +1188,6 @@ private:
             asyncWaitOp.getNum(), nullptr, CommitKind::AsyncCp,
             MemType::SHARED_MEM, op);
       }
-      if (auto clusterBarrier = dyn_cast<ttng::ClusterBarrierOp>(op)) {
-        if (!llvm::is_contained(auxData.internalClusterBarriers, op))
-          clusterBarriers.push_back(clusterBarrier);
-      }
-
       if (isa<ttg::WarpYieldOp, ttg::WarpReturnOp>(op) &&
           !auxData.activeMasks.empty()) {
         auto wsOp = op->getParentOfType<ttg::WarpSpecializeOp>();
@@ -1180,27 +1226,18 @@ private:
 
       listener.maybeWrapWithCriticalSection(b, auxData, nullptr);
       b.setListener(nullptr);
+      if (stages.betweenMemoryEffects) {
+        // ConSan has published the local scratch write. Lowering synchronizes
+        // it before the peer reads.
+        b.setInsertionPoint(op);
+        rendezvous();
+      }
+      if (stages.afterMemoryEffects) {
+        b.setInsertionPointAfter(op);
+        rendezvous();
+      }
       if (auto scatter = dyn_cast<ttg::LocalScatterOp>(op))
         instrumentLocalScatter(b, scatter, funcBuilder);
-      return WalkResult::advance();
-    });
-    if (walkResult.wasInterrupted())
-      return failure();
-
-    // Cluster rendezvous polling introduces control-flow blocks, so add it
-    // after the operation walk rather than invalidating the walk iterators.
-    for (ttng::ClusterBarrierOp clusterBarrier : clusterBarriers) {
-      Operation *op = clusterBarrier.getOperation();
-      int thread = getCurrentThread(op, hooks, auxData.threadLayout);
-      int baseThread = getBaseThread(thread, auxData.threadLayout);
-      bool partitionScoped =
-          static_cast<bool>(op->getParentOfType<ttg::WarpSpecializeOp>());
-      b.setLoc(op->getLoc());
-      b.setInsertionPoint(op);
-      funcBuilder.createClusterBarrierRendezvousCall(
-          b, auxData.getClusterBarrierSlot(op), baseThread,
-          getThreadPeersMask(baseThread, auxData.threadLayout), partitionScoped,
-          /*publishVisibility=*/!clusterBarrier.getRelaxed(), op);
     }
     return success();
   }
@@ -1214,8 +1251,7 @@ private:
         ttg::lookupNumCTAs(scatter) > 1 && hooks.supportsCrossCTASharedMemory();
     auto synchronize = [&] {
       if (crossCTA) {
-        SmallVector<Operation *> barriers = hooks.createInitClusterBarrier(b);
-        llvm::append_range(auxData.internalClusterBarriers, barriers);
+        hooks.createInitClusterBarrier(b);
       } else {
         ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::Local);
       }
@@ -1570,8 +1606,10 @@ private:
         if (opInfo->trackingKind ==
             MemEffectsOpInfo::TrackingKind::CommitCount) {
           assert(memType == MemType::SHARED_MEM);
-          if (effect.rw == RW::Write && auxData.hasAsyncCopyMbarriers &&
-              opInfo->commitKind == CommitKind::AsyncCp)
+          if (effect.rw == RW::Write &&
+              opInfo->commitKind == CommitKind::AsyncCp &&
+              (auxData.hasAsyncCopyMbarriers ||
+               auxData.hasAsyncProxyFenceTracking))
             funcBuilder.createPublishWriteVisibilityCall(
                 b, bufferMask, 0, pred, memType, op, effectCTAs);
           funcBuilder.createStageAccessForCommitCall(

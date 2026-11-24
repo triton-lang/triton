@@ -553,7 +553,11 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Region *entryRegion = &entryPoint.getBody();
 
   int numMBarriers = barrierRegions.size();
-  entryPoint.walk([&](ClusterBarrierOp op) {
+  entryPoint.walk([&](Operation *op) {
+    BarrierStages stages = hooks.getClusterBarrierStages(op);
+    operations.emplace_back(op, stages);
+    if (!stages.hasBarrier() && !isa<ClusterBarrierOp>(op))
+      return;
     Region *group = getClusterBarrierGroupRegion(op);
     clusterBarrierSlots.try_emplace(group,
                                     numMBarriers + clusterBarrierSlots.size());
@@ -698,6 +702,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Value isCTA0 =
       arith::CmpIOp::create(b, arith::CmpIPredicate::eq, ctaId, zero);
   auto lockRelease = ExperimentalLockReleaseOp::create(b, lockVal, isCTA0);
+  lockInitialization = lockRelease;
   if (numCTAs > 1)
     startupClusterBarrierAnchor = lockRelease;
   else

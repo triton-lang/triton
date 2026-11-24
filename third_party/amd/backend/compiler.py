@@ -309,10 +309,10 @@ def is_async_copy_enabled(base_arch):
     return (base_arch in ["gfx950", "gfx1250"]) if knobs.amd.use_async_copy is None else knobs.amd.use_async_copy
 
 
-def is_coexec_scheduler_enabled(arch):
+def is_coexec_scheduler_enabled(base_arch):
     if knobs.amd.use_coexec_scheduler is not None:
         return knobs.amd.use_coexec_scheduler
-    return arch == "gfx1250"
+    return base_arch == "gfx1250"
 
 
 def is_expert_scheduling_enabled(base_arch):
@@ -526,27 +526,14 @@ class HIPBackend(BaseBackend):
         amd.load_dialects(ctx)
         instrument(ctx, point="load-dialects")
 
-    # is_within_2gb() needs to check for a torch subobject and this var tracks torch
-    # availability state: None - not tested, True - torch is present. Anything else -
-    # no torch available. First call to is_within_2gb() checks torch availability
-    # and caches it.
-    _torch_available: None | bool = None
-
     @staticmethod
     def is_within_2gb(arg):
-        if HIPBackend._torch_available is None:
-            try:
-                import torch
-                HIPBackend._torch_available = True
-            except ImportError:
-                HIPBackend._torch_available = False
-        elif HIPBackend._torch_available:
-            import torch
-
         MAX_INT_32 = 2**31 - 1
         if hasattr(arg, "ptr_range"):
             return arg.ptr_range() <= MAX_INT_32
-        if HIPBackend._torch_available and isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
+        # Recognize torch.Tensor subclasses without importing torch during compilation.
+        is_torch_tensor = any(cls.__module__ == "torch" and cls.__qualname__ == "Tensor" for cls in type(arg).__mro__)
+        if is_torch_tensor and hasattr(arg, "untyped_storage"):
             return arg.untyped_storage().size() <= MAX_INT_32
         return False
 
@@ -792,7 +779,7 @@ class HIPBackend(BaseBackend):
         if options.waves_per_eu != 0:
             kernel_fn.add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu},{options.waves_per_eu}")
 
-        if is_coexec_scheduler_enabled(options.arch) and options.num_warps <= 4:
+        if is_coexec_scheduler_enabled(options.base_arch) and options.num_warps <= 4:
             kernel_fn.add_fn_attr("amdgpu-sched-strategy", "coexec")
 
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"

@@ -421,7 +421,7 @@ void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   Value mask;
   for (uint16_t broadcastBits : ttng::getCTABroadcastMasks(twoCTAs, descs)) {
     Value descMask =
-        LLVM::NVIDIA::createTMAMulticastMask(loc, rewriter, broadcastBits);
+        LLVM::NVIDIA::createMulticastMask(loc, rewriter, broadcastBits);
     mask = mask ? b.or_(descMask, mask) : descMask;
   }
 
@@ -506,13 +506,12 @@ LogicalResult convertDotImpl(const LLVMTypeConverter &typeConverter,
 
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
-  Value warpId = mlir::triton::gpu::WarpIdOp::create(rewriter, loc);
-  Value isWarp0 = tb.icmp_eq(warpId, tb.i32_val(0));
+  Value warpId = triton::gpu::WarpIdOp::create(rewriter, loc);
+  pred = tb.and_(pred, tb.icmp_eq(warpId, tb.i32_val(0)));
   if (twoCTAs) {
     Value cluster0 = LLVM::NVIDIA::createLeadCTAPredicate(loc, rewriter);
     pred = tb.and_(pred, cluster0);
   }
-  pred = tb.and_(pred, isWarp0);
 
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();
@@ -859,7 +858,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
   Value baseScaleB = tb.ptrtoint(i32_ty, adaptor.getBScale());
   SmallVector<Value> commitDescs = op.getCompletionDescs();
   bool useK96 =
-      targetFeatures.supportsK96Tcgen05MMA() && twoCTAs && opKindIsMXFP4 &&
+      targetFeatures.supportsK96Tcgen05MMA() && opKindIsMXFP4 &&
       !hasFp4PaddedOperand && blockK % 256 == 0 &&
       isa<SharedMemorySpaceAttr>(aTensorTy.getMemorySpace()) &&
       ttng::getNvmmaSmemAttrs(aTensorTy)->swizzlingByteWidth == 128 &&
@@ -868,7 +867,7 @@ LogicalResult convertScaledDot(const LLVMTypeConverter &typeConverter,
       // Repeated MN tiles or subviews must not interleave unrelated words.
       ttng::getTMemSubSliceOffset(op.getAScale().getType(), 4, 1) == 4 &&
       ttng::getTMemSubSliceOffset(op.getBScale().getType(), 4, 1) ==
-          std::max(2u, mmaSizeN / 32);
+          std::max(twoCTAs ? 2u : 4u, mmaSizeN / 32);
   if (useK96) {
     // K96 tiles must come in pairs to leave a K64-aligned remainder.
     int numK96 = 2 * (blockK / 192);

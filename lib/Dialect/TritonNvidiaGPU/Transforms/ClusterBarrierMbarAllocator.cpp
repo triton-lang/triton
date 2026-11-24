@@ -5,7 +5,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/MathExtras.h"
 
 namespace mlir {
@@ -41,36 +40,56 @@ void runClusterBarrierMbarAllocator(ModuleOp mod) {
     return;
   triton::FuncOp kernel = *kernelIt;
 
+  auto launches = kernel.getOps<gpu::WarpSpecializeOp>();
+  if (launches.empty()) {
+    mod->removeAttr(kWSClusterBarrierCountAttrName);
+    return;
+  }
+
   auto sharedAttr = mod->getAttrOfType<IntegerAttr>("ttg.shared");
   int64_t shared = sharedAttr ? sharedAttr.getInt() : 0;
-  int64_t nextOffset = llvm::alignTo(shared, int64_t{8});
-  DenseMap<Region *, IntegerAttr> regionOffsets;
+  int64_t base = llvm::alignTo(shared, int64_t{8});
   Builder builder(mod.getContext());
+  auto assignSlot = [&](Region &region, unsigned slot) {
+    bool used = false;
+    region.walk([&](Operation *op) {
+      if (!needsClusterBarrier(op))
+        return;
+      int64_t offset = base + slot * kClusterBarrierMbarAllocationSize;
+      op->setAttr(kClusterBarrierMbarOffsetAttrName,
+                  builder.getI32IntegerAttr(offset));
+      used = true;
+    });
+    return used;
+  };
 
-  kernel.walk([&](Operation *op) {
-    if (!needsClusterBarrier(op))
-      return;
-    if (!op->getParentOfType<gpu::WarpSpecializeOp>())
-      return;
-    Region *region = op->getParentRegion();
-    while (!isa<gpu::WarpSpecializeOp, gpu::WarpSpecializePartitionsOp>(
-        region->getParentOp()))
-      region = region->getParentOp()->getParentRegion();
+  // Callees add the calling role's slot index to the base during lowering.
+  bool calleeNeedsSlot = false;
+  for (triton::FuncOp fn : funcs)
+    if (fn != kernel)
+      calleeNeedsSlot |= assignSlot(fn.getBody(), 0);
 
-    auto [it, inserted] = regionOffsets.try_emplace(region);
-    if (inserted) {
-      it->second = builder.getI32IntegerAttr(nextOffset);
-      nextOffset += kClusterBarrierMbarAllocationSize;
+  // The default role also calls functions outside of warp specialization.
+  unsigned count = calleeNeedsSlot ? 1 : 0;
+  for (auto ws : launches) {
+    SmallVector<Region *> roles{&ws.getDefaultRegion()};
+    llvm::append_range(roles, ws.getPartitionRegions());
+    for (auto [index, role] : llvm::enumerate(roles)) {
+      unsigned slot = calleeNeedsSlot ? index : count;
+      if (assignSlot(*role, slot) ||
+          (calleeNeedsSlot && !role->getOps<CallOpInterface>().empty()))
+        count = std::max(count, slot + 1);
     }
-    op->setAttr(kClusterBarrierMbarOffsetAttrName, it->second);
-  });
+  }
 
-  if (regionOffsets.empty())
+  if (!count)
     mod->removeAttr(kWSClusterBarrierCountAttrName);
   else {
     mod->setAttr(kWSClusterBarrierCountAttrName,
-                 builder.getI32IntegerAttr(regionOffsets.size()));
-    mod->setAttr("ttg.shared", builder.getI32IntegerAttr(nextOffset));
+                 builder.getI32IntegerAttr(count));
+    mod->setAttr("ttg.shared",
+                 builder.getI32IntegerAttr(
+                     base + count * kClusterBarrierMbarAllocationSize));
   }
 }
 

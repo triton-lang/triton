@@ -4,36 +4,19 @@
 #include <array>
 
 #include "mlir/Analysis/DataFlowFramework.h"
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir {
 
+namespace triton::gpu {
+class ConvertLayoutOp;
+} // namespace triton::gpu
+
 // Match zero-filled storage: negative floating-point zero must be preserved.
-inline bool isZeroFillConst(Value v) {
-  if (auto splat = v.getDefiningOp<triton::SplatOp>())
-    return isZeroFillConst(splat.getSrc());
-  if (auto bitcast = v.getDefiningOp<triton::BitcastOp>())
-    return isZeroFillConst(bitcast.getSrc());
-  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constantOp)
-    return false;
-  if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
-    return attr.getValue().isZero();
-  if (auto attr = dyn_cast<FloatAttr>(constantOp.getValueAttr()))
-    return attr.getValue().bitcastToAPInt().isZero();
-  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() &&
-           denseAttr.getSplatValue<APFloat>().bitcastToAPInt().isZero();
-  if (auto denseAttr =
-          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
-    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
-  return false;
-}
+bool isZeroFillConst(Value v);
 
 // Callback to allow backends to specify a target-specific getter for scratch
 // elements.
@@ -70,9 +53,7 @@ public:
     MaxUI,
   };
 
-  explicit ReduceOpHelper(triton::ReduceOp op)
-      : op(op), srcTy(op.getInputTypes().front()), srcShape(srcTy.getShape()),
-        srcEncoding(srcTy.getEncoding()), axis(op.getAxis()) {}
+  explicit ReduceOpHelper(triton::ReduceOp op);
 
   RankedTensorType getSrcTy() { return srcTy; }
 
@@ -122,12 +103,12 @@ private:
 // warp-local totals.
 //
 // Segment: a contiguous range along the scan axis owned by one thread or warp.
-// Total layout: maps registers, lanes, and warps to segment indices along the
-// scan axis, preserving coordinates for independent scans.
+// Total layout: maps registers, lanes, warps, and CTAs to segment indices
+// along the scan axis, preserving coordinates for independent scans.
 // Scan layout: ownership used to accumulate totals within a warp. The
 // intra-warp scan layout places low axis bits in registers before lanes. The
 // inter-warp scan layout replicates each full totals sequence across its
-// participating warps.
+// participating warps and CTAs.
 //
 // Example: forward sum of x0..x31 with two warps and two distinct lane owners
 // per warp. R, L, W list scan-axis register, lane, and warp bases. Zero
@@ -196,9 +177,9 @@ private:
 //      r2                     | r1/lane 1 (Q11) | r2/lane 0 (Q12)
 //      r3                     | r2/lane 1 (Q13) | r3/lane 0 (Q14)
 //    Each total slot r supplies the carry for saved element registers 2r,2r+1.
-//    For each destination slot, enumerate candidate source registers across
-//    lanes. Shuffle each candidate from the computed source lane, then select
-//    the candidate matching the computed source register. For r1, the
+//    For each destination slot, find the registers holding the preceding
+//    prefixes. Shuffle each candidate from the computed source lane, then
+//    select the candidate matching the computed source register. For r1, the
 //    candidates are r0 and r1: lane 0 selects r0 from lane 1 (Q9), while lane 1
 //    selects r1 from lane 0 (Q10).
 //
@@ -208,7 +189,6 @@ public:
 
   explicit ScanLoweringHelper(triton::ScanOp op);
   ScanLoweringHelper(const triton::LinearLayout &inputLayout, unsigned axis);
-  bool isSupported();
   const triton::LinearLayout &getPermutedLayout() const {
     return permutedLayout;
   }
@@ -413,6 +393,9 @@ bool atomicResultHasCTABroadcast(Operation *op);
 } // namespace triton
 
 namespace triton::nvidia_gpu {
+
+/// Full cluster rendezvous emitted by the operation's lowering.
+BarrierStages getClusterBarrierStages(Operation *op);
 
 bool needsClusterBarrier(Operation *op);
 

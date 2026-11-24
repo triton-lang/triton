@@ -277,10 +277,13 @@ struct BufferRegionFootprint {
   RegionInfo regionInfo;
 };
 
+enum class AllocationOrigin { Any, Same, Different };
+
 /// Prove disjointness only if every candidate pair is disjoint. Missing views
 /// and unnormalized allocation frames may overlap, never denote empty storage.
 bool mayOverlap(const BufferRegionFootprint *lhs,
-                const BufferRegionFootprint *rhs);
+                const BufferRegionFootprint *rhs,
+                AllocationOrigin origin = AllocationOrigin::Any);
 
 enum class RW { Read, Write };
 
@@ -355,12 +358,18 @@ public:
 
   /// Translate callee-local views into the caller's allocation frame, caching
   /// the complete footprint and preserving views already in other frames.
+  /// TODO: Remove this method and callsiteFootprints once legacy Membar
+  /// stops importing callee summaries.
   const BufferRegionFootprint *
   translateToCallsite(const BufferRegionFootprint *footprint,
                       CallOpInterface call, FunctionOpInterface callee);
 
   /// Shared-memory offset of the callee frame in the caller's allocation.
   uint32_t getCallOffset(CallOpInterface call) const;
+
+  /// Merge every physical placement of a shared-memory footprint.
+  const BufferRegionFootprint *
+  getKernelFootprint(const BufferRegionFootprint *footprint);
 
   uint32_t getOperationId(Operation *operation) const {
     return operationInterner.idFor(operation);
@@ -425,6 +434,9 @@ private:
   llvm::DenseMap<std::pair<const BufferRegionFootprint *, Operation *>,
                  std::unique_ptr<BufferRegionFootprint>>
       callsiteFootprints;
+  llvm::DenseMap<const BufferRegionFootprint *,
+                 std::unique_ptr<BufferRegionFootprint>>
+      kernelFootprints;
   llvm::UniqueVector<Operation *> operationInterner;
 };
 

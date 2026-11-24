@@ -9,7 +9,6 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -25,12 +24,37 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
+bool isZeroFillConst(Value v) {
+  if (auto splat = v.getDefiningOp<triton::SplatOp>())
+    return isZeroFillConst(splat.getSrc());
+  if (auto bitcast = v.getDefiningOp<triton::BitcastOp>())
+    return isZeroFillConst(bitcast.getSrc());
+  auto constantOp = v.getDefiningOp<arith::ConstantOp>();
+  if (!constantOp)
+    return false;
+  if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValueAttr()))
+    return attr.getValue().isZero();
+  if (auto attr = dyn_cast<FloatAttr>(constantOp.getValueAttr()))
+    return attr.getValue().bitcastToAPInt().isZero();
+  if (auto denseAttr = dyn_cast<DenseFPElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() &&
+           denseAttr.getSplatValue<APFloat>().bitcastToAPInt().isZero();
+  if (auto denseAttr =
+          dyn_cast<DenseIntElementsAttr>(constantOp.getValueAttr()))
+    return denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isZero();
+  return false;
+}
+
 bool triton::canUseWarpBallotHistogram(HistogramOp op) {
   int numBins = op.getType().getNumElements();
   // Limit ballot and reduction overhead relative to shared-memory atomics.
   return !hasCrossCTAScratch(op) && numBins <= 2 &&
          numBins * gpu::lookupNumWarps(op) <= 4;
 }
+
+ReduceOpHelper::ReduceOpHelper(triton::ReduceOp op)
+    : op(op), srcTy(op.getInputTypes().front()), srcShape(srcTy.getShape()),
+      srcEncoding(srcTy.getEncoding()), axis(op.getAxis()) {}
 
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
   return getWarpsPerCTA(srcEncoding, srcShape)[axis];
@@ -318,16 +342,15 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
                                        unsigned axis, triton::ScanOp op)
     : op(op), axis(axis), originalLayout(inputLayout) {
   permutedLayout = buildPermutedLayout();
-  if (!isSupported())
-    return;
 
   auto *ctx = originalLayout.getInDimNames().begin()->getContext();
   auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
   auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
   unsigned axisSize = originalLayout.getOutDimSize(axisDim);
-  // Cross-CTA scans are unsupported, so the lowest warp axis bit bounds
-  // a contiguous warp-local segment.
-  unsigned warpMask = getOutputBasisMask(originalLayout, {kWarp}, axisDim);
+  // A warp-local segment ends at the first axis bit owned by a warp or CTA.
+  unsigned warpMask =
+      getOutputBasisMask(originalLayout, {kWarp, kBlock}, axisDim);
   warpSegmentSize = 1u << llvm::countr_zero(warpMask | axisSize);
   // The lowest lane axis bit also bounds a thread-local segment.
   auto kLane = StringAttr::get(ctx, "lane");
@@ -498,7 +521,10 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
         getInputBasisMask(*interWarpTotalsLayout, kLane, {axisDim});
     // Unmerged lane contributions correspond to independent segments.
     // TODO(Keren): relax the constraint.
-    if (sourceLaneMask == totalsLaneMask)
+    // Grouped loads use CTA-local scratch. Layout conversion handles peer CTAs.
+    auto kBlock = StringAttr::get(ctx, "block");
+    if (sourceLaneMask == totalsLaneMask &&
+        source.sublayoutIsZero({kBlock}, {axisDim}))
       interWarpScanType = InterWarpScanType::Grouped;
     else
       interWarpScanType = scanLanes > 1 ? InterWarpScanType::Warp
@@ -522,15 +548,6 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
   return LinearLayout(std::move(bases),
                       llvm::to_vector(interWarpTotalsLayout->getOutDimNames()))
       .removeZeroBasesAlongDim(kReg);
-}
-
-bool ScanLoweringHelper::isSupported() {
-  // A CTA may own or replicate an independent scan, but two CTAs cannot own
-  // different parts of one scan's axis. TODO(Keren): support cross-CTA scans
-  auto *ctx = originalLayout.getInDimNames().begin()->getContext();
-  auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
-  return originalLayout.sublayoutIsZero({StringAttr::get(ctx, "block")},
-                                        {axisDim});
 }
 
 LayoutConversionScratchConfig
@@ -1347,26 +1364,24 @@ bool atomicResultHasCTABroadcast(Operation *op) {
 
 namespace triton::nvidia_gpu {
 
-static bool atomicNeedsClusterBarrier(Operation *op) {
-  if (isa<AtomicPollOp>(op))
-    return gpu::lookupNumCTAs(op) != 1;
+BarrierStages getClusterBarrierStages(Operation *op) {
+  if (auto barrier = dyn_cast<ClusterBarrierOp>(op))
+    return {.beforeMemoryEffects = !barrier.getRelaxed()};
+  bool scratch = hasCrossCTAScratch(op);
   auto atomic = dyn_cast<AtomicOpInterface>(op);
-  if (!atomic || gpu::lookupNumCTAs(op) == 1 ||
-      op->getParentOfType<gpu::ThreadScopeOp>())
-    return false;
-
-  auto stages = getAtomicBarrierStages(atomic.getMemSemantic(),
-                                       atomicResultHasCTABroadcast(op));
-  return stages.hasBarrier();
+  if (!atomic)
+    return {.betweenMemoryEffects = scratch};
+  if (gpu::lookupNumCTAs(op) == 1 || op->getParentOfType<gpu::ThreadScopeOp>())
+    return {};
+  // A poll always joins the cluster. A distributed result uses the
+  // rendezvous between its scratch write and read.
+  if (isa<AtomicPollOp>(op))
+    return {.afterMemoryEffects = !scratch, .betweenMemoryEffects = scratch};
+  return getAtomicBarrierStages(atomic.getMemSemantic(), scratch);
 }
 
 bool needsClusterBarrier(Operation *op) {
-  if (isa<ClusterBarrierOp>(op))
-    return true;
-  if (isa<gpu::ConvertLayoutOp, ReduceOp, HistogramOp, gpu::ThreadHandoffOp,
-          gpu::LocalAtomicScatterRMWOp>(op))
-    return hasCrossCTAScratch(op);
-  return atomicNeedsClusterBarrier(op);
+  return isa<ClusterBarrierOp>(op) || getClusterBarrierStages(op).hasBarrier();
 }
 
 } // namespace triton::nvidia_gpu
