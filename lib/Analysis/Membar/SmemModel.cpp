@@ -17,18 +17,11 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
-
-#include <tuple>
+#include <optional>
 
 namespace ttng = mlir::triton::nvidia_gpu;
 
-namespace mlir {
-
-using triton::membar::SMemData;
-using triton::membar::SMemModel;
-using triton::membar::ThreadEffects;
-
-namespace triton::membar {
+namespace mlir::triton::membar {
 
 static bool mayCrossCTA(Operation *op, const MemoryAccess &access) {
   using namespace nvidia_gpu;
@@ -67,46 +60,6 @@ SharedAccess SharedAccessModel::getSharedAccess(Operation *op,
   return {getFootprint(access.value), access.isWrite, mayCrossCTA(op, access)};
 }
 
-} // namespace triton::membar
-
-bool AllocationSlice::operator<(const AllocationSlice &other) const {
-  auto key = [](const AllocationSlice &slice) {
-    return std::tie(slice.allocationInterval, slice.bufferId,
-                    slice.relative.subslice, slice.relative.index,
-                    slice.physicalFootprint);
-  };
-  return key(*this) < key(other);
-}
-
-bool AllocationSlice::mayOverlapPhysically(const AllocationSlice &other) const {
-  return allocationInterval.intersects(other.allocationInterval) &&
-         triton::mayOverlap(physicalFootprint, other.physicalFootprint);
-}
-
-bool AllocationSlice::disjointWithinBinding(
-    const AllocationSlice &other) const {
-  return relative.disjoint(other.relative, bufferId == other.bufferId);
-}
-
-AllocationSlice AllocationSlice::translateToCallsite(
-    CallOpInterface call, FunctionOpInterface callee,
-    triton::BufferRegionAnalysis &regions) const {
-  AllocationSlice shifted = *this;
-  // Unknown accesses span the whole frame; shifting their endpoint overflows.
-  if (allocationInterval != Interval<size_t>{}) {
-    size_t offset = regions.getCallOffset(call);
-    shifted.allocationInterval = Interval<size_t>(
-        allocationInterval.start() + offset, allocationInterval.end() + offset);
-  }
-  shifted.physicalFootprint =
-      regions.translateToCallsite(physicalFootprint, call, callee);
-  shifted.bufferId = Allocation::InvalidBufferId;
-  shifted.invalidateIterationInfo();
-  return shifted;
-}
-
-namespace triton::membar {
-
 void SMemData::merge(const SMemData &other) {
   llvm::append_range(accesses, other.accesses);
   threads.merge(other.threads, !accesses.empty());
@@ -135,6 +88,17 @@ void ThreadEffects::merge(ThreadEffects other, bool usesShared) {
     joins |= SharedCompletion;
 }
 
+SMemAccess SMemAccess::fromDescriptor(Operation *op, const MemoryAccess &effect,
+                                      BufferIndexAnalysis &indices,
+                                      bool useIndex) {
+  Kind kind = effect.isWrite ? Write : Read;
+  return {.entry = kind,
+          .exit = kind,
+          .isMBarrier = effect.isShared(gpu::SharedKind::Barrier),
+          .issuer = op,
+          .relative = indices.getRelativeAddress(effect.value, useIndex)};
+}
+
 Conflict SMemAccess::conflict(const SMemAccess &sink,
                               const MembarFilterFn &filter,
                               Allocation &allocation) const {
@@ -143,15 +107,14 @@ Conflict SMemAccess::conflict(const SMemAccess &sink,
   if (exit == None || sink.entry == None ||
       (exit == Read && sink.entry == Read))
     return Conflict::None;
-  if (!slice.mayOverlapPhysically(sink.slice) ||
+  if (!mayOverlap(footprint, sink.footprint) ||
       (filter && issuer && sink.issuer && filter(*this, sink, allocation)))
     return Conflict::None;
   // Only relative disjointness can expire on a backedge or call entry.
-  return slice.disjointWithinBinding(sink.slice) ? Conflict::AfterRebind
-                                                 : Conflict::Always;
+  if (relative.disjoint(sink.relative))
+    return Conflict::AfterRebind;
+  return Conflict::Always;
 }
-
-} // namespace triton::membar
 
 namespace {
 
@@ -271,7 +234,7 @@ usesStayLocal(Value root,
   return true;
 }
 
-bool triton::membar::hasRegionLocalUses(Value root, bool followCalls) {
+bool hasRegionLocalUses(Value root, bool followCalls) {
   if (ttng::hasCrossCTASharedAccess(root.getDefiningOp()).value_or(false))
     return false;
   DenseMap<Value, SmallVector<unsigned>> calleeReturns;
@@ -286,7 +249,7 @@ bool SMemModel::isRegionLocal(Value value) {
            auto [it, inserted] =
                regionLocalAllocations.try_emplace(root, false);
            if (inserted)
-             it->second = triton::membar::hasRegionLocalUses(root, followCalls);
+             it->second = hasRegionLocalUses(root, mode == Mode::Role);
            return it->second;
          });
 }
@@ -457,37 +420,6 @@ ThreadEffects SMemModel::getThreadEffects(Operation *op, bool hasScratch,
   return threads;
 }
 
-SmallVector<AllocationSlice> SMemModel::getAllocationSlices(Value value) {
-  auto function = cast<FunctionOpInterface>(allocation.getOperation());
-  // Only views in the current frame have local allocator IDs.
-  auto *footprint = regions.getFootprint(value, function);
-  SmallVector<AllocationSlice> slices;
-  auto relative = bufferIndexAnalysis.getRelativeAddress(value);
-  auto addSlice = [&](Interval<size_t> interval,
-                      Allocation::BufferId bufferId) {
-    AllocationSlice slice(interval, bufferId, relative);
-    slice.physicalFootprint = footprint;
-    slices.push_back(std::move(slice));
-  };
-  Allocation::BufferIdSetT bufferIds;
-  if (footprint && (!followCalls || isKernel(function))) {
-    // Use every lattice origin: function-local alias analysis can miss roots
-    // returned through calls or joined with descriptor arguments.
-    for (const auto &view : footprint->regionInfo.views)
-      for (auto id : allocation.getBufferIds(view.allocation->getResult(0)))
-        bufferIds.insert(id);
-  } else if (followCalls) {
-    footprint = regions.getKernelFootprint(regions.getFootprint(value));
-  }
-  // Unknown allocations use an unbounded interval. View disjointness and
-  // RAW/WAR/WAW checks still determine whether a barrier is needed.
-  if (bufferIds.empty())
-    addSlice(Interval<size_t>{}, Allocation::InvalidBufferId);
-  for (auto bufferId : bufferIds)
-    addSlice(allocation.getAllocatedInterval(bufferId), bufferId);
-  return slices;
-}
-
 SMemData SMemModel::describe(Operation *op, FixedSync &fixed,
                              ArrayRef<MemoryAccess> accesses) {
   // A verified callback has no scratch or payload accesses to publish.
@@ -501,46 +433,40 @@ SMemData SMemModel::describe(Operation *op, FixedSync &fixed,
     return {};
   }
 
-  auto scratchId = allocation.getBufferId(op);
-  bool hasScratch = scratchId != Allocation::InvalidBufferId;
+  bool hasScratch = allocation.getBufferId(op) != Allocation::InvalidBufferId;
   fixed =
       FixedSync::fromStages(getLocalBarrierStages(op, hasScratch), fullBarrier);
-  if (accessMode == AccessMode::SynchronizationOnly)
+  if (mode == Mode::SynchronizationOnly)
     return {};
 
   SMemData data;
   data.threads = getThreadEffects(op, hasScratch, accesses);
-  for (const auto &access : accesses) {
-    if (!access.isShared())
+  for (const auto &effect : accesses) {
+    if (!effect.isShared())
       continue;
-    auto kind = access.isWrite ? SMemAccess::Write : SMemAccess::Read;
+    auto access = SMemAccess::fromDescriptor(op, effect, bufferIndexAnalysis);
+    // Use every lattice origin. Function-local alias analysis can miss
+    // roots returned through calls or joined with descriptor arguments.
+    access.footprint = regions.getFootprint(effect.value);
     // The internal rendezvous orders all incoming effects. Only accesses
     // after it can conflict with subsequent operations.
-    for (const auto &slice : getAllocationSlices(access.value))
-      data.accesses.push_back({op, slice, kind,
-                               fixed.inside ? SMemAccess::None : kind,
-                               access.isShared(gpu::SharedKind::Barrier)});
+    if (fixed.inside)
+      access.exit = SMemAccess::None;
+    data.accesses.push_back(access);
   }
 
-  if (!hasScratch)
-    return data;
-
-  auto interval = allocation.getAllocatedInterval(scratchId);
-  auto *footprint = regions.getScratchFootprint(op);
-  if (followCalls &&
-      !isKernel(cast<FunctionOpInterface>(allocation.getOperation()))) {
-    interval = {};
-    footprint = regions.getKernelFootprint(footprint);
-  }
-  AllocationSlice scratch(interval);
-  scratch.physicalFootprint = footprint;
   // Scratch follows write -> ... -> read. An internal barrier orders the
   // initial write. The final read must still finish before publication or
   // reuse. Without the barrier, the write also conflicts with later reads.
-  data.accesses.push_back(
-      {nullptr, scratch, SMemAccess::Write,
-       fixed.inside ? SMemAccess::Read : SMemAccess::Write});
+  if (hasScratch)
+    data.accesses.push_back(
+        {.entry = SMemAccess::Write,
+         .exit = fixed.inside ? SMemAccess::Read : SMemAccess::Write,
+         .footprint = regions.getScratchFootprint(op)});
+  if (mode == Mode::Role)
+    for (auto &access : data.accesses)
+      access.footprint = regions.getKernelFootprint(access.footprint);
   return data;
 }
 
-} // namespace mlir
+} // namespace mlir::triton::membar

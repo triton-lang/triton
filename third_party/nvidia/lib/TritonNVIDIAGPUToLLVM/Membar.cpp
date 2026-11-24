@@ -51,16 +51,17 @@ struct TritonNvidiaGPUMembar
 
 // Preserve aliases introduced by allocator reuse. Multiple possible origins
 // are safe when every physical overlap has the same allocation origin.
-bool hasOnlySourceAliases(const AllocationSlice &lhs,
-                          const AllocationSlice &rhs, Allocation &allocation) {
-  auto *before = lhs.physicalFootprint;
-  auto *after = rhs.physicalFootprint;
+bool hasOnlySourceAliases(const membar::SMemAccess &lhs,
+                          const membar::SMemAccess &rhs,
+                          Allocation &allocation) {
+  auto *before = lhs.footprint;
+  auto *after = rhs.footprint;
   if (!before || !after)
     return false;
   // A kernel-entry allocation has one lifetime across all calls.
   auto kernel = cast<FunctionOpInterface>(allocation.getOperation());
-  bool local = lhs.getBufferId() != Allocation::InvalidBufferId &&
-               rhs.getBufferId() != Allocation::InvalidBufferId;
+  bool local = lhs.issuer->getParentOfType<FunctionOpInterface>() == kernel &&
+               rhs.issuer->getParentOfType<FunctionOpInterface>() == kernel;
   bool overlaps = false;
   for (const auto &a : before->regionInfo.views) {
     for (const auto &b : after->regionInfo.views) {
@@ -69,6 +70,7 @@ bool hasOnlySourceAliases(const AllocationSlice &lhs,
       if (!a.region.intersects(b.region))
         continue;
       if (!a.allocation || a.allocation != b.allocation ||
+          a.allocation->getParentOfType<FunctionOpInterface>() != kernel ||
           (!local &&
            a.allocation->getBlock() != &kernel.getFunctionBody().front()))
         return false;
@@ -98,7 +100,7 @@ bool NVIDIA::canSkipBarSync(const membar::SMemAccess &source,
   // Accessing these live destinations requires completion, which makes their
   // writes visible to the generic proxy.
   if (!source.isMBarrier && completesTransactions(before))
-    return hasOnlySourceAliases(source.slice, sink.slice, allocation);
+    return hasOnlySourceAliases(source, sink, allocation);
 
   if (source.isMBarrier && sink.isMBarrier) {
     auto signalsCompletion = [&](Operation *op) {

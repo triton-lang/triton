@@ -9,11 +9,25 @@
 
 namespace mlir::triton::AMD {
 
-void BlockInfo::invalidateIterationInfo() {
-  transformSlices([](AllocationSlice slice) {
-    slice.invalidateIterationInfo();
-    return slice;
-  });
+// Physical and relative addresses are part of the ordering of the access
+// set. Rebuild both sets when translating storage or discarding SSA facts.
+template <typename Transform>
+static void transformAccesses(MembarInfo &info, Transform transform) {
+  for (auto *block : {&info.pending, &info.entryBlockInfo}) {
+    decltype(block->accesses) transformed;
+    for (auto access : block->accesses) {
+      transform(access);
+      transformed.insert(access);
+    }
+    block->accesses = std::move(transformed);
+  }
+}
+
+// A loop backedge or a new call can bind the same SSA value to a different
+// slot or subslice. The physical origins and issuers still apply.
+static void invalidateIterationInfo(MembarInfo &info) {
+  transformAccesses(info,
+                    [](membar::SMemAccess &access) { access.relative = {}; });
 }
 
 static void insertBarrier(Operation *op, OpBuilder &builder, MembarInfo &info) {
@@ -26,17 +40,14 @@ static void insertBarrier(Operation *op, OpBuilder &builder, MembarInfo &info) {
 void MembarAnalysis::updateSuccessor(Operation *terminator, Block *successor,
                                      MembarInfo *membarInfo) {
   if (shared.getBufferIndexAnalysis().isBackedgeSuccessor(terminator,
-                                                          successor)) {
-    membarInfo->pending.invalidateIterationInfo();
-    membarInfo->entryBlockInfo.invalidateIterationInfo();
-  }
+                                                          successor))
+    invalidateIterationInfo(*membarInfo);
 }
 
 void MembarAnalysis::updateExitState(MembarInfo *membarInfo) {
   // Function summaries are reused at every call site, so per-function SSA
   // index identity is no longer meaningful.
-  membarInfo->pending.invalidateIterationInfo();
-  membarInfo->entryBlockInfo.invalidateIterationInfo();
+  invalidateIterationInfo(*membarInfo);
 }
 
 void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
@@ -65,8 +76,9 @@ void MembarAnalysis::update(Operation *op, MembarInfo *membarInfo,
   if (auto call = dyn_cast<CallOpInterface>(op)) {
     auto callee = cast<FunctionOpInterface>(call.resolveCallable());
     MembarInfo summary = funcMap->at(callee);
-    summary.transformSlices([&](const AllocationSlice &slice) {
-      return slice.translateToCallsite(call, callee, regions);
+    transformAccesses(summary, [&](mb::SMemAccess &access) {
+      access.footprint =
+          regions.translateToCallsite(access.footprint, call, callee);
     });
     syncIfNeeded(summary.entryBlockInfo);
     membarInfo->applyCallSummary(summary);

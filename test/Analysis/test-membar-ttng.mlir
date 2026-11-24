@@ -644,10 +644,36 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 !barrier = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
 !ptrs = tensor<128x!tt.ptr<i32>, #blocked>
 !values = tensor<128xi32, #blocked>
+!slot = !ttg.memdesc<128xi32, #bar, #ttg.shared_memory, mutable>
 !row_tile = tensor<16x16xf32, #rows>
 !col_tile = tensor<16x16xf32, #cols>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func private @write_slot(%slot: !slot, %input: !values) attributes {noinline = true} {
+    ttg.local_store %input, %slot : !values -> !slot
+    tt.return
+  }
+
+  // The callee writes only the second slot in the caller's frame.
+  // Its entry is disjoint from the first store. Its exit conflicts with the gather.
+  // FLOW-LABEL: @caller_owned_slots
+  // FLOW: ttg.local_store
+  // FLOW-NEXT: tt.call @write_slot
+  // FLOW-NEXT: ttg.barrier local
+  // FLOW-NEXT: {{.*}} = ttg.local_gather
+  tt.func @caller_owned_slots(%input: !values, %indices: !values) -> (!values, !values) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %slots = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable>
+    %first = ttg.memdesc_index %slots[%c0] : !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable> -> !slot
+    %second = ttg.memdesc_index %slots[%c1] : !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable> -> !slot
+    ttg.local_store %input, %first : !values -> !slot
+    tt.call @write_slot(%second, %input) : (!slot, !values) -> ()
+    %gather = ttg.local_gather %second[%indices] {axis = 0 : i32} : !slot, !values -> !values
+    %load = ttg.local_load %first : !slot -> !values
+    tt.return %gather, %load : !values, !values
+  }
+
   // Counter waits do not require known allocation origins.
   // CHECK-LABEL: @consecutive_waits_argument
   // CHECK: ttng.wait_barrier

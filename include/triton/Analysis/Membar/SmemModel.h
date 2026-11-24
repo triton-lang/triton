@@ -4,67 +4,12 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/BufferIndexAnalysis.h"
 #include "triton/Analysis/BufferRegion.h"
+#include <compare>
 #include <cstdint>
 #include <functional>
 #include <map>
-#include <optional>
 
 namespace mlir {
-
-namespace triton::membar {
-struct SMemAccess;
-}
-
-/// Exempt overlapping accesses that commute or are already ordered. The
-/// exemption must hold even across a backedge or call entry.
-using MembarFilterFn =
-    std::function<bool(const triton::membar::SMemAccess &,
-                       const triton::membar::SMemAccess &, Allocation &)>;
-
-/// Physical storage and the relative coordinates valid in one SSA binding.
-struct AllocationSlice {
-  // Descriptor accesses borrow relative coordinates from BufferIndexAnalysis.
-  // Implicit scratch uses the whole interval without relative coordinates.
-  explicit AllocationSlice(
-      Interval<size_t> interval,
-      Allocation::BufferId id = Allocation::InvalidBufferId,
-      triton::membar::RelativeAddress relative = {})
-      : allocationInterval(interval), bufferId(id), relative(relative) {}
-
-  bool operator<(const AllocationSlice &other) const;
-  bool operator==(const AllocationSlice &) const = default;
-
-  bool mayOverlapPhysically(const AllocationSlice &other) const;
-  bool disjointWithinBinding(const AllocationSlice &other) const;
-
-  Allocation::BufferId getBufferId() const { return bufferId; }
-  bool hasIterationInfo() const { return relative.index || relative.subslice; }
-  // Relative coordinates are part of the sort key. Rebuild any ordered
-  // container when clearing them across a backedge or a call boundary.
-  void invalidateIterationInfo() { relative = {}; }
-
-  /// Translate shared-memory geometry to the caller's frame and discard
-  /// callee-local index and subslice facts.
-  /// TODO: Retire this method with the AMD forward-flow summaries.
-  AllocationSlice
-  translateToCallsite(CallOpInterface call, FunctionOpInterface callee,
-                      triton::BufferRegionAnalysis &regions) const;
-
-  // The footprint covers every possible origin across loop iterations,
-  // retaining the memory space, CTA, partition, subview and padding.
-  // BufferRegionAnalysis outlives the slices that borrow it. A null
-  // footprint leaves only the allocator interval for physical overlap.
-  const triton::BufferRegionFootprint *physicalFootprint = nullptr;
-
-private:
-  // Bounds for this allocator buffer, also available for implicit scratch.
-  Interval<size_t> allocationInterval;
-  // Identifies a local buffer for slot comparisons and backend alias checks.
-  Allocation::BufferId bufferId;
-  // Relative slot and subslice coordinates, valid in one SSA binding.
-  // Both participate in slice ordering and equality to keep views separate.
-  triton::membar::RelativeAddress relative;
-};
 
 namespace triton::membar {
 
@@ -97,7 +42,15 @@ struct ThreadEffects {
   bool operator==(const ThreadEffects &) const = default;
 };
 
+struct SMemAccess;
+
 } // namespace triton::membar
+
+/// Exempt overlapping accesses that commute or are already ordered. The
+/// exemption must hold even across a backedge or call entry.
+using MembarFilterFn =
+    std::function<bool(const triton::membar::SMemAccess &,
+                       const triton::membar::SMemAccess &, Allocation &)>;
 
 // A wait leaves these completion effects pending in its issuing threads.
 enum class CompletionSync : uint8_t {
@@ -118,19 +71,28 @@ enum class Conflict { None, AfterRebind, Always };
 struct SMemAccess {
   // A write subsumes a read of the same bytes for hazard detection.
   enum Kind : uint8_t { None, Read, Write };
-  // Only the backend barrier filter should inspect this operation.
-  Operation *issuer;
-  AllocationSlice slice;
   // Exposed to predecessors and successors respectively. An internal
   // rendezvous separates the first scratch write from the final read.
   Kind entry, exit;
-  // A single operation can signal a counter and also access its payload.
-  // Preserve that distinction when translating or widening the slice.
+  // A transfer can signal a counter and access a separate payload.
   bool isMBarrier = false;
+  // Only the backend barrier filter should inspect this operation.
+  Operation *issuer = nullptr;
+  // The footprint covers every possible origin across loop iterations,
+  // retaining the memory space, CTA, partition, subview and padding.
+  // BufferRegionAnalysis outlives the accesses that borrow it. A null
+  // footprint imposes no restriction on physical overlap.
+  const BufferRegionFootprint *footprint = nullptr;
+  // Relative slot and subslice coordinates are valid in one SSA binding.
+  RelativeAddress relative;
 
+  // The caller supplies physical storage in its own coordinate system.
+  static SMemAccess fromDescriptor(Operation *op, const MemoryAccess &effect,
+                                   BufferIndexAnalysis &indices,
+                                   bool useIndex = true);
   Conflict conflict(const SMemAccess &sink, const MembarFilterFn &filter,
                     Allocation &allocation) const;
-  bool operator==(const SMemAccess &) const = default;
+  auto operator<=>(const SMemAccess &) const = default;
 };
 
 struct SMemData {
@@ -147,6 +109,7 @@ struct SMemData {
   bool operator==(const SMemData &) const = default;
 };
 
+// Proxy and cluster placement need the physical footprint and CTA routing.
 struct SharedAccess {
   const BufferRegionFootprint *footprint;
   bool isWrite;
@@ -177,20 +140,16 @@ bool hasRegionLocalUses(Value root, bool followCalls);
 /// Describes shared-memory accesses and synchronization for one operation.
 class SMemModel {
 public:
-  enum class AccessMode { AllSharedAccesses, SynchronizationOnly };
+  enum class Mode { Role, FunctionSummary, SynchronizationOnly };
 
-  /// Only AMD::MembarAnalysis uses followCalls=false.
-  /// TODO: When it retires, remove the flag, follow descriptor uses through
-  /// calls unconditionally, and keep callee footprints in kernel coordinates.
-  SMemModel(Allocation &allocation, BufferRegionAnalysis &regions,
-            AccessMode accessMode = AccessMode::AllSharedAccesses,
-            CompletionScopeFn completionScope = nullptr,
-            bool followCalls = false)
-      : allocation(allocation), regions(regions), accessMode(accessMode),
-        completionScope(completionScope), followCalls(followCalls),
+  SMemModel(Allocation &allocation, BufferRegionAnalysis &regions, Mode mode,
+            CompletionScopeFn completionScope = nullptr)
+      : allocation(allocation), regions(regions), mode(mode),
+        completionScope(completionScope),
         bufferIndexAnalysis(
             cast<FunctionOpInterface>(allocation.getOperation())) {}
 
+  /// Describe the ordering requirements and fixed barriers of one operation.
   /// SynchronizationOnly records fixed barriers, including scratch rendezvous.
   SMemData describe(Operation *op, FixedSync &fixed,
                     ArrayRef<MemoryAccess> accesses);
@@ -199,18 +158,23 @@ public:
   }
 
 private:
-  SmallVector<AllocationSlice> getAllocationSlices(Value value);
   bool isRegionLocal(Value value);
   bool mayNotifyPeer(Operation *op, ArrayRef<MemoryAccess> accesses);
   ThreadEffects getThreadEffects(Operation *op, bool hasScratch,
                                  ArrayRef<MemoryAccess> accesses);
 
+  // Scratch belongs to the function. Descriptor footprints are module-wide.
   Allocation &allocation;
   BufferRegionAnalysis &regions;
-  AccessMode accessMode;
+  // A role shares thread identities and kernel coordinates across calls.
+  // AMD function summaries translate storage at each call site.
+  Mode mode;
+  // AMD refines a wait's scope when assigning hardware wait counts.
   CompletionScopeFn completionScope;
-  bool followCalls;
+  // Owns the slot expressions and subslice records borrowed by this
+  // function's nodes.
   BufferIndexAnalysis bufferIndexAnalysis;
+  // A counter confined to this region cannot advance a peer's phase.
   DenseMap<Value, bool> regionLocalAllocations;
 };
 

@@ -28,8 +28,7 @@ struct RelativeAddress {
 
   /// Compare the recorded coordinates within a single SSA binding.
   /// Subslice bounds are relative to their common source descriptor.
-  /// Slot comparisons also require the same allocator buffer.
-  bool disjoint(RelativeAddress other, bool sameBuffer) const;
+  bool disjoint(RelativeAddress other) const;
   auto operator<=>(const RelativeAddress &) const = default;
 };
 

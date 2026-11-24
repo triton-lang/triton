@@ -347,10 +347,9 @@ public:
   }
 
   /// Return an immutable footprint covering every possible view, owned by this
-  /// analysis. Call after solver convergence. Return null for unknown geometry
-  /// or views outside allocationFrame, when set.
-  const BufferRegionFootprint *
-  getFootprint(Value value, FunctionOpInterface allocationFrame = {});
+  /// analysis. Call after solver convergence. Return null for unknown geometry.
+  /// Views retain their original allocation frames.
+  const BufferRegionFootprint *getFootprint(Value value);
 
   /// Describe an operation's allocated shared scratch, including cross-CTA
   /// accesses.

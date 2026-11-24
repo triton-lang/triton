@@ -3,6 +3,7 @@
 
 #include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -247,13 +248,23 @@ triton::gpu::MemDescIndexOp extractBufferIndex(Value value) {
   // index operand identifies the slot. MemDescViewTrait producers (trans,
   // reshape, reinterpret, subslice) are slot-preserving, so we can walk
   // through them to find the underlying MemDescIndexOp.
-  Value v = value;
-  while (auto *def = v.getDefiningOp()) {
-    if (auto indexOp = dyn_cast<triton::gpu::MemDescIndexOp>(def))
-      return indexOp;
-    if (!def->hasTrait<OpTrait::MemDescViewTrait>())
+  // A single-block pipeline stage also forwards the slot through its yield.
+  // Stop at block arguments, which may carry a different slot on each edge.
+  while (auto *def = value.getDefiningOp()) {
+    if (auto index = dyn_cast<triton::gpu::MemDescIndexOp>(def))
+      return index;
+    if (def->hasTrait<OpTrait::MemDescViewTrait>()) {
+      value = def->getOperand(0);
+      continue;
+    }
+    auto stage = dyn_cast<scf::ExecuteRegionOp>(def);
+    if (!stage || !stage.getRegion().hasOneBlock())
       break;
-    v = def->getOperand(0);
+    auto yield =
+        dyn_cast<scf::YieldOp>(stage.getRegion().front().getTerminator());
+    if (!yield)
+      break;
+    value = yield.getOperand(cast<OpResult>(value).getResultNumber());
   }
   return {};
 }
@@ -290,10 +301,8 @@ BufferIndexAnalysis::getRelativeAddress(Value value, bool useIndex) {
   return {index, coords.get()};
 }
 
-bool triton::membar::RelativeAddress::disjoint(RelativeAddress other,
-                                               bool sameBuffer) const {
-  if (sameBuffer && index && other.index &&
-      index->isProvablyDifferentFrom(*other.index))
+bool triton::membar::RelativeAddress::disjoint(RelativeAddress other) const {
+  if (index && other.index && index->isProvablyDifferentFrom(*other.index))
     return true;
 
   auto *a = subslice;
@@ -326,7 +335,8 @@ const BufferIndexExpr *BufferIndexAnalysis::getIndexExpr(Value value) {
   if (!hasReducibleCFG)
     return nullptr;
   auto index = extractBufferIndex(value);
-  if (!index)
+  if (!index || !isa<triton::gpu::SharedMemorySpaceAttr>(
+                    index.getSrc().getType().getMemorySpace()))
     return nullptr;
   auto expr = analyzeBufferIndex(index.getIndex());
   analyzeLoopPhase(expr, dominanceInfo);
