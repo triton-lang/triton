@@ -1514,8 +1514,7 @@ Value FunctionBuilder::awaitReports(ImplicitLocOpBuilder &b, Operation *op,
   Value data = tti::createLoadScratchMemory(b, b.getLoc(), states.value, ty);
   // Compare each entire packed i64 shadow-state word with signed zero to test
   // reservation bit 63. Phase and count fields occupy bits 0..61, so the whole
-  // word is negative exactly while a report update is pending. This does not
-  // compare the signed tx-count field stored within that word.
+  // word is negative exactly while a report update is pending.
   Value pending =
       arith::CmpIOp::create(b, arith::CmpIPredicate::slt, data,
                             tti::createConstIntTensor(b, b.getLoc(), 0, ty));
