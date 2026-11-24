@@ -413,6 +413,27 @@ ValueType waitBarriers(ImplicitLocOpBuilder &b, AuxDataMap &aux,
   return bars;
 }
 
+// Keep the optional load slot when broadcasting [Cbuf, B, slot].
+Value broadcastWriteRows(ImplicitLocOpBuilder &b, Value value,
+                         RankedTensorType type, int slotDim) {
+  if (cast<RankedTensorType>(value.getType()).getRank() == 3)
+    return convertAndBroadcast(b, value, {0, 1, slotDim}, type);
+  return convertAndBroadcast(b, value, {0, 1}, type);
+}
+
+enum class WriteSlot { Ordinary, AsyncLoad };
+
+// Visibility has shape [Cbuf, B, Cmask, slot], and barrier tracking has
+// shape [Cbuf, B, Cbar, K, slot, phase] when the load slot is present.
+Value selectWriteSlot(ImplicitLocOpBuilder &b, Value mask, WriteSlot slot) {
+  auto type = cast<RankedTensorType>(mask.getType());
+  if (type.getRank() != 4 && type.getRank() != 6)
+    return mask;
+  int dim = type.getRank() == 4 ? 3 : 4;
+  Value index = arith::ConstantIntOp::create(b, static_cast<int>(slot), 32);
+  return arith::AndIOp::create(b, mask, createDimMask(b, index, type, dim));
+}
+
 Value createLoadTrackingPhase(ImplicitLocOpBuilder &b, Value trackingPtr,
                               RankedTensorType trackingType, Value phase,
                               Value barrierIndex = {}) {
@@ -489,7 +510,7 @@ Value createCTASetMask(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
                        int dim, Value ctas) {
   int numCTAs = ttg::lookupNumCTAs(b);
 
-  // Turn the scalar recipient bitset into a tensor mask over logical CTA rows:
+  // Turn recipient bitsets into a tensor mask over logical CTA rows:
   // build a [0, numCTAs) row-index vector on `dim`, broadcast it to the state
   // tensor shape, and test one bit of `recipientCTAs` per row.
   auto loc = b.getLoc();
@@ -500,7 +521,12 @@ Value createCTASetMask(ImplicitLocOpBuilder &b, RankedTensorType tensorType,
       tensorType.cloneWith(std::nullopt, b.getI32Type()));
   rowIdx = convertAndBroadcast(b, rowIdx, {dim}, indexType);
 
-  Value recipientBitsTensor = triton::SplatOp::create(b, indexType, ctas);
+  // Multicast tracking selects a separate barrier bitset per physical buffer
+  // CTA (dimension 0).
+  Value recipientBitsTensor =
+      isa<RankedTensorType>(ctas.getType())
+          ? convertAndBroadcast(b, ctas, {0}, indexType)
+          : triton::SplatOp::create(b, indexType, ctas).getResult();
   Value shifted = arith::ShRUIOp::create(b, recipientBitsTensor, rowIdx);
   Value one = tti::createConstIntTensor(b, loc, 1, indexType);
   Value selectedBit = arith::AndIOp::create(b, shifted, one);
@@ -667,13 +693,47 @@ Value updateWaitingBits(ImplicitLocOpBuilder &b, Value waiting,
 
 } // namespace
 
+Value FunctionBuilder::createGatherScatterCTAMask(ImplicitLocOpBuilder &b,
+                                                  gpu::MemDescType memDesc,
+                                                  Value indices, Value mask,
+                                                  unsigned axis) {
+  auto *ctx = b.getContext();
+  unsigned lanes = ttg::lookupThreadsPerWarp(b);
+  unsigned warps = ttg::lookupNumWarps(b.getInsertionBlock()->getParent());
+  unsigned ctas = ttg::lookupNumCTAs(b);
+  // Each CTA has its own [warp, lane] tensor of target masks.
+  auto cga =
+      ttg::CGAEncodingAttr::fromSplitParams(ctx, {ctas, 1}, {1, 1}, {1, 0});
+  auto enc = ttg::BlockedEncodingAttr::get(ctx, {1, 1}, {1, lanes}, {warps, 1},
+                                           {1, 0}, cga);
+  auto targetsTy = RankedTensorType::get({warps, lanes}, b.getI32Type(), enc);
+  auto laneMasks = ExperimentalGatherScatterCTAMasksOp::create(
+      b, targetsTy, memDesc, indices, mask, axis);
+  if (warps == 1)
+    return reduceAll<arith::OrIOp>(b, laneMasks);
+
+  Region *group = getClusterBarrierGroupRegion(laneMasks);
+  Value &scratch = gatherScatterScratch[group];
+  if (!scratch) {
+    OpBuilder init(&group->front(), group->front().begin());
+    scratch = createThirdPartyScratchAlloc(
+        init, b.getLoc(), triton::getPointerType(b.getI32Type()), warps * 4, 4);
+  }
+  // Store one mask per warp. Reload all masks in each warp so the final
+  // reduction also stays warp-local.
+  Value warpMasks = reduceLastDim<arith::OrIOp>(b, laneMasks);
+  createStoreScratchMemory(b, b.getLoc(), scratch, warpMasks,
+                           cast<RankedTensorType>(warpMasks.getType()));
+  ttg::BarrierOp::create(b, b.getLoc(), ttg::AddrSpace::GlobalWrite);
+  Value masks = createLoadScratchMemory(b, b.getLoc(), scratch,
+                                        getIntTensorType(group, {warps}, 32));
+  return reduceLastDim<arith::OrIOp>(b, masks);
+}
+
 void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
                                                  Value ptr,
                                                  RankedTensorType type,
                                                  Value scalar) {
-  type = tti::getIntTensorType(b.getInsertionBlock()->getParent(),
-                               {type.getNumElements()},
-                               type.getElementType().getIntOrFloatBitWidth());
   createCallToCachedFunction(
       b, "fill_global_tensor", {ptr, scalar}, /*assertInfo=*/std::nullopt,
       {type}, [type](ImplicitLocOpBuilder &fb, Block *entryBlock) {
@@ -1902,6 +1962,11 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   const bool clearCopies = memType == MemType::SHARED_MEM &&
                            auxData.hasAsyncCopyMbarriers &&
                            !auxData.commits[CommitKind::AsyncCp].empty();
+  // Issuing a load retires all prior writes to its destination. Only its
+  // completion barrier can grant initial visibility of the new payload.
+  bool asyncLoad = tracksLoadSeparately(insertPoint);
+  if (asyncLoad)
+    threadMask = 0;
   const bool unpublishedWrite = threadMask == 0;
   if (!publishWrite && !clearWrites && !clearReads && !clearReadTracking)
     return;
@@ -1917,6 +1982,7 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
   specializationArgs.append(static_cast<uint64_t>(clearReadTracking));
   specializationArgs.append(static_cast<uint64_t>(clearCopies));
   specializationArgs.append(static_cast<uint64_t>(unpublishedWrite));
+  specializationArgs.append(static_cast<uint64_t>(asyncLoad));
 
   RankedTensorType writeVisibilityType;
   if (publishWrite) {
@@ -1963,8 +2029,8 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
       b, "publish_write_visibility", args, /*assertInfo=*/std::nullopt,
       specializationArgs,
       [publishWrite, clearWrites, clearReads, clearReadTracking, clearCopies,
-       unpublishedWrite, copiesType, writeVisibilityType, writeTrackingType,
-       readVisibilityType,
+       asyncLoad, unpublishedWrite, copiesType, writeVisibilityType,
+       writeTrackingType, readVisibilityType,
        readTrackingType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value bufferMask = entryBlock->getArgument(0);
         Value pred = entryBlock->getArgument(1);
@@ -1979,6 +2045,9 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
           Value visibilityPtr = entryBlock->getArgument(nextArg++);
           Value visibilityMask =
               convertAndBroadcast(fb, bufferMask, {1}, writeVisibilityType);
+          if (!asyncLoad)
+            visibilityMask =
+                selectWriteSlot(fb, visibilityMask, WriteSlot::Ordinary);
           Value relationMask =
               unpublishedWrite
                   ? createCTASetMask(fb, writeVisibilityType, 0, effectCTAs)
@@ -1998,7 +2067,8 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
                                         visibilityMask);
         }
 
-        auto clearTable = [&](RankedTensorType tableType) {
+        auto clearTable = [&](RankedTensorType tableType,
+                              bool onlyOrdinaryWrites = false) {
           Value tablePtr = entryBlock->getArgument(nextArg++);
           SmallVector<int64_t> shape(tableType.getShape());
           assert(shape.size() >= 3 && "Expected a tracking or commit table");
@@ -2022,6 +2092,8 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
                 fb.getInsertionBlock()->getParent(), shape, bitWidth);
           }
           Value tableMask = convertAndBroadcast(fb, bufferMask, {1}, storeType);
+          if (onlyOrdinaryWrites)
+            tableMask = selectWriteSlot(fb, tableMask, WriteSlot::Ordinary);
           Value ctaMask =
               createCTASetMask(fb, storeType, /*dim=*/0, effectCTAs);
           tableMask = arith::AndIOp::create(fb, tableMask, ctaMask);
@@ -2064,7 +2136,7 @@ void FunctionBuilder::createPublishWriteVisibilityCall(
         };
 
         if (clearWrites)
-          clearTable(writeTrackingType);
+          clearTable(writeTrackingType, /*onlyOrdinaryWrites=*/!asyncLoad);
         if (clearReads)
           clearTable(readVisibilityType);
         if (clearReadTracking)
@@ -2490,9 +2562,9 @@ void FunctionBuilder::createTrackVisibleAccessesCall(
               createCTASetMask(fb, writeVisibilityType, /*dim=*/2, currentCTA);
           visibleWrites =
               arith::AndIOp::create(fb, visibleWrites, sourceCTAMask);
-          visibleWrites = reduceLastDim<arith::OrIOp>(fb, visibleWrites);
-          visibleWrites =
-              convertAndBroadcast(fb, visibleWrites, {0, 1}, trackingType);
+          visibleWrites = reduce<arith::OrIOp>(fb, visibleWrites, {2});
+          visibleWrites = broadcastWriteRows(fb, visibleWrites, trackingType,
+                                             trackingType.getRank() - 2);
           Value barAndVisible =
               arith::AndIOp::create(fb, barrierMask, visibleWrites);
           Value one =
@@ -2611,13 +2683,15 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
                              barrierStatesVal, barrierCTAs,   effectCTAs};
   auto maskEncoding =
       cast<RankedTensorType>(bufferMask.getType()).getEncoding();
+  bool asyncLoad = tracksLoadSeparately(insertPoint);
   createCallToCachedFunction(
       b, "track_barrier_write_for_buffer", args,
       /*assertInfo=*/std::nullopt,
       {barriersType, writeTrackingType, barrierStatesType,
+       static_cast<uint64_t>(asyncLoad),
        llvm::xxh3_64bits(mlir::debugString(maskEncoding))},
-      [writeTrackingType, barrierStatesType](ImplicitLocOpBuilder &fb,
-                                             Block *entryBlock) {
+      [writeTrackingType, barrierStatesType,
+       asyncLoad](ImplicitLocOpBuilder &fb, Block *entryBlock) {
         Value mbarOffset = entryBlock->getArgument(0);
         Value mbarLengthVal = entryBlock->getArgument(1);
         Value pred = entryBlock->getArgument(2);
@@ -2643,6 +2717,8 @@ void FunctionBuilder::createTrackBarrierWriteForBufferCall(
             convertAndBroadcast(fb, barriersEqBar, {3}, writeTrackingType);
         bufferMask =
             convertAndBroadcast(fb, bufferMask, {1}, writeTrackingType);
+        if (asyncLoad)
+          bufferMask = selectWriteSlot(fb, bufferMask, WriteSlot::AsyncLoad);
         Value bufferCTAMask =
             createCTASetMask(fb, writeTrackingType, /*dim=*/0, effectCTAs);
         Value barrierCTAMask =
@@ -2845,8 +2921,8 @@ void FunctionBuilder::createTransferVisibleAccessesCall(
           Value trackingBuffers =
               arith::SelectOp::create(fb, barrierMask, tracking, zeroTracking);
           trackingBuffers = reduce<arith::OrIOp>(fb, trackingBuffers, {2, 3});
-          trackingBuffers = convertAndBroadcast(fb, trackingBuffers, {0, 1},
-                                                writeVisibilityType);
+          trackingBuffers =
+              broadcastWriteRows(fb, trackingBuffers, writeVisibilityType, 3);
           auto trackingBuffersType =
               cast<RankedTensorType>(trackingBuffers.getType());
           Value trackingBuffersOne = tti::createConstIntTensor(
@@ -2952,6 +3028,8 @@ void FunctionBuilder::createVerifyWriteVisibilityCall(
             tti::createConstIntTensor(fb, fb.getLoc(), 0, writeVisibilityType);
         Value noOneIsWriting = arith::CmpIOp::create(
             fb, arith::CmpIPredicate::eq, writeVisibility, writeVisibilityZero);
+        noOneIsWriting =
+            selectWriteSlot(fb, noOneIsWriting, WriteSlot::Ordinary);
         auto elemType = cast<IntegerType>(writeVisibilityType.getElementType());
         Value threadElem = adjustIntegerWidth(fb, threadVal, elemType);
         Value threadMask =
@@ -3366,8 +3444,8 @@ void FunctionBuilder::createPublishClusterVisibilityCall(
                                                writeVisibility, zeroWrites);
         }
         Value writesForCluster = reduce<arith::OrIOp>(fb, syncWrites, {2});
-        writesForCluster = convertAndBroadcast(fb, writesForCluster, {0, 1},
-                                               writeVisibilityType);
+        writesForCluster =
+            broadcastWriteRows(fb, writesForCluster, writeVisibilityType, 3);
         Value newWriteVisibility =
             arith::OrIOp::create(fb, writeVisibility, writesForCluster);
         tti::createStoreScratchMemory(fb, fb.getLoc(), writeVisibilityPtr,
@@ -3638,6 +3716,10 @@ void FunctionBuilder::createFenceProxyAccessesCall(ImplicitLocOpBuilder &b,
   ValueType writes =
       auxData.writeVisibility[(int)MemType::SHARED_MEM].at(insertPoint);
   auto writeType = cast<RankedTensorType>(writes.type);
+  // A proxy fence covers generic writes. The ordinary slot starts at the
+  // base pointer, including when a cluster also tracks async loads.
+  writeType =
+      getSlicedTensorType(writeType, {0, 1, 2}, writeType.getElementType());
   SmallVector<Value> args = {arith::ConstantIntOp::create(b, thread, 32), pred,
                              visibility.value, writes.value};
   createCallToCachedFunction(
@@ -4604,6 +4686,8 @@ void FunctionBuilder::createCheckOutstandingCommitsCall(
               arith::AndIOp::create(fb, visible,
                                     createCTASetMask(fb, visibilityType, 2,
                                                      createCurrentCTAMask(fb)));
+          if (visibilityType.getRank() == 4)
+            visible = reduceLastDim<arith::AndIOp>(fb, visible);
           Value completed = reduceLastDim<arith::OrIOp>(fb, visible);
           completed = convertAndBroadcast(fb, completed, {0, 1}, commitsType);
           selectedEqZero = arith::OrIOp::create(fb, selectedEqZero, completed);

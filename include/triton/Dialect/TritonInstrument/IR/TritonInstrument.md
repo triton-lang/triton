@@ -148,6 +148,13 @@ can see that read. After a barrier-tracked write, ConSan records the current
 peer thread mask as the new write frontier for the buffer and clears prior read
 state that the write supersedes.
 
+For bulk and TMA loads in a cluster, each region has a second write slot.
+Before the first load, all threads satisfy this slot. Issuing a load clears
+both slots and their barrier snapshots in every observer CTA. A wait on the
+completion barrier grants the waiting thread and its peers access to the
+payload. Ordinary writes preserve the load slot so each CTA contributing to
+a scatter can independently acquire the preceding load.
+
 All normal instrumentation emitted around one IR operation is wrapped in the
 ConSan lock. Barrier waits are split into a locked pre-wait section and a locked
 post-wait section.
@@ -229,22 +236,27 @@ multiCTA kernel those roles can differ:
 - The barrier-recipient CTA bitset selects the live barrier rows that arrivals,
   expectations, and completion signals update.
 
-For example, a multicast TMA load is issued by the multicast-group leader,
-writes every result-recipient CTA row, and signals the leader barrier row. A
-two-CTA Tensor Core operation is issued by the even CTA in the pair, but its
-memory effects cover both CTA rows in that pair. CLC try-cancel is issued once
-for the cluster and touches all CTA rows.
+The multicast-group leader issues a bulk or TMA load. Each destination CTA
+receives a replica and signals its local mbarrier. For `cta_group::2`, the
+barrier address selects the receiving member of each CTA pair. ConSan records
+the destination rows tracked by each barrier. A wait acquires those rows,
+and a cluster barrier can share the acquired writes with peer CTAs.
+
+The even CTA issues a two-CTA Tensor Core operation whose memory effects
+cover both rows in the pair. CLC try-cancel is issued once for the cluster
+and touches all CTA rows.
 
 For direct memdesc accesses, ConSan derives the possible recipient CTA rows
 from the same block-local register-to-shared layout conversion used by
 lowering. This covers `ttg.local_load`, `ttg.local_store`, and source-backed
 `ttg.local_alloc`. For `ttg.local_gather`, `ttg.local_scatter`, and
 `ttg.local_atomic_scatter_rmw`, the runtime index replaces one logical
-coordinate, so ConSan additionally spans that index's layout bases. In each
-case the issuing CTA is fixed while the other input bases are spanned,
-producing a static conservative recipient set for the full buffer without
-defaulting every access to the whole cluster. Cross-CTA affine subslices are
-rejected as unsupported by BufferRegion analysis.
+coordinate. For unmasked accesses, the layout gives the exact recipient set
+when the index cannot affect the target CTA. Otherwise, each warp ORs the
+CTA bits reached by its active indices. Warps in the same partition exchange
+these masks through CTA-private global scratch and compute the final OR
+within each warp. The descriptor's affine CTA offset maps the resulting set
+to physical CTA rows.
 
 ## Barrier Synchronization
 

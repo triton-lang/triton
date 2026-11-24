@@ -101,12 +101,19 @@ triton::AddressSet &getAddressesForCTA(MemDescFootprint &footprint,
   return it->second;
 }
 
+struct IssuerAccess {
+  const triton::LinearLayout &conversion;
+  unsigned issuer;
+  bool includeCTAReplicas;
+};
+
 MemDescFootprint getMemDescAddresses(
     uint32_t storageBase, uint32_t affineOffset, ttg::MemDescType ty,
     llvm::DenseMap<std::pair<Type, uint32_t>, MemDescFootprint> *cache =
         nullptr,
     ArrayRef<uint32_t> partitionBases = {}, uint32_t affinePartitionOffset = 0,
-    uint32_t affineCTAOffset = 0) {
+    uint32_t affineCTAOffset = 0,
+    std::optional<IssuerAccess> access = std::nullopt) {
   bool isTmem = isa<ttng::TensorMemorySpaceAttr>(ty.getMemorySpace());
   if (cast<ttg::LayoutEncodingTrait>(ty.getEncoding()).getRank() !=
       ty.getRank()) {
@@ -138,11 +145,9 @@ MemDescFootprint getMemDescAddresses(
   triton::LinearLayout layout = ttg::toLinearLayoutIgnoringPadding(
       ttg::dropPipeliningDim(ty.getAllocShape(), ty.getEncoding()),
       ty.getEncoding());
-  triton::LinearLayout inverse = layout.pseudoinvert();
+  auto inverse = access ? access->conversion : layout.pseudoinvert();
   MLIRContext *ctx = ty.getContext();
   SmallVector<StringAttr> dims = triton::standardOutDimNames(ctx, ty.getRank());
-  ArrayRef<int64_t> shape = ty.getShape();
-  uint64_t numPoints = product(shape);
   uint32_t bitWidth = getIntOrFloatOrPtrBitWidth(ty.getElementType());
 
   StringAttr offsetName = StringAttr::get(ctx, "offset");
@@ -182,9 +187,20 @@ MemDescFootprint getMemDescAddresses(
     uint32_t col = 0;
     uint32_t partition = 0;
     uint32_t block = 0;
+
+    void operator^=(const PhysicalBasis &rhs) {
+      offset ^= rhs.offset;
+      row ^= rhs.row;
+      col ^= rhs.col;
+      partition ^= rhs.partition;
+      block ^= rhs.block;
+    }
   };
+  PhysicalBasis physical;
   SmallVector<PhysicalBasis> bases;
-  for (auto [dim, dimSize] : llvm::zip_equal(dims, shape)) {
+  auto inputs = access ? inverse.getInDims()
+                       : triton::standardOutDimPairs(ctx, ty.getShape());
+  for (auto [dim, dimSize] : inputs) {
     unsigned numBits = llvm::Log2_64(dimSize);
     for (unsigned bit = 0; bit < numBits; ++bit) {
       auto basis = [&, dim = dim](StringAttr name) {
@@ -192,14 +208,22 @@ MemDescFootprint getMemDescAddresses(
                    ? static_cast<uint32_t>(inverse.getBasis(dim, bit, name))
                    : 0;
       };
-      uint32_t block = basis(blockName);
-      bases.push_back({basis(offsetName), basis(rowName), basis(colName),
-                       basis(partitionName), block});
+      PhysicalBasis p{basis(offsetName), basis(rowName), basis(colName),
+                      basis(partitionName), basis(blockName)};
+      if (access && dim == blockName) {
+        if (access->issuer & (1u << bit))
+          physical ^= p;
+      } else if (p.offset || p.row || p.col || p.partition || p.block) {
+        bases.push_back(p);
+      }
     }
   }
   // Include storage reserved by zero allocation bases, but not bases excluded
   // by the subview. The pseudoinverse above selects only one representative.
   for (StringAttr dim : layout.getInDimNames()) {
+    // The conversion already selects each physical CTA replica.
+    if (access && dim == blockName && !access->includeCTAReplicas)
+      continue;
     uint32_t zeroBits = (layout.getInDimSize(dim) - 1) &
                         ~triton::getInputBasisMask(layout, dim, dims);
     // A zero row-16 basis leaves half of each warp's rows unallocated.
@@ -210,20 +234,13 @@ MemDescFootprint getMemDescAddresses(
       bases.push_back({dim == offsetName ? bit : 0, dim == rowName ? bit : 0,
                        dim == colName ? bit : 0, 0,
                        dim == blockName ? bit : 0});
-      numPoints *= 2;
     }
   }
 
-  PhysicalBasis physical;
+  uint64_t numPoints = uint64_t{1} << bases.size();
   for (uint64_t index = 0; index < numPoints; ++index) {
-    if (index != 0) {
-      const PhysicalBasis &basis = bases[llvm::countr_zero(index)];
-      physical.offset ^= basis.offset;
-      physical.row ^= basis.row;
-      physical.col ^= basis.col;
-      physical.partition ^= basis.partition;
-      physical.block ^= basis.block;
-    }
+    if (index != 0)
+      physical ^= bases[llvm::countr_zero(index)];
     addPhysicalAddress(physical.offset, physical.row, physical.col,
                        physical.partition, physical.block);
   }
@@ -245,6 +262,15 @@ uint32_t getMemDescStorageOffset(ttg::MemDescType ty, unsigned index) {
 } // namespace
 
 namespace mlir::triton {
+
+MemDescFootprint BufferRegionView::getAccessAddresses(
+    gpu::MemDescType type, const LinearLayout &conversion, unsigned issuer,
+    bool includeCTAReplicas) const {
+  return getMemDescAddresses(
+      storageBase, affineOffset, type, nullptr, partitionBases,
+      affinePartitionOffset, affineCTAOffset,
+      IssuerAccess{conversion, issuer, includeCTAReplicas});
+}
 
 MemDescSubsliceOffsets
 getMemDescSubsliceUnpaddedOffsets(ttg::MemDescType srcTy,
@@ -450,8 +476,10 @@ BufferStatePlan createBufferStatePlan(ArrayRef<BufferRegion> regions,
 
     SmallVector<llvm::SmallBitVector> atomMemberships;
     atomMemberships.reserve(atoms.size());
-    for (Atom &atom : atoms)
+    for (Atom &atom : atoms) {
+      plan.laneAddresses.push_back(std::move(atom.first));
       atomMemberships.push_back(std::move(atom.second));
+    }
 
     plan.numLanes += atomMemberships.size();
     componentPlans.push_back({component, std::move(atomMemberships)});

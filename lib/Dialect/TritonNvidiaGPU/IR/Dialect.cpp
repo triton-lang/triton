@@ -500,10 +500,13 @@ LogicalResult TensorMemoryEncodingAttr::verify(
   if (!llvm::isPowerOf2_32(blockN)) {
     return emitError() << "blockN must be a power of 2 but got " << blockN;
   }
-  if (blockN > 512) {
-    return emitError() << "blockN must be less than or equal to 512 but got "
-                       << blockN;
-  }
+  if (blockN > kMaxTMemBlockN)
+    return emitError() << "blockN must be less than or equal to "
+                       << kMaxTMemBlockN << " but got " << blockN;
+  // The two 64-row halves each span blockN / 2 columns.
+  if (twoCTAs && blockM == 64 && blockN == 1)
+    return emitError()
+           << "two-CTA tensor memory with blockM=64 requires blockN >= 2";
   if (!(colStride == 1 || colStride == 2 || colStride == 4)) {
     return emitError() << "colStride must be 1, 2, or 4 but got "
                        << "but got " << colStride;
@@ -531,6 +534,40 @@ unsigned getMMAv5InstructionN(MemDescType type) {
   if (type.getShape().back() < type.getAllocShape().back())
     n = std::min<unsigned>(n, getShapePerCTA(type).back());
   return n;
+}
+
+bool areTMemRowsAligned(MemDescType lhs, MemDescType acc) {
+  auto row = StringAttr::get(lhs.getContext(), "row");
+  auto a = toLinearLayout(lhs);
+  auto d = toLinearLayout(acc);
+  auto enc = lhs.getEncoding();
+  auto aAlloc =
+      toLinearLayout(dropPipeliningDim(lhs.getAllocShape(), enc), enc);
+  // Row bases are (M, K) for A and (M, N) for D. Bits outside the
+  // descriptor shape become zero.
+  //
+  // blockM  twoCTAs  row 16 (bit 4)            row 64 (bit 6)
+  //     64    false  (64, 0) or (0, blockN)    (32, 0)
+  //     64     true  (16, 0)                   (0, blockN / 2)
+  //    128    false  (16, 0)                   (64, 0)
+  //    128     true  (16, 0)                   (64, 0)
+  //
+  // 1. a16[1] == 0. As K advances, A must stay in the same 16-row
+  //    half as the D tile it accumulates into.
+  // 2. a16 == d16. A and D must switch halves together as M advances.
+  //    This also forces d16[1] == 0, since the same A tile feeds each N tile.
+  // 3. a64[0] == d64[0]. Row 64 must select the same M bit in A and D.
+  //    With two CTAs and blockM=64, D can use row 64 to split N within
+  //    one MMA.
+  // 4. aAlloc64[1] == 0. With blockM=64, a one-CTA MMA reads one 16-row
+  //    half per warp. A slice can select that half. A two-CTA MMA reads
+  //    both 64-row halves and needs the same A values in each. A K slice
+  //    can hide a nonzero row-64 basis without copying any data, so check
+  //    the K component in the allocation layout.
+  auto a16 = a.getBasis(row, 4);
+  return a16[1] == 0 && a16 == d.getBasis(row, 4) &&
+         a.getBasis(row, 6)[0] == d.getBasis(row, 6)[0] &&
+         aAlloc.getBasis(row, 6)[1] == 0;
 }
 
 LogicalResult impl::verifyMMAv5Op(Operation *op) {
@@ -569,16 +606,10 @@ LogicalResult impl::verifyMMAv5Op(Operation *op) {
           "unsupported 32-byte swizzle atomicity");
   }
 
-  auto isInterleaved = [](MemDescType memdesc) {
-    auto enc = dyn_cast<TensorMemoryEncodingAttr>(memdesc.getEncoding());
-    return enc && enc.getBlockM() == 64 &&
-           getTmemAllocSizes(memdesc).numRows != 64;
-  };
-
-  if (isInterleaved(aType) && isInterleaved(dType)) {
+  if (isa<TensorMemoryEncodingAttr>(aType.getEncoding()) &&
+      !areTMemRowsAligned(aType, dType))
     return op->emitOpError(
-        "does not support blockM=64 with interleaved blocks in TMEM layout");
-  }
+        "requires compatible TMEM row layouts for the LHS and accumulator");
   if (encoding.getTwoCTAs() != itf.getTwoCtas())
     return op->emitOpError("accumulator layout must match the MMA CTA group");
 

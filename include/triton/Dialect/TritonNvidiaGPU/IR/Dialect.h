@@ -159,6 +159,11 @@ LinearLayout getTileLayout(MLIRContext *ctx, TMemAccessAtom atom, bool unpacked,
 
 TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
 
+constexpr unsigned kMaxTMemBlockN = 512;
+
+// Check the relative TMEM rows of A and D across MMA tiles.
+bool areTMemRowsAligned(gpu::MemDescType lhs, gpu::MemDescType acc);
+
 uint32_t getTMemSubSliceOffset(gpu::MemDescType memDescType, int32_t offset,
                                int32_t dim);
 

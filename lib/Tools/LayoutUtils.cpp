@@ -58,6 +58,18 @@ LinearLayout invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       /*requireSurjective=*/false);
 }
 
+LinearLayout getGatherScatterLayout(const LinearLayout &sharedLayout,
+                                    const LinearLayout &regLayout,
+                                    StringAttr axis) {
+  auto dims = llvm::to_vector(regLayout.getOutDimNames());
+  llvm::erase(dims, axis);
+  auto indexed =
+      regLayout.sublayout(llvm::to_vector(regLayout.getInDimNames()), dims) *
+      LinearLayout::identity1D(sharedLayout.getOutDimSize(axis), axis, axis);
+  auto block = StringAttr::get(axis.getContext(), "block");
+  return invertAndComposeLocal(sharedLayout, indexed, {block});
+}
+
 // Return the bits that are zero in `sharedLayout[kBlock]` and are not
 // zero in `regLayout[kBlock]
 static uint32_t getMissingCTAReplicaBits(const LinearLayout &regLayout,

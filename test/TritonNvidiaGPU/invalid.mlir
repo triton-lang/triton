@@ -45,6 +45,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttng.tw
 
 // -----
 
+// expected-error @below {{two-CTA tensor memory with blockM=64 requires blockN >= 2}}
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 1, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+
+// -----
+
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:120"} {
   tt.func @tcgen05_unsupported_target() {
@@ -321,6 +326,88 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @mma_requires_matching_accumulator_rows(%a: !a, %b: !b, %d: !d, %p: i1) {
     // expected-error @below {{accumulator layout does not match MMA instruction N = 16}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p {two_ctas} : !a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#a = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#d = #ttng.tensor_memory_encoding<blockM = 64, blockN = 256, colStride = 1>
+!a = !ttg.memdesc<64x32xbf16, #a, #ttng.tensor_memory>
+!b = !ttg.memdesc<32x512xbf16, #b, #ttg.shared_memory>
+!d = !ttg.memdesc<64x512xf32, #d, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_interleaved_n(%a: !a, %b: !b, %d: !d, %p: i1) {
+    // expected-error @below {{requires compatible TMEM row layouts for the LHS and accumulator}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#a = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#d = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, colStride = 1>
+!a = !ttg.memdesc<64x64xbf16, #a, #ttng.tensor_memory>
+!b = !ttg.memdesc<64x128xbf16, #b, #ttg.shared_memory>
+!d = !ttg.memdesc<64x128xf32, #d, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_interleaved_k(%a: !a, %b: !b, %d: !d, %p: i1) {
+    // expected-error @below {{requires compatible TMEM row layouts for the LHS and accumulator}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+!a = !ttg.memdesc<64x64xbf16, #tmem, #ttng.tensor_memory>
+!b = !ttg.memdesc<64x64xbf16, #b, #ttg.shared_memory>
+!d = !ttg.memdesc<64x64xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_interleaved_k_and_n(%a: !a, %b: !b, %d: !d, %p: i1) {
+    // K and N advance independently even when the row bases are equal.
+    // expected-error @below {{requires compatible TMEM row layouts for the LHS and accumulator}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#a = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#d = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+!a = !ttg.memdesc<128x16xf16, #a, #ttng.tensor_memory, 128x32>
+!b = !ttg.memdesc<16x64xf16, #b, #ttg.shared_memory>
+!d = !ttg.memdesc<128x64xf32, #d, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_two_ctas_sliced_k(%a: !a, %b: !b, %d: !d, %p: i1) {
+    // Row 64 selects K=16 in the allocation even though the slice hides it.
+    // expected-error @below {{requires compatible TMEM row layouts for the LHS and accumulator}}
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p {two_ctas} : !a, !b, !d
+    tt.return
+  }
+}
+
+// -----
+
+#a = #ttng.tensor_memory_encoding<blockM = 128, blockN = 16, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+#b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#d = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+!a = !ttg.memdesc<256x16xf16, #a, #ttng.tensor_memory>
+!b = !ttg.memdesc<16x64xf16, #b, #ttg.shared_memory>
+!d = !ttg.memdesc<256x64xf32, #d, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  tt.func @mma_two_ctas_mismatched_rows(%a: !a, %b: !b, %d: !d, %p: i1) {
+    // Row 64 selects a different M in A and a different N in D.
+    // expected-error @below {{requires compatible TMEM row layouts for the LHS and accumulator}}
     ttng.tc_gen5_mma %a, %b, %d, %p, %p {two_ctas} : !a, !b, !d
     tt.return
   }

@@ -597,14 +597,12 @@ SmallVector<std::pair<Value, Value>> computeBlockLocalOffsets(
   MLIRContext *ctx = memDescTy.getContext();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto sharedLayout = triton::gpu::toLinearLayoutIgnoringPadding(memDescTy);
-  auto allDims = standardOutDimNames(ctx, memDescTy.getRank());
   auto kRegister = str_attr("register");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
   auto kOffset = str_attr("offset");
   auto kBlock = str_attr("block");
-  StringAttr axisDim = allDims[axis];
-  LinearLayout orderedRegLayout = regLayout.transposeOuts(allDims);
+  StringAttr axisDim = standardOutDimNames(ctx, memDescTy.getRank())[axis];
   assert(idxValues.size() == regLayout.getInDimSize(kRegister));
 
   auto toI32 = [&](Value idx) -> Value {
@@ -623,19 +621,7 @@ SmallVector<std::pair<Value, Value>> computeBlockLocalOffsets(
   SmallVector<uint32_t> registerIndices;
   for (uint32_t i = 0; i < idxValues.size(); ++i)
     registerIndices.push_back(i);
-  // Replace the statically-known coordinate along axis with an independent
-  // input carrying the runtime index.
-  SmallVector<StringAttr> nonIndexedDims = allDims;
-  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
-  assert(!orderedRegLayout.hasInDim(axisDim));
-  LinearLayout indexedLayout =
-      orderedRegLayout.sublayout(
-          llvm::to_vector(orderedRegLayout.getInDimNames()), nonIndexedDims) *
-      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
-                               axisDim);
-  indexedLayout = indexedLayout.transposeOuts(allDims);
-  LinearLayout cvt =
-      invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
+  LinearLayout cvt = getGatherScatterLayout(sharedLayout, regLayout, axisDim);
   bool crossCTA = !cvt.isIdentityOnOutDim(kBlock);
   bool blockAffectsOffset = !cvt.sublayoutIsZero({kBlock}, {kOffset});
 

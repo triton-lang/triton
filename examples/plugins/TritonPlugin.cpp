@@ -30,7 +30,7 @@ struct MLIRPluginPass : public impl::TritonGPUMLIRPluginBase<MLIRPluginPass> {
 
     mod.walk([&](FunctionOpInterface funcOp) {
       StringAttr funcNameAttr = funcOp.getNameAttr();
-      funcOp.setName(name);
+      funcOp.setSymbolName(name);
     });
   }
 };
