@@ -369,14 +369,15 @@ private:
           b.gep(smem.getType(), i8_ty, smem, b.i32_val(scratch.offsets[i])));
       types.push_back(getTypeConverter()->convertType(type));
     }
-    auto getOffset = [&](const LinearLayout &layout, unsigned reg) {
-      return applyLinearLayout(loc, rewriter, layout,
-                               {{kReg, b.i32_val(reg)},
-                                {kLane, laneId},
-                                {kWarp, warpId},
-                                {kBlock, b.i32_val(0)}})
-          .front()
-          .second;
+    auto getOffsets = [&](const LinearLayout &layout) {
+      auto regs =
+          llvm::to_vector(llvm::seq<uint32_t>(layout.getInDimSize(kReg)));
+      return applyLinearLayoutVec(loc, rewriter, layout,
+                                  {{kReg, b.i32_val(0)},
+                                   {kLane, laneId},
+                                   {kWarp, warpId},
+                                   {kBlock, b.i32_val(0)}},
+                                  regs);
     };
     auto free = source.getFreeVariableMasks();
     free.erase(kBlock);
@@ -384,8 +385,9 @@ private:
         gpu::emitRedundantThreadPredicate(free, rewriter, loc, targetInfo);
     if (!storePred)
       storePred = b.true_val();
+    auto storeOffsets = getOffsets(storeLayout);
     for (auto [r, total] : llvm::enumerate(totals)) {
-      Value offset = getOffset(storeLayout, r);
+      Value offset = storeOffsets[r].front().second;
       for (unsigned i = 0; i < total.size(); ++i) {
         Value ptr = b.gep(smem.getType(), types[i], bases[i], offset);
         targetInfo.storeDShared(rewriter, loc, ptr, Value(), total[i],
@@ -423,14 +425,15 @@ private:
         b.icmp_ne(segmentOffset, b.i32_val(getConsumerOffset(boundary)));
     ScanValues carries(totals.size());
 
-    unsigned numScans = independentScans.getInDimSize(kReg);
+    auto loadOffsets = getOffsets(loadLayout);
+    unsigned numScans = loadOffsets.size();
     for (unsigned n = 0; n < numScans; ++n) {
       unsigned scanIndex = reverse ? numScans - 1 - n : n;
       unsigned boundaryReg =
           dstReg.apply({{kReg, scanIndex * numTotals + boundary}})
               .front()
               .second;
-      Value base = getOffset(loadLayout, scanIndex);
+      Value base = loadOffsets[scanIndex].front().second;
       SmallVector<Value> acc;
       for (unsigned i = 0; i < numTotals; ++i) {
         unsigned segment = reverse ? numTotals - 1 - i : i;
