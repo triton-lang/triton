@@ -315,10 +315,22 @@ private:
                              warpId, rewriter);
   }
 
-  // The general conversion materializes the replicated totals in registers.
-  // For long, wide tuples this can keep many registers live at once. Grouped
-  // traversal loads one group at a time and maintains a running prefix and
-  // the carries.
+  // An unfused scan saves the running prefix acc for each segment s, then
+  // looks it up per local slot. prev(s) is the preceding segment in scan order.
+  //
+  //   for s in scan order:
+  //     acc = total[s] if s is first else combine(acc, total[s])
+  //     prefix[s] = acc
+  //   for each local segment slot r:
+  //     s = source(r, lane, warp)[axis]
+  //     if segmentRegs == 1: values[r] = prefix[s]
+  //     else if s is not first: apply prefix[prev(s)] to each local value in r
+  //
+  // We fuse the lookup into the scan to avoid keeping every prefix live.
+  // Every thread uses the source layout to select a prefix for carries[r].
+  // For example, with one value per segment and segment index s = 4*r + warp,
+  // the segment offset is warp. For slot 1, all lanes in warp 0 take prefix[4]
+  // of their own column and all lanes in warp 1 take prefix[5].
   void scanInterWarpGroups(triton::ScanOp op, const ScanLoweringHelper &helper,
                            const ScanValues &totals, ScanValues &values,
                            Value laneId, Value warpId,
@@ -367,9 +379,11 @@ private:
           .second;
     };
     auto free = source.getFreeVariableMasks();
+    free.erase(kBlock);
     Value storePred =
-        b.and_(b.icmp_eq(b.and_(laneId, b.i32_val(free[kLane])), b.i32_val(0)),
-               b.icmp_eq(b.and_(warpId, b.i32_val(free[kWarp])), b.i32_val(0)));
+        gpu::emitRedundantThreadPredicate(free, rewriter, loc, targetInfo);
+    if (!storePred)
+      storePred = b.true_val();
     for (auto [r, total] : llvm::enumerate(totals)) {
       Value offset = getOffset(storeLayout, r);
       for (unsigned i = 0; i < total.size(); ++i) {
@@ -380,23 +394,42 @@ private:
     }
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
 
-    // All segment bits are in scan registers. Each segment maps to one
-    // destination register, shared by the lanes and warps of this scan.
-    auto dstReg = scan.invertAndCompose(source).sublayout({kReg}, {kReg});
-    auto threadLayout = source.sublayout({kLane, kWarp}, {axis});
-    unsigned threadBits = getOutputBasisMask(source, {kLane, kWarp}, axis);
-    Value threadSegment = applyLinearLayout(loc, rewriter, threadLayout,
-                                            {{kLane, laneId}, {kWarp, warpId}})
-                              .front()
-                              .second;
+    // location in scan -> location of the same segment in source.
+    auto route = scan.invertAndCompose(source);
+    // scan register -> consumer's register slot in source.
+    auto dstReg = route.sublayout({kReg}, {kReg});
+    // (lane, warp) in source -> segment offset in source.
+    auto laneWarpToSegmentOffset = source.sublayout({kLane, kWarp}, {axis});
+    // scan register -> consumer's segment offset in source.
+    auto scanRegToOffset = route.sublayout({kReg}, {kLane, kWarp})
+                               .compose(laneWarpToSegmentOffset);
+    auto getConsumerOffset = [&](unsigned scanReg) {
+      return scanRegToOffset.apply({{kReg, scanReg}}).front().second;
+    };
+    Value segmentOffset =
+        applyLinearLayout(loc, rewriter, laneWarpToSegmentOffset,
+                          {{kLane, laneId}, {kWarp, warpId}})
+            .front()
+            .second;
     unsigned segmentRegs = values.size() / totals.size();
     bool inclusive = segmentRegs == 1;
     unsigned boundary = reverse ? numTotals - 1 : 0;
+    unsigned lastConsumerOffset =
+        getConsumerOffset(reverse ? 0 : numTotals - 1);
+    // Only the boundary register needs this check.
+    //   Boundary offset -> skip the combine (no preceding segment).
+    //   Other offset    -> apply the carry.
+    Value isNonBoundaryOffset =
+        b.icmp_ne(segmentOffset, b.i32_val(getConsumerOffset(boundary)));
     ScanValues carries(totals.size());
 
     unsigned numScans = independentScans.getInDimSize(kReg);
     for (unsigned n = 0; n < numScans; ++n) {
       unsigned scanIndex = reverse ? numScans - 1 - n : n;
+      unsigned boundaryReg =
+          dstReg.apply({{kReg, scanIndex * numTotals + boundary}})
+              .front()
+              .second;
       Value base = getOffset(loadLayout, scanIndex);
       SmallVector<Value> acc;
       for (unsigned i = 0; i < numTotals; ++i) {
@@ -418,18 +451,16 @@ private:
         unsigned scanReg = scanIndex * numTotals + consumer;
         unsigned r = dstReg.apply({{kReg, scanReg}}).front().second;
         auto &carry = carries[r];
-        unsigned owner = consumer & threadBits;
-        carry = selectPrefix(b, carry, acc, threadSegment, owner);
+        unsigned consumerOffset = getConsumerOffset(scanReg);
+        carry = selectPrefix(b, carry, acc, segmentOffset, consumerOffset);
 
-        // The register fixes the other segment bits. Apply its carry as
-        // soon as we visit the last lane/warp bit pattern in scan order.
-        if (owner != (reverse ? 0 : threadBits))
+        // After the last consumer offset, the carry is ready for this slot.
+        if (consumerOffset != lastConsumerOffset)
           continue;
         if (inclusive) {
           values[r] = carry;
         } else {
-          Value index = b.or_(threadSegment, b.i32_val(consumer & ~threadBits));
-          Value pred = b.icmp_ne(index, b.i32_val(boundary));
+          Value pred = r == boundaryReg ? isNonBoundaryOffset : b.true_val();
           for (unsigned j = 0; j < segmentRegs; ++j) {
             auto &value = values[r * segmentRegs + j];
             value = combineWithPrefix(op, carry, value, rewriter, pred);
@@ -516,11 +547,11 @@ private:
     return distance > 0 ? int(stride) : -int(stride);
   }
 
-  // The first prefix is the default, so a single candidate needs no select.
   static SmallVector<Value> selectPrefix(TritonLLVMOpBuilder &b,
                                          ArrayRef<Value> carry,
                                          ArrayRef<Value> prefix, Value index,
                                          unsigned candidate) {
+    // The first prefix is the default, so a single candidate needs no select.
     if (carry.empty())
       return llvm::to_vector(prefix);
     Value selected = b.icmp_eq(index, b.i32_val(candidate));
