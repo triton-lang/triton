@@ -360,14 +360,24 @@ private:
     auto storeLayout = source.transposeOuts(dims).flattenOuts();
     auto loadLayout = independentScans.transposeOuts(dims).flattenOuts();
     unsigned stride = independentScans.getTotalOutDimSize();
-    auto scratch = helper.getGroupedInterWarpScratchConfig();
     Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     SmallVector<Value> bases;
-    SmallVector<Type> types;
-    for (auto [i, type] : llvm::enumerate(op.getElementTypes())) {
-      bases.push_back(
-          b.gep(smem.getType(), i8_ty, smem, b.i32_val(scratch.offsets[i])));
-      types.push_back(getTypeConverter()->convertType(type));
+    auto types = llvm::map_to_vector(op.getElementTypes(), [&](Type type) {
+      return getTypeConverter()->convertType(type);
+    });
+    // With multiple scan lines per thread, pack each segment's fields into
+    // one shared-memory access on each pass through the segment loop.
+    bool packTuple = loadLayout.getInDimSize(kReg) > 1 &&
+                     (types.size() == 2 || types.size() == 4) &&
+                     (types.front().isInteger(32) || types.front().isF32()) &&
+                     llvm::all_equal(types);
+    if (packTuple) {
+      types = {vec_ty(types.front(), static_cast<int64_t>(types.size()))};
+      bases.push_back(smem);
+    } else {
+      auto scratch = helper.getGroupedInterWarpScratchConfig();
+      for (unsigned offset : scratch.offsets)
+        bases.push_back(b.gep(smem.getType(), i8_ty, smem, b.i32_val(offset)));
     }
     auto getOffsets = [&](const LinearLayout &layout) {
       auto regs =
@@ -388,10 +398,10 @@ private:
     auto storeOffsets = getOffsets(storeLayout);
     for (auto [r, total] : llvm::enumerate(totals)) {
       Value offset = storeOffsets[r].front().second;
-      for (unsigned i = 0; i < total.size(); ++i) {
+      for (unsigned i = 0; i < types.size(); ++i) {
         Value ptr = b.gep(smem.getType(), types[i], bases[i], offset);
-        targetInfo.storeDShared(rewriter, loc, ptr, Value(), total[i],
-                                storePred);
+        Value value = packTuple ? packLLVector(loc, total, rewriter) : total[i];
+        targetInfo.storeDShared(rewriter, loc, ptr, Value(), value, storePred);
       }
     }
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
@@ -444,6 +454,8 @@ private:
           current.push_back(targetInfo.loadDShared(rewriter, loc, ptr, Value(),
                                                    types[i], b.true_val()));
         }
+        if (packTuple)
+          current = unpackLLVector(loc, current.front(), rewriter);
         acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, current);
         // A one-value segment takes its own prefix. Otherwise, pass the
         // prefix to the next segment in scan order.

@@ -11,6 +11,8 @@
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=GROUPED-OFFSETS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
+// RUN: triton-opt %t/grouped-tuple.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=PACKED
+// RUN: triton-opt %t/grouped-tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-PACKED
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
 
 // RUN: triton-opt %t/tiny-totals.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TINY-TOTALS
@@ -340,6 +342,31 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     }) : (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>) -> (tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>)
     tt.return %result#0, %result#1 : tensor<128x32xf32, #columns>, tensor<128x32xi64, #columns>
   }
+}
+
+//--- grouped-tuple.mlir
+
+#columns = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:100"} {
+// Each thread scans two columns. Transfer both fields of an affine map together.
+// PACKED-LABEL: llvm.func {{.*}}@grouped_affine_scan(
+// PACKED: llvm.store {{.*}}vector<2xi32>
+// PACKED: nvvm.barrier
+// PACKED: llvm.load {{.*}}vector<2xi32>
+// AMD-PACKED-LABEL: llvm.func {{.*}}@grouped_affine_scan(
+// AMD-PACKED: llvm.store {{.*}}vector<2xi32>
+// AMD-PACKED: rocdl.s.barrier
+// AMD-PACKED: llvm.load {{.*}}vector<2xi32>
+tt.func private @grouped_affine_scan(%a: tensor<128x64xi32, #columns>, %b: tensor<128x64xi32, #columns>) -> (tensor<128x64xi32, #columns>, tensor<128x64xi32, #columns>) {
+  %result:2 = "tt.scan"(%a, %b) <{axis = 0 : i32, reverse = false}> ({
+  ^bb0(%a1: i32, %b1: i32, %a2: i32, %b2: i32):
+    %a12 = arith.muli %a1, %a2 : i32
+    %scaled = arith.muli %b1, %a2 : i32
+    %b12 = arith.addi %scaled, %b2 : i32
+    tt.scan.return %a12, %b12 : i32, i32
+  }) : (tensor<128x64xi32, #columns>, tensor<128x64xi32, #columns>) -> (tensor<128x64xi32, #columns>, tensor<128x64xi32, #columns>)
+  tt.return %result#0, %result#1 : tensor<128x64xi32, #columns>, tensor<128x64xi32, #columns>
+}
 }
 
 //--- gfx90a.mlir
