@@ -305,7 +305,8 @@ def test_mbarrier_query_visibility(case, num_warps, warp_specialized, device, ru
                     done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
                 ttgl.device_assert(valid, "ordinary TMA should not report invalid data")
             else:
-                ttgl.device_assert(~done & ~valid, "unsuccessful query must be false")
+                ttgl.device_assert(~done & ~valid,
+                                   "incomplete or disabled query must return done=false and valid=false")
             layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
             value = smem.load(layout)
             ttgl.store(out + ttgl.arange(0, 128, layout), value)
@@ -343,7 +344,7 @@ def test_mbarrier_conditional_retry_visibility(producer_warps, device, run_wrapp
     knobs.compilation.instrumentation_mode = "consan"
 
     @gluon.jit
-    def producer(invalid, valid, smem, full, empty):
+    def producer(invalid, valid, smem, full):
         for attempt in ttgl.static_range(2):
             mbarrier.expect(full, 256)
             if attempt == 0:
@@ -353,21 +354,18 @@ def test_mbarrier_conditional_retry_visibility(producer_warps, device, run_wrapp
             rubin.mbarrier.wait(full, attempt)
             done, valid_data = rubin.mbarrier.test_wait_validity(full, attempt)
             ttgl.device_assert(done & (valid_data == (attempt == 1)), "unexpected validity report")
-        mbarrier.wait(empty, 0)
 
     @gluon.jit
-    def consumer(out, smem, full, empty):
+    def consumer(out, smem, full):
         # Conditional parity 0 must acquire the retry's primary-parity-1 writes.
         rubin.mbarrier.wait(full, 0, phase_type="conditional")
         layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
         ttgl.store(out + ttgl.arange(0, 128, layout), smem.load(layout))
-        mbarrier.arrive(empty)
 
     @gluon.jit
     def kernel(invalid, valid, out, WARPS: ttgl.constexpr):
         smem = ttgl.allocate_shared_memory(ttgl.float16, [128], valid.layout)
         full = mbarrier.allocate_mbarrier()
-        empty = mbarrier.allocate_mbarrier()
         wide = mbarrier.allocate_mbarrier()
         # An unrelated v0-layout counter must not be queried for a v1 report.
         mbarrier.init(wide, count=512)
@@ -375,11 +373,8 @@ def test_mbarrier_conditional_retry_visibility(producer_warps, device, run_wrapp
         mbarrier.wait(wide, 0)
         mbarrier.invalidate(wide)
         mbarrier.init(full, count=1)
-        mbarrier.init(empty, count=1)
-        ttgl.warp_specialize([(consumer, (out, smem, full, empty)), (producer, (invalid, valid, smem, full, empty))],
-                             [WARPS])
+        ttgl.warp_specialize([(consumer, (out, smem, full)), (producer, (invalid, valid, smem, full))], [WARPS])
         mbarrier.invalidate(full)
-        mbarrier.invalidate(empty)
 
     shared = ttgl.NVMMASharedLayout(swizzle_byte_width=0, element_bitwidth=16, rank=1)
     invalid = -torch.zeros(128, dtype=torch.float16, device=device)
