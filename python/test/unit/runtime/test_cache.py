@@ -492,6 +492,17 @@ def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, 
         assert original_compiled.kernel != updated_compiled.kernel
 
 
+def test_line_info_change_after_hash(tmp_path: pathlib.Path, fresh_knobs):
+    code = "import triton\nimport triton.language as tl\n@triton.jit\ndef test_kernel(X):\n    tl.store(X, 1)\n"
+    first = write_and_load_module(tmp_path / "first.py", code, 0).test_kernel
+    second = write_and_load_module(tmp_path / "second.py", code, 0).test_kernel
+
+    fresh_knobs.compilation.disable_line_info = True
+    assert first.cache_key == second.cache_key
+    fresh_knobs.compilation.disable_line_info = False
+    assert first.cache_key != second.cache_key
+
+
 def test_reuse(device, fresh_triton_cache):
     counter = 0
 
