@@ -1854,7 +1854,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK-LABEL: axis_mismatch
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @axis_mismatch(%arg0: f32) -> tensor<1xf32, #ttg.slice<{dim = 0, parent = #blocked}>> {
-// CHECK: %[[R:.+]] = "tt.reduce"(%0) <{axis = 1 : i32}>
+// CHECK: %[[R:.+]] = "tt.reduce"(%0) <{axis = 1 : i32, in_thread_reduction = "tree"}>
 // CHECK: %[[C:.+]] = ttg.convert_layout %[[R]]
 // CHECK: tt.return %[[C]]
   %0 = tt.splat %arg0 : f32 -> tensor<1x16xf32, #blocked>

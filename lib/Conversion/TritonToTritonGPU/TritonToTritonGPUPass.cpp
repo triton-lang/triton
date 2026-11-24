@@ -384,7 +384,8 @@ struct TritonReducePattern : public OpConversionPattern<triton::ReduceOp> {
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto newReduce = triton::ReduceOp::create(
-        rewriter, op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
+        rewriter, op.getLoc(), adaptor.getOperands(), adaptor.getAxis(),
+        adaptor.getInThreadReduction());
     addNamedAttrs(newReduce, adaptor.getAttributes());
 
     auto &newCombineOp = newReduce.getCombineOp();

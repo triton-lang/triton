@@ -932,8 +932,16 @@ def TT_ReduceOp: TT_Op<"reduce",
       The combiner and its callees may contain memory-effect-free operations,
       `llvm.intr.assume`, `tt.assert`, and `tt.print`.
       These operations must lower without shared-memory scratch.
+
+      `in_thread_reduction` selects how register-resident values are combined
+      for each independent result during lowering. `tree` (the default)
+      preserves the target's existing tree-based lowering; `sequential` uses
+      one accumulator chain. Vectorization and inter-thread reduction are
+      unaffected. This does not specify a global element order or constrain
+      subsequent instruction-level optimizations.
     }];
-    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis,
+                        DefaultValuedAttr<StrAttr, "\"tree\"">:$in_thread_reduction);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
     let hasVerifier = 1;

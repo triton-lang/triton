@@ -182,7 +182,7 @@ def _elementwise_max_propagate_nan(a, b):
 
 
 @jit
-def _argminmax_index(input, value, axis, keep_dims):
+def _argminmax_index(input, value, axis, keep_dims, in_thread_reduction):
     rank: core.constexpr = len(input.shape)
     dim: core.constexpr = 0 if axis is None else axis % rank
     if axis is None:
@@ -200,7 +200,8 @@ def _argminmax_index(input, value, axis, keep_dims):
         if other_dim != dim:
             indices = core.expand_dims(indices, other_dim)
     indices = core.where(matches, indices, 0x7fffffff)
-    index = core.reduce(indices, dim, _elementwise_min_ignore_nan, keep_dims=keep_dims)
+    index = core.reduce(indices, dim, _elementwise_min_ignore_nan, keep_dims=keep_dims,
+                        in_thread_reduction=in_thread_reduction)
     if axis is None and keep_dims:
         index = core.reshape(index, [1] * rank)
     return index
@@ -210,8 +211,15 @@ def _argminmax_index(input, value, axis, keep_dims):
 @jit
 @core._add_reduction_docstr("maximum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
-def max(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
-        propagate_nan: core.constexpr = core.PropagateNan.NONE):
+def max(
+    input,
+    axis=None,
+    return_indices=False,
+    return_indices_tie_break_left=True,
+    keep_dims=False,
+    propagate_nan: core.constexpr = core.PropagateNan.NONE,
+    in_thread_reduction: core.constexpr = "tree",
+):
     core.static_assert(isinstance(propagate_nan, core.PropagateNan), "propagate_nan must be a PropagateNan enum value")
     # Reduce matching indices with min to enable native redux instructions.
     # This selects the leftmost match, which is valid for either tie-breaking mode.
@@ -223,11 +231,13 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
     if propagate_nan == core.PropagateNan.ALL:
-        value = core.reduce(input, axis, _elementwise_max_propagate_nan, keep_dims=keep_dims)
+        value = core.reduce(input, axis, _elementwise_max_propagate_nan, keep_dims=keep_dims,
+                            in_thread_reduction=in_thread_reduction)
     else:
-        value = core.reduce(input, axis, _elementwise_max_ignore_nan, keep_dims=keep_dims)
+        value = core.reduce(input, axis, _elementwise_max_ignore_nan, keep_dims=keep_dims,
+                            in_thread_reduction=in_thread_reduction)
     if return_indices:
-        return value, _argminmax_index(input, value, axis, keep_dims)
+        return value, _argminmax_index(input, value, axis, keep_dims, in_thread_reduction)
     else:
         return value
 
@@ -235,8 +245,15 @@ def max(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("maximum index", tie_break_arg="tie_break_left")
-def argmax(input, axis, tie_break_left=True, keep_dims=False):
-    (_, ret) = max(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left, keep_dims=keep_dims)
+def argmax(input, axis, tie_break_left=True, keep_dims=False, in_thread_reduction: core.constexpr = "tree"):
+    (_, ret) = max(
+        input,
+        axis,
+        return_indices=True,
+        return_indices_tie_break_left=tie_break_left,
+        keep_dims=keep_dims,
+        in_thread_reduction=in_thread_reduction,
+    )
     return ret
 
 
@@ -257,8 +274,15 @@ def _elementwise_min_propagate_nan(a, b):
 @jit
 @core._add_reduction_docstr("minimum", return_indices_arg="return_indices",
                             tie_break_arg="return_indices_tie_break_left")
-def min(input, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False,
-        propagate_nan: core.constexpr = core.PropagateNan.NONE):
+def min(
+    input,
+    axis=None,
+    return_indices=False,
+    return_indices_tie_break_left=True,
+    keep_dims=False,
+    propagate_nan: core.constexpr = core.PropagateNan.NONE,
+    in_thread_reduction: core.constexpr = "tree",
+):
     core.static_assert(isinstance(propagate_nan, core.PropagateNan), "propagate_nan must be a PropagateNan enum value")
     # Reduce matching indices with min to enable native redux instructions.
     # This selects the leftmost match, which is valid for either tie-breaking mode.
@@ -270,11 +294,13 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
                 assert input.dtype.is_int(), "Expecting input to be integer type"
                 input = input.to(core.int32)
     if propagate_nan == core.PropagateNan.ALL:
-        value = core.reduce(input, axis, _elementwise_min_propagate_nan, keep_dims=keep_dims)
+        value = core.reduce(input, axis, _elementwise_min_propagate_nan, keep_dims=keep_dims,
+                            in_thread_reduction=in_thread_reduction)
     else:
-        value = core.reduce(input, axis, _elementwise_min_ignore_nan, keep_dims=keep_dims)
+        value = core.reduce(input, axis, _elementwise_min_ignore_nan, keep_dims=keep_dims,
+                            in_thread_reduction=in_thread_reduction)
     if return_indices:
-        return value, _argminmax_index(input, value, axis, keep_dims)
+        return value, _argminmax_index(input, value, axis, keep_dims, in_thread_reduction)
     else:
         return value
 
@@ -282,8 +308,15 @@ def min(input, axis=None, return_indices=False, return_indices_tie_break_left=Tr
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("minimum index", tie_break_arg="tie_break_left")
-def argmin(input, axis, tie_break_left=True, keep_dims=False):
-    _, ret = min(input, axis, return_indices=True, return_indices_tie_break_left=tie_break_left, keep_dims=keep_dims)
+def argmin(input, axis, tie_break_left=True, keep_dims=False, in_thread_reduction: core.constexpr = "tree"):
+    _, ret = min(
+        input,
+        axis,
+        return_indices=True,
+        return_indices_tie_break_left=tie_break_left,
+        keep_dims=keep_dims,
+        in_thread_reduction=in_thread_reduction,
+    )
     return ret
 
 
@@ -292,7 +325,7 @@ def argmin(input, axis, tie_break_left=True, keep_dims=False):
 
 @core._tensor_member_fn
 @jit
-def all(input, axis=None, keep_dims=False):
+def all(input, axis=None, keep_dims=False, in_thread_reduction: core.constexpr = "tree"):
     """
     Returns whether all elements in :code:`input` are nonzero along the provided :code:`axis`.
 
@@ -304,13 +337,21 @@ def all(input, axis=None, keep_dims=False):
     :type axis: int | None
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
+    :param in_thread_reduction: register-local reduction strategy; see :func:`reduce`.
+    :type in_thread_reduction: str
     """
-    return core.reduce(input.to(core.int1), axis, _elementwise_min_ignore_nan, keep_dims=keep_dims)
+    return core.reduce(
+        input.to(core.int1),
+        axis,
+        _elementwise_min_ignore_nan,
+        keep_dims=keep_dims,
+        in_thread_reduction=in_thread_reduction,
+    )
 
 
 @core._tensor_member_fn
 @jit
-def any(input, axis=None, keep_dims=False):
+def any(input, axis=None, keep_dims=False, in_thread_reduction: core.constexpr = "tree"):
     """
     Returns whether any element in :code:`input` is nonzero along the provided :code:`axis`.
 
@@ -322,8 +363,16 @@ def any(input, axis=None, keep_dims=False):
     :type axis: int | None
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
+    :param in_thread_reduction: register-local reduction strategy; see :func:`reduce`.
+    :type in_thread_reduction: str
     """
-    return core.reduce(input.to(core.int1), axis, _elementwise_max_ignore_nan, keep_dims=keep_dims)
+    return core.reduce(
+        input.to(core.int1),
+        axis,
+        _elementwise_max_ignore_nan,
+        keep_dims=keep_dims,
+        in_thread_reduction=in_thread_reduction,
+    )
 
 
 @jit
@@ -351,11 +400,11 @@ def _pick_sum_dtype(in_dtype, dtype):
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("sum", dtype_arg="dtype")
-def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
+def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None, in_thread_reduction: core.constexpr = "tree"):
     # Pick a default dtype for the reduction if one was not specified.
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
     input = input.to(out_dtype)
-    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
+    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, in_thread_reduction=in_thread_reduction)
 
 
 @jit
@@ -369,9 +418,9 @@ def _xor_combine(a, b):
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("xor sum")
-def xor_sum(input, axis=None, keep_dims=False):
+def xor_sum(input, axis=None, keep_dims=False, in_thread_reduction: core.constexpr = "tree"):
     core.static_assert(input.type.scalar.is_int(), "xor_sum only supported for integers")
-    return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims)
+    return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims, in_thread_reduction=in_thread_reduction)
 
 
 # or reduction
@@ -385,9 +434,9 @@ def _or_combine(x, y):
 @core._tensor_member_fn
 @jit
 @core._add_reduction_docstr("reduce_or")
-def reduce_or(input, axis, keep_dims=False):
+def reduce_or(input, axis, keep_dims=False, in_thread_reduction: core.constexpr = "tree"):
     core.static_assert(input.type.scalar.is_int(), "reduce_or only supported for integers")
-    return core.reduce(input, axis, _or_combine, keep_dims=keep_dims)
+    return core.reduce(input, axis, _or_combine, keep_dims=keep_dims, in_thread_reduction=in_thread_reduction)
 
 
 # cumsum

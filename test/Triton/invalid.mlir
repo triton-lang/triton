@@ -857,3 +857,15 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+tt.func @invalid_in_thread_reduction(%x: tensor<16xf32>) -> f32 {
+  // expected-error @+1 {{in_thread_reduction must be 'tree' or 'sequential'}}
+  %r = "tt.reduce"(%x) <{axis = 0 : i32, in_thread_reduction = "invalid"}> ({
+  ^bb0(%a: f32, %b: f32):
+    %sum = arith.addf %a, %b : f32
+    tt.reduce.return %sum : f32
+  }) : (tensor<16xf32>) -> f32
+  tt.return %r : f32
+}

@@ -12,6 +12,8 @@
 // RUN: triton-opt %t/f64_bf16.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck --check-prefix=F64BF16-SM80 --dump-input-context=20 %s
 // RUN: triton-opt %t/clmul.mlir --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=93' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx93 | FileCheck %s --check-prefix=CLMUL
 
+// RUN: triton-opt %t/mixed-reduce.mlir --allocate-shared-memory-nv='compute-capability=107 ptx-version=94' --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_107a -mattr=+ptx94 | FileCheck %s --check-prefix=SM107
+
 //--- mma-partition.mlir
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
@@ -905,4 +907,107 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.store %out, %packed : !tt.ptr<i16>
     tt.return
   }
+}
+
+//--- mixed-reduce.mlir
+// Widen then add must fold in NVPTX into mixed-precision instructions.
+// Explicit sequential scheduling increases fusion coverage from 8 to 15.
+#blocked_mixed_reduce = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [1, 32], warpsPerCTA = [1, 2], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // SM107-LABEL: reduce_f16_to_f32_default
+  // SM107-COUNT-8: add.rn.f32x2.f16x2.f32x2
+  // SM107-NOT: add.rn.f32x2.f16x2.f32x2
+  // SM107: ret;
+  tt.func public @reduce_f16_to_f32_default(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xf16, #blocked_mixed_reduce>) {
+    %wide = arith.extf %arg0 : tensor<1x2048xf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x2048xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return
+  }
+
+  // SM107-LABEL: reduce_f16_to_f32_tree
+  // SM107-COUNT-8: add.rn.f32x2.f16x2.f32x2
+  // SM107-NOT: add.rn.f32x2.f16x2.f32x2
+  // SM107: ret;
+  tt.func public @reduce_f16_to_f32_tree(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xf16, #blocked_mixed_reduce>) {
+    %wide = arith.extf %arg0 : tensor<1x2048xf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "tree"}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x2048xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return
+  }
+
+  // SM107-LABEL: reduce_f16_to_f32_sequential
+  // SM107-COUNT-15: add.rn.f32x2.f16x2.f32x2
+  // SM107-NOT: add.rn.f32x2.f16x2.f32x2
+  // SM107: ret;
+  tt.func public @reduce_f16_to_f32_sequential(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xf16, #blocked_mixed_reduce>) {
+    %wide = arith.extf %arg0 : tensor<1x2048xf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "sequential"}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x2048xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return
+  }
+
+  // SM107-LABEL: reduce_bf16_to_f32_default
+  // SM107-COUNT-8: add.rn.f32x2.bf16x2.f32x2
+  // SM107-NOT: add.rn.f32x2.bf16x2.f32x2
+  // SM107: ret;
+  tt.func public @reduce_bf16_to_f32_default(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xbf16, #blocked_mixed_reduce>) {
+    %wide = arith.extf %arg0 : tensor<1x2048xbf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x2048xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return
+  }
+
+  // SM107-LABEL: reduce_bf16_to_f32_tree
+  // SM107-COUNT-8: add.rn.f32x2.bf16x2.f32x2
+  // SM107-NOT: add.rn.f32x2.bf16x2.f32x2
+  // SM107: ret;
+  tt.func public @reduce_bf16_to_f32_tree(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xbf16, #blocked_mixed_reduce>) {
+    %wide = arith.extf %arg0 : tensor<1x2048xbf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "tree"}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x2048xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return
+  }
+
+  // SM107-LABEL: reduce_bf16_to_f32_sequential
+  // SM107-COUNT-15: add.rn.f32x2.bf16x2.f32x2
+  // SM107-NOT: add.rn.f32x2.bf16x2.f32x2
+  // SM107: ret;
+  tt.func public @reduce_bf16_to_f32_sequential(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xbf16, #blocked_mixed_reduce>) {
+    %wide = arith.extf %arg0 : tensor<1x2048xbf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "sequential"}> ({
+    ^bb0(%lhs: f32, %rhs: f32):
+      %sum = arith.addf %lhs, %rhs : f32
+      tt.reduce.return %sum : f32
+    }) {allocation.offset = 0 : i32} : (tensor<1x2048xf32, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    %ptr = tt.splat %out : !tt.ptr<f32> -> tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.store %ptr, %r : tensor<1x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>>
+    tt.return
+  }
+
 }

@@ -1268,7 +1268,7 @@ class tensor(base_value):
     def ceil(self) -> tensor:
         ...
 
-    def reduce(self, axis, combine_fn, keep_dims=False) -> tensor:
+    def reduce(self, axis, combine_fn, keep_dims=False, in_thread_reduction="tree") -> tensor:
         ...
 
     def associative_scan(self, axis, combine_fn, reverse=False) -> tensor:
@@ -1292,31 +1292,45 @@ class tensor(base_value):
     def ravel(self) -> tensor:
         ...
 
-    def all(self, axis=None, keep_dims=False) -> tensor:
+    def all(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
         ...
 
-    def any(self, axis=None, keep_dims=False) -> tensor:
+    def any(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
         ...
 
-    def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
+    def max(
+        self,
+        axis=None,
+        return_indices=False,
+        return_indices_tie_break_left=True,
+        keep_dims=False,
+        in_thread_reduction="tree",
+    ) -> tensor:
         ...
 
-    def argmax(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
+    def argmax(self, axis, tie_break_left=True, keep_dims=False, in_thread_reduction="tree") -> tensor:
         ...
 
-    def min(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
+    def min(
+        self,
+        axis=None,
+        return_indices=False,
+        return_indices_tie_break_left=True,
+        keep_dims=False,
+        in_thread_reduction="tree",
+    ) -> tensor:
         ...
 
-    def argmin(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
+    def argmin(self, axis, tie_break_left=True, keep_dims=False, in_thread_reduction="tree") -> tensor:
         ...
 
-    def sum(self, axis=None, keep_dims=False, dtype=None) -> tensor:
+    def sum(self, axis=None, keep_dims=False, dtype=None, in_thread_reduction="tree") -> tensor:
         ...
 
-    def xor_sum(self, axis=None, keep_dims=False) -> tensor:
+    def xor_sum(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
         ...
 
-    def reduce_or(self, axis=None, keep_dims=False) -> tensor:
+    def reduce_or(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
         ...
 
     def cumsum(self, axis=0, reverse=False, dtype=None) -> tensor:
@@ -3017,7 +3031,14 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int
     :param keep_dims: if true, keep the reduced dimensions with length 1
-    :type keep_dims: bool"""
+    :type keep_dims: bool
+    :param in_thread_reduction: how to combine register-resident values for each
+        independent result: ``"tree"`` (default) preserves the target's existing
+        tree-based lowering; ``"sequential"`` uses one accumulator chain.
+        This does not change inter-thread reduction or specify a global element
+        order. Layout, vectorization, and subsequent compiler optimizations may
+        affect the final instruction order and floating-point results.
+    :type in_thread_reduction: str"""
         if return_indices_arg is not None:
             docstr += f"""
     :param {return_indices_arg}: if true, return index corresponding to the {name} value
@@ -3046,7 +3067,7 @@ def _insertion_guard(builder):
 
 @_tensor_member_fn
 @builtin
-def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=None):
+def reduce(input, axis, combine_fn, keep_dims=False, in_thread_reduction="tree", _semantic=None, _generator=None):
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
 
     :param input: the input tensor, or tuple of tensors
@@ -3060,10 +3081,25 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
+    :param in_thread_reduction: how to combine register-resident values for each
+        independent result: ``"tree"`` (default) preserves the target's existing
+        tree-based lowering; ``"sequential"`` uses one accumulator chain.
+        This does not change inter-thread reduction or specify a global element
+        order. Layout, vectorization, and subsequent compiler optimizations may
+        affect the final instruction order and floating-point results.
+    :type in_thread_reduction: str
 
     """
     if isinstance(input, tensor):
-        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _semantic=_semantic, _generator=_generator)[0]
+        return reduce(
+            (input, ),
+            axis,
+            combine_fn,
+            keep_dims=keep_dims,
+            in_thread_reduction=in_thread_reduction,
+            _semantic=_semantic,
+            _generator=_generator,
+        )[0]
 
     def make_combine_region(reduce_op):
         param_types = [t.type.scalar for t in input] * 2
@@ -3089,7 +3125,10 @@ def reduce(input, axis, combine_fn, keep_dims=False, _semantic=None, _generator=
     keep_dims = _unwrap_if_constexpr(keep_dims)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
-    ret = _semantic.reduction(input, axis, make_combine_region)
+    in_thread_reduction = _unwrap_if_constexpr(in_thread_reduction)
+    if in_thread_reduction not in ("tree", "sequential"):
+        raise ValueError("in_thread_reduction must be 'tree' or 'sequential'")
+    ret = _semantic.reduction(input, axis, make_combine_region, in_thread_reduction)
     if keep_dims:
         if axis is not None:
             ret = tuple(expand_dims(t, axis, _semantic=_semantic) for t in ret)

@@ -1895,9 +1895,14 @@ void init_triton_ir(py::module_ &m) {
            [](TritonOpBuilder &self, Value &val) -> Value {
              return self.create<math::AbsIOp>(val);
            })
-      .def("create_reduce",
-           [](TritonOpBuilder &self, std::vector<Value> operands, int axis)
-               -> OpState { return self.create<ReduceOp>(operands, axis); })
+      .def(
+          "create_reduce",
+          [](TritonOpBuilder &self, std::vector<Value> operands, int axis,
+             const std::string &inThreadReduction) -> OpState {
+            return self.create<ReduceOp>(operands, axis, inThreadReduction);
+          },
+          py::arg("operands"), py::arg("axis"),
+          py::arg("in_thread_reduction") = "tree")
       .def("create_reduce_ret",
            [](TritonOpBuilder &self, py::args args) -> OpState {
              llvm::SmallVector<Value> return_values;
