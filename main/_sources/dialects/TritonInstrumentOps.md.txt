@@ -230,6 +230,53 @@ Effects: `MemoryEffects::Effect{}`
 
 
 
+### `tti.experimental_gather_scatter_cta_masks` (triton::instrument::ExperimentalGatherScatterCTAMasksOp)
+
+_Compute per-thread CTA masks for a shared-memory gather or scatter_
+
+Syntax:
+
+```
+operation ::= `tti.experimental_gather_scatter_cta_masks` $indices (`,` $mask^)? attr-dict `:` type($indices) (`,` type($mask)^)? `->` type($result)
+```
+
+For each element of `indices`, replace its coordinate along `axis` with
+the index value. The shared layout in `memdesc` gives the target CTA
+for those coordinates. Skip elements where the optional `mask` is false.
+
+The result is an i32 tensor indexed by [warp, lane] in the issuing
+partition. Bit k is set if any active element of that thread targets
+CTA k, before applying the descriptor's affine CTA offset.
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>memdesc</code></td><td>::mlir::TypeAttr</td><td>type attribute of memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system</td></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `indices` | ranked tensor of integer values |
+| `mask` | ranked tensor of 1-bit signless integer values |
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | tensor of 32-bit signless integer values |
+
+
+
 ### `tti.experimental_gsan_atomic_cas` (triton::instrument::ExperimentalGSanAtomicCASOp)
 
 _Lower a GSan-instrumented atomic cas_
@@ -815,12 +862,15 @@ _Instrument a TMA tensor descriptor access for GSan_
 Syntax:
 
 ```
-operation ::= `tti.experimental_gsan_tensordesc_access` $desc `[` $coords `]` `,` $isStore (`,` $pred^)? attr-dict `:`
+operation ::= `tti.experimental_gsan_tensordesc_access` $desc `[` $coords `]` (`offsets` `=` `[` $offsets^ `]`)?
+              `,` $isStore (`,` $pred^)? (`into` $result^ `:` qualified(type($result)))?
+              attr-dict `:`
               qualified(type($desc))
 ```
 
 Passes the native tensor descriptor and its coordinates directly to the
 GSan runtime, which decodes the descriptor and iterates over the tile.
+Im2col loads also carry the spatial offsets and destination memdesc.
 
 Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`
 
@@ -837,6 +887,8 @@ Traits: `AttrSizedOperandSegments`, `FoldTruePredicate`
 | :-----: | ----------- |
 | `desc` | tensor descriptor type |
 | `coords` | variadic of 32-bit signless integer |
+| `offsets` | variadic of 16-bit signless integer |
+| `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system |
 | `pred` | 1-bit signless integer |
 
 
