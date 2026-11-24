@@ -39,7 +39,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tt.func @reduce_1d_split_ctas
   // CHECK: %[[CVT:.*]] = ttg.convert_layout %{{.*}} : tensor<65536xf32, #[[$ORIG]]> -> tensor<65536xf32, #[[$REDUCE]]>
-  // CHECK: "tt.reduce"(%[[CVT]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: "tt.reduce"(%[[CVT]]) <{axis = 0 : i32}>
   // CHECK: tt.reduce.return %{{.*}} : f32
   // CHECK-NEXT: }) : (tensor<65536xf32, #[[$REDUCE]]>) -> f32
   tt.func @reduce_1d_split_ctas() -> f32 {
@@ -355,7 +355,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func @reduce_rematerializes_transpose
   // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$PROP_TRANSPOSE_LOAD]]>
   // CHECK: %[[TRANSPOSE:.*]] = tt.trans %[[LOAD]] {{.*}} : tensor<128x128xf32, #[[$PROP_TRANSPOSE_LOAD]]> -> tensor<128x128xf32, #[[$PROP_TRANSPOSE_REDUCE]]>
-  // CHECK: "tt.reduce"(%[[TRANSPOSE]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: "tt.reduce"(%[[TRANSPOSE]]) <{axis = 0 : i32}>
   tt.func @reduce_rematerializes_transpose(%ptrs: tensor<128x128x!tt.ptr<f32>, #transpose_src>) -> tensor<128xf32, #transpose_result> {
     %loaded = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #transpose_src>
     %transposed = tt.trans %loaded {order = array<i32: 1, 0>} : tensor<128x128xf32, #transpose_src> -> tensor<128x128xf32, #transpose_dst>
@@ -379,7 +379,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x!tt.ptr<f32>, #ttg.slice<{dim = 1, parent = #[[$PROP_BROADCAST]]}>>
   // CHECK: %[[EXPAND:.*]] = tt.expand_dims %[[LOAD]] {{.*}} -> tensor<128x1xf32, #[[$PROP_BROADCAST]]>
   // CHECK: %[[BROADCAST:.*]] = tt.broadcast %[[EXPAND]] : tensor<128x1xf32, #[[$PROP_BROADCAST]]> -> tensor<128x128xf32, #[[$PROP_BROADCAST]]>
-  // CHECK: "tt.reduce"(%[[BROADCAST]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // CHECK: "tt.reduce"(%[[BROADCAST]]) <{axis = 1 : i32}>
   tt.func @reduce_rematerializes_expand_broadcast(%ptrs: tensor<128x!tt.ptr<f32>, #broadcast_slice>) -> tensor<128xf32, #broadcast_slice> {
     %loaded = tt.load %ptrs : tensor<128x!tt.ptr<f32>, #broadcast_slice>
     %expanded = tt.expand_dims %loaded {axis = 1 : i32} : tensor<128xf32, #broadcast_slice> -> tensor<128x1xf32, #broadcast_parent>
@@ -405,7 +405,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<4096x!tt.ptr<f32>, {{.*}}>
   // CHECK: %[[RESHAPE:.*]] = tt.reshape %[[LOAD]] : tensor<4096xf32, {{.*}}> -> tensor<64x64xf32, {{.*}}>
   // CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[RESHAPE]] : tensor<64x64xf32, {{.*}}> -> tensor<64x64xf32, {{.*}}>
-  // CHECK: "tt.reduce"(%[[CONVERT]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: "tt.reduce"(%[[CONVERT]]) <{axis = 0 : i32}>
   tt.func @reduce_does_not_rematerialize_interleaved_reshape(%ptrs: tensor<4096x!tt.ptr<f32>, #reshape_src>) -> tensor<64xf32, #reshape_result> {
     %loaded = tt.load %ptrs : tensor<4096x!tt.ptr<f32>, #reshape_src>
     %reshaped = tt.reshape %loaded : tensor<4096xf32, #reshape_src> -> tensor<64x64xf32, #reshape_dst>
@@ -436,11 +436,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: %[[LOAD:.*]] = tt.load %[[PTRS]] : tensor<128x128x!tt.ptr<f32>, #[[$FACTORABLE_LOAD]]>
   // CHECK-NOT: tt.load
   // CHECK: %[[CONVERT:.*]] = ttg.convert_layout %[[LOAD]] : tensor<128x128xf32, #[[$FACTORABLE_LOAD]]> -> tensor<128x128xf32, #[[$FACTORABLE_REDUCE]]>
-  // CHECK: "tt.reduce"(%[[CONVERT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // CHECK: "tt.reduce"(%[[CONVERT]]) <{axis = 1 : i32}>
   // E2E-LABEL: tt.func @reduce_rematerializes_factorable_linear_conversion
   // E2E: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$E2E_FACTORABLE_LOAD]]>
   // E2E-NOT: tt.load
-  // E2E: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // E2E: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
   tt.func @reduce_rematerializes_factorable_linear_conversion(%ptrs: tensor<128x128x!tt.ptr<f32>, #factorable>) -> tensor<128xf32, #factorable_result> {
     %loaded = tt.load %ptrs : tensor<128x128x!tt.ptr<f32>, #factorable>
     %converted = ttg.convert_layout %loaded : tensor<128x128xf32, #factorable> -> tensor<128x128xf32, #factorable_blocked>
@@ -455,11 +455,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func @reduce_rematerializes_factorable_linear_input
   // CHECK: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$FACTORABLE_LOAD]]>
   // CHECK-NOT: tt.load
-  // CHECK: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // CHECK: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
   // E2E-LABEL: tt.func @reduce_rematerializes_factorable_linear_input
   // E2E: %[[LOAD:.*]] = tt.load %{{.*}} : tensor<128x128x!tt.ptr<f32>, #[[$E2E_FACTORABLE_LOAD]]>
   // E2E-NOT: tt.load
-  // E2E: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // E2E: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
   // PIPELINE-LABEL: tt.func @reduce_rematerializes_factorable_linear_input
   // PIPELINE: %[[REDUCE:.*]] = "tt.reduce"
   // PIPELINE: %[[CONVERT:.*]] = ttg.convert_layout %[[REDUCE]]
@@ -637,30 +637,30 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // One shared load, two scalar reductions, and no layout conversions.
   // CHECK-LABEL: tt.func @reduce_rematerializes_shared_operand_load
   // CHECK-NEXT: %[[LOAD:.*]] = tt.descriptor_load %arg0[%arg1] : !tt.tensordesc<256xf32> -> tensor<256xf32, #[[$REDUCE_TARGET]]>
-  // CHECK-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
   // CHECK-NOT: ttg.convert_layout
   // CHECK: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
-  // CHECK-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
   // CHECK-NOT: ttg.convert_layout
   // CHECK: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
   // CHECK-NEXT: tt.return %[[SUM]], %[[MAX]] : f32, f32
   // CHECK-NEXT: }
   // E2E-LABEL: tt.func @reduce_rematerializes_shared_operand_load
   // E2E-NEXT: %[[LOAD:.*]] = tt.descriptor_load %arg0[%arg1] : !tt.tensordesc<256xf32> -> tensor<256xf32, #[[$REDUCE_TARGET]]>
-  // E2E-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // E2E-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
   // E2E-NOT: ttg.convert_layout
   // E2E: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
-  // E2E-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // E2E-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
   // E2E-NOT: ttg.convert_layout
   // E2E: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
   // E2E-NEXT: tt.return %[[SUM]], %[[MAX]] : f32, f32
   // E2E-NEXT: }
   // PIPELINE-LABEL: tt.func @reduce_rematerializes_shared_operand_load
   // PIPELINE-NEXT: %[[LOAD:.*]] = tt.descriptor_load %arg0[%arg1] : !tt.tensordesc<256xf32> -> tensor<256xf32, #[[$REDUCE_TARGET]]>
-  // PIPELINE-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // PIPELINE-NEXT: %[[SUM:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
   // PIPELINE-NOT: ttg.convert_layout
   // PIPELINE: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
-  // PIPELINE-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // PIPELINE-NEXT: %[[MAX:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 0 : i32}>
   // PIPELINE-NOT: ttg.convert_layout
   // PIPELINE: }) : (tensor<256xf32, #[[$REDUCE_TARGET]]>) -> f32
   // PIPELINE-NEXT: tt.return %[[SUM]], %[[MAX]] : f32, f32

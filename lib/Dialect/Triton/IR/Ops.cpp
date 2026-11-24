@@ -791,7 +791,7 @@ llvm::SmallVector<Type> getElementTypesImpl(const ValueRange &operands) {
 } // namespace
 
 LogicalResult ReduceOp::verify() {
-  if (getInThreadReduction() != "tree" &&
+  if (getInThreadReduction() && getInThreadReduction() != "tree" &&
       getInThreadReduction() != "sequential")
     return emitOpError("in_thread_reduction must be 'tree' or 'sequential'");
   return verifyReduceScan(*this);

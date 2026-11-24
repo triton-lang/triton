@@ -2383,4 +2383,7 @@ def test_reduction_in_thread_policy(frontend, policy, op, axis, keep_dims):
         module = run_parser(kernel, args=args)
         assert module.verify()
         ir = module.str_nodebug()
-        assert f'in_thread_reduction = "{policy}"' in ir
+        if policy == "tree":
+            assert "in_thread_reduction" not in ir
+        else:
+            assert 'in_thread_reduction = "sequential"' in ir

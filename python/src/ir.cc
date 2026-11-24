@@ -1899,7 +1899,11 @@ void init_triton_ir(py::module_ &m) {
           "create_reduce",
           [](TritonOpBuilder &self, std::vector<Value> operands, int axis,
              const std::string &inThreadReduction) -> OpState {
-            return self.create<ReduceOp>(operands, axis, inThreadReduction);
+            auto policy =
+                inThreadReduction == "tree"
+                    ? StringAttr{}
+                    : self.getBuilder().getStringAttr(inThreadReduction);
+            return self.create<ReduceOp>(operands, axis, policy);
           },
           py::arg("operands"), py::arg("axis"),
           py::arg("in_thread_reduction") = "tree")

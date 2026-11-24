@@ -151,7 +151,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tt.func @store_reduce_result
   // CHECK-SAME: %arg0: tensor<128x64xf32, #[[$REDUCE_SRC_PLANNED:[a-zA-Z0-9_]+]]>
   // CHECK-SAME: %arg1: tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_PLANNED:.*]]>
-  // CHECK: %[[RED:.*]] = "tt.reduce"(%arg0) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[RED:.*]] = "tt.reduce"(%arg0) <{axis = 1 : i32}>
   // CHECK: }) : (tensor<128x64xf32, #[[$REDUCE_SRC_PLANNED]]>) -> tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]>
   // CHECK: %[[RED_ORIG:.*]] = ttg.convert_layout %[[RED]] : tensor<128xf32, #[[$REDUCE_OUT_PLANNED]]> -> tensor<128xf32, #[[$REDUCE_OUT_ORIG:.*]]>
   // CHECK: %[[PTR_TARGET:.*]] = ttg.convert_layout %arg1 : tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_PLANNED]]> -> tensor<128x!tt.ptr<f32>, #[[$REDUCE_OUT_TARGET:.*]]>

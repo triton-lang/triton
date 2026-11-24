@@ -112,7 +112,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // CHECK: %[[LOADED:.*]] = tt.load
     // CHECK: %[[ABS:.*]] = math.absi %[[LOADED]]
     // CHECK: %[[PAYLOAD:.*]] = arith.andi %[[ABS]], %[[MASK]]
-    // CHECK: %[[REDUCED:.*]] = "tt.reduce"(%[[PAYLOAD]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+    // CHECK: %[[REDUCED:.*]] = "tt.reduce"(%[[PAYLOAD]]) <{axis = 1 : i32}>
     // CHECK: arith.maxsi
     // CHECK: tt.reduce.return
     // CHECK: %[[RED_VALUE:.*]] = tti.experimental_fpsan_unembed %[[REDUCED]]

@@ -727,4 +727,7 @@ def test_reduction_in_thread_policy_compile_only(frontend, policy, arch):
     source_cls = ASTSource if frontend == "triton" else gluon.GluonASTSource
     source = source_cls(kernel, {"X": "*fp16", "Y": "*fp32", "POLICY": "constexpr"}, {"POLICY": policy})
     compiled = triton.compile(source, target=GPUTarget("cuda", arch, 32))
-    assert f'in_thread_reduction = "{policy}"' in compiled.asm["ttgir"]
+    if policy == "tree":
+        assert "in_thread_reduction" not in compiled.asm["ttgir"]
+    else:
+        assert 'in_thread_reduction = "sequential"' in compiled.asm["ttgir"]

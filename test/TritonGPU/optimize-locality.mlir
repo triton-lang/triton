@@ -7,11 +7,11 @@
 // CHECK: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
 // CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
 // CHECK-NEXT: tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.addf
 // CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: tt.store {{%.*}}, %[[CVT_OUTPUT]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -60,11 +60,11 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
 // CHECK: tt.reshape
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.addf
 // CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: arith.addf %[[CVT_OUTPUT]], %[[CST]]
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -110,7 +110,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK-LABEL: @unary_loop_update
 // CHECK: %[[LOOP_RESULT:.*]] = scf.for
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK-NEXT: %[[REDUCED:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK-NEXT: %[[REDUCED:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
 // CHECK: %[[NEGATED:.*]] = arith.negf %[[REDUCED]]
 // CHECK-NEXT: scf.yield %[[NEGATED]]
 // CHECK: tt.store {{.*}}, %[[LOOP_RESULT]]
@@ -143,9 +143,9 @@ module attributes {"ttg.target" = "cuda:89", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK-NEXT: %[[FACTORED:.*]] = tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{8x2x32x4xf32.*}}>
 // CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
 // CHECK-NEXT: %[[RESHAPED:.*]] = tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{8x32x8xf32.*}}>
-// CHECK: %[[REDUCED:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCED:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: scf.yield
-// CHECK: "tt.reduce"({{%.*}}) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: "tt.reduce"({{%.*}}) <{axis = 1 : i32}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [1, 1], order = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -176,7 +176,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK-NEXT: %[[TRANSPOSED:.*]] = tt.trans %[[FACTORED]] {order = array<i32: 0, 2, 1, 3>}
 // CHECK-NEXT: %[[RESHAPED:.*]] = tt.reshape %[[TRANSPOSED]] efficient_layout : {{.*}} -> tensor<{{256x1x2xf32.*}}>
 // CHECK-NEXT: %[[REORDERED:.*]] = ttg.convert_layout %[[RESHAPED]] : tensor<{{256x1x2xf32.*}}> -> tensor<{{256x1x2xf32.*}}>
-// CHECK-NEXT: "tt.reduce"(%[[REORDERED]]) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK-NEXT: "tt.reduce"(%[[REORDERED]]) <{axis = 2 : i32}>
 #blocked = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [0, 1]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -203,7 +203,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // The yielded accumulator belongs to a different loop than the one enclosing the reduce.
 // CHECK-LABEL: @reduce_outside_accumulator_loop
-// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: "tt.reduce"({{.*}}) <{axis = 1 : i32}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [32, 1], warpsPerCTA = [1, 1], order = [1, 0]}>
 #slice = #ttg.slice<{dim = 1, parent = #blocked}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
@@ -233,7 +233,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // CHECK-LABEL: slice_layout
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK-NEXT: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK-NEXT: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
 // CHECK: arith.addf
 // CHECK: arith.addf
 // CHECK-NEXT: scf.yield
@@ -282,7 +282,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK-LABEL: mma_layout
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for
 // CHECK: %[[LOAD:.*]] = tt.load
-// CHECK-NEXT: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK-NEXT: "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
 // CHECK: arith.addf
 // CHECK: arith.addf
 // CHECK-NEXT: scf.yield
@@ -334,11 +334,11 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOAD:.*]] = tt.load
 // CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
 // CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: arith.maximumf
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: tt.store {{%.*}}, %[[CVT_OUTPUT]]
@@ -388,11 +388,11 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
 // CHECK: tt.reshape
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: arith.maximumf
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: arith.maximumf %[[CVT_OUTPUT]], %[[CST]]
@@ -442,11 +442,11 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOAD:.*]] = tt.load
 // CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
 // CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.minimumf
 // CHECK: arith.minimumf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: arith.minimumf
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: tt.store {{%.*}}, %[[CVT_OUTPUT]]
@@ -496,11 +496,11 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
 // CHECK: tt.reshape
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.minimumf
 // CHECK: arith.minimumf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: arith.minimumf
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: arith.minimumf %[[CVT_OUTPUT]], %[[CST]]
@@ -550,11 +550,11 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOAD:.*]] = tt.load
 // CHECK: tt.reshape %[[LOAD]] : {{.*}} -> tensor<{{32x2x32x2xf32.*}}>
 // CHECK: tt.reshape {{%.*}} efficient_layout : {{.*}} -> tensor<{{32x32x4xf32.*}}>
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.mulf
 // CHECK: arith.mulf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: arith.mulf
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: tt.store {{%.*}}, %[[CVT_OUTPUT]]
@@ -604,11 +604,11 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST1]]) -> {{.*}}
 // CHECK: tt.load
 // CHECK: tt.reshape
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 2 : i32}>
 // CHECK: arith.mulf
 // CHECK: arith.mulf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
-// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[FINAL_REDUCE:.*]] = "tt.reduce"(%[[LOOP_OUTPUT]]) <{axis = 1 : i32}>
 // CHECK: arith.mulf
 // CHECK: %[[CVT_OUTPUT:.*]] = ttg.convert_layout %[[FINAL_REDUCE]]
 // CHECK: arith.mulf %[[CVT_OUTPUT]], %[[CST]]
@@ -658,7 +658,7 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> {{.*}}
 // CHECK: %[[LOAD:.*]] = tt.load
 // CHECK: %[[MULF:.*]] = arith.mulf %[[LOAD]], %[[LOAD]]
-// CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"(%[[MULF]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK-NEXT: %[[REDUCE:.*]] = "tt.reduce"(%[[MULF]]) <{axis = 1 : i32}>
 // CHECK: arith.maximumf
 // CHECK: arith.maximumf %[[FOR_ARG]], %[[REDUCE]]
 // CHECK-NEXT: scf.yield
@@ -912,7 +912,7 @@ module attributes {"ttg.num-warps" = 1 : i32} {
 // CHECK-NOT: efficient_layout
 // CHECK: %[[CST:.*]] = arith.constant dense<0.000000e+00>
 // CHECK: %[[LOOP_OUTPUT:.*]] = scf.for {{.*}} iter_args(%[[FOR_ARG:.*]] = %[[CST]]) -> (tensor<32xf32, #ttg.slice<{dim = 1, parent = #blocked}>>)
-// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+// CHECK: %[[REDUCE:.*]] = "tt.reduce"({{%.*}}) <{axis = 1 : i32}>
 // CHECK: %[[SNAP:.*]] = ttg.convert_layout %[[FOR_ARG]]
 // CHECK-NEXT: tt.store {{%.*}}, %[[SNAP]]
 // CHECK: arith.addf %[[FOR_ARG]], %[[REDUCE]]

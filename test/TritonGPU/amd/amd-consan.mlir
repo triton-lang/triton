@@ -409,7 +409,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK: %[[BARRIER_VALID_BITS:.*]] = arith.extui {{.*}} : tensor<{{.*}}xi1{{.*}}> to tensor<{{.*}}xi32
   // CHECK: %[[BARRIER_SHIFTED_VALID_BITS:.*]] = arith.shli %[[BARRIER_VALID_BITS]]
   // CHECK: %[[BARRIER_STATUS_BITS:.*]] = arith.ori %[[BARRIER_INIT_BITS]], %[[BARRIER_SHIFTED_VALID_BITS]]
-  // CHECK: %[[BARRIER_PACKED_STATUS:.*]] = "tt.reduce"(%{{.*}}) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[BARRIER_PACKED_STATUS:.*]] = "tt.reduce"(%{{.*}}) <{axis = 0 : i32}>
   // CHECK: arith.andi {{.*}} : i32
   // CHECK: "tt.reduce"
   // CHECK: tt.return %[[BARRIER_PACKED_STATUS]] : i32
@@ -1015,7 +1015,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK: %[[DEADLOCK_IDLE_BITS:.*]] = arith.extui {{.*}} : tensor<{{.*}}xi1{{.*}}> to tensor<{{.*}}xi32
   // CHECK: %[[DEADLOCK_SHIFTED_IDLE_BITS:.*]] = arith.shli %[[DEADLOCK_IDLE_BITS]]
   // CHECK: %[[DEADLOCK_BITS:.*]] = arith.ori %[[DEADLOCK_WAITING_BITS]], %[[DEADLOCK_SHIFTED_IDLE_BITS]]
-  // CHECK: %[[DEADLOCK_STATUS:.*]] = "tt.reduce"(%[[DEADLOCK_BITS]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[DEADLOCK_STATUS:.*]] = "tt.reduce"(%[[DEADLOCK_BITS]]) <{axis = 0 : i32}>
   // CHECK: arith.andi {{.*}} : i32
   // CHECK-NOT: "tt.reduce"
   // CHECK: arith.cmpi eq, %[[DEADLOCK_STATUS]], {{.*}} : i32

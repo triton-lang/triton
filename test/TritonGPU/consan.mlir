@@ -348,7 +348,7 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // compact tracking masks on Cbar (dimension 2).
   // CHECK-LABEL: tt.func private @__triton_consan_track_visible_accesses_{{.*}}_I1(
   // CHECK: %[[MCAST_SELECTED_PHASES:.*]] = arith.select {{.*}}tensor<4x2xi{{32|64}},
-  // CHECK: %[[MCAST_PHASES:.*]] = "tt.reduce"(%[[MCAST_SELECTED_PHASES]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[MCAST_PHASES:.*]] = "tt.reduce"(%[[MCAST_SELECTED_PHASES]]) <{axis = 1 : i32}>
   // CHECK: }) : (tensor<4x2xi{{32|64}}, {{.*}}>) -> tensor<4xi{{32|64}},
   // CHECK: %[[MCAST_WRITE_PHASE_LAYOUT:.*]] = ttg.convert_layout %[[MCAST_PHASES]]{{.*}} : tensor<4xi{{32|64}},
   // CHECK: tt.reshape %[[MCAST_WRITE_PHASE_LAYOUT]]{{.*}} -> tensor<1x1x4x1xi{{32|64}},
@@ -669,13 +669,13 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 
     // Reduce the per-thread masks within warps, then combine their results.
     // CHECK: %[[GATHER_LANES:.*]] = tti.experimental_gather_scatter_cta_masks
-    // CHECK: %[[GATHER_WARPS:.*]] = "tt.reduce"(%[[GATHER_LANES]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+    // CHECK: %[[GATHER_WARPS:.*]] = "tt.reduce"(%[[GATHER_LANES]]) <{axis = 1 : i32}>
     // CHECK: tt.splat %[[TARGET_SCRATCH]] :
     // CHECK: tt.store {{.*}}, %[[GATHER_WARPS]] {ignore_cta}
     // CHECK-NEXT: ttg.barrier global_write
     // CHECK: %[[GATHER_MASKS:.*]] = tt.load
     // CHECK-NEXT: ttg.barrier global_read
-    // CHECK-NEXT: %[[GATHER_CTAS:.*]] = "tt.reduce"(%[[GATHER_MASKS]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+    // CHECK-NEXT: %[[GATHER_CTAS:.*]] = "tt.reduce"(%[[GATHER_MASKS]]) <{axis = 0 : i32}>
     // CHECK: arith.constant dense<[true, true, false, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[GATHER_CTAS]]{{.*}})
@@ -728,7 +728,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     %proxy = ttg.local_alloc {allocation.offset = 512 : i32} : () -> !ttg.memdesc<8x32xi32, #local_atomic_tma_shared, #local_atomic_smem, mutable>
 
     // CHECK: tti.experimental_gather_scatter_cta_masks
-    // CHECK: %[[ATOMIC_CTAS:.*]] = "tt.reduce"({{.*}}) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+    // CHECK: %[[ATOMIC_CTAS:.*]] = "tt.reduce"({{.*}}) <{axis = 0 : i32}>
     // CHECK: arith.constant dense<[true, false, false, false]> : tensor<4xi1
     // CHECK: tt.call @__triton_consan_set_proxy_access{{.*}}({{.*}}%[[ATOMIC_CTAS]])
     // CHECK: tt.call @__triton_consan_verify_write_visibility{{.*}}({{.*}}%[[ATOMIC_CTAS]]{{.*}})
@@ -799,8 +799,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK: %[[FILTER_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
   // CHECK: %[[FILTER_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
   // CHECK: %[[FILTER_K_INDICES:.*]] = arith.select %[[FILTER_K_EQ]], %[[FILTER_K_RANGE]], {{.*}}tensor<2xi32,
-  // CHECK: %[[FILTER_K_INDEX:.*]] = "tt.reduce"(%[[FILTER_K_INDICES]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
-  // CHECK: %[[FILTER_K_ANY:.*]] = "tt.reduce"(%[[FILTER_K_EQ]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[FILTER_K_INDEX:.*]] = "tt.reduce"(%[[FILTER_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[FILTER_K_ANY:.*]] = "tt.reduce"(%[[FILTER_K_EQ]]) <{axis = 0 : i32}>
   // CHECK: %[[FILTER_K_STRIDE:.*]] = arith.constant 8 : i32
   // CHECK-NEXT: %[[FILTER_K_OFFSET:.*]] = arith.muli %[[FILTER_K_INDEX]], %[[FILTER_K_STRIDE]] : i32
   // CHECK-NEXT: %[[FILTER_K_PTR:.*]] = tt.addptr {{.*}}, %[[FILTER_K_OFFSET]] : !tt.ptr<i64>, i32
@@ -1011,7 +1011,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK: %[[BARRIER_VALID_BITS:.*]] = arith.extui {{.*}} : tensor<{{.*}}xi1{{.*}}> to tensor<{{.*}}xi32
   // CHECK: %[[BARRIER_SHIFTED_VALID_BITS:.*]] = arith.shli %[[BARRIER_VALID_BITS]]
   // CHECK: %[[BARRIER_STATUS_BITS:.*]] = arith.ori %[[BARRIER_INIT_BITS]], %[[BARRIER_SHIFTED_VALID_BITS]]
-  // CHECK: %[[BARRIER_PACKED_STATUS:.*]] = "tt.reduce"(%{{.*}}) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[BARRIER_PACKED_STATUS:.*]] = "tt.reduce"(%{{.*}}) <{axis = 0 : i32}>
   // CHECK: arith.andi {{.*}} : i32
   // CHECK: "tt.reduce"
   // CHECK: tt.return %[[BARRIER_PACKED_STATUS]] : i32
@@ -1838,7 +1838,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.shar
   // CHECK: %[[DEADLOCK_IDLE_BITS:.*]] = arith.extui {{.*}} : tensor<{{.*}}xi1{{.*}}> to tensor<{{.*}}xi32
   // CHECK: %[[DEADLOCK_SHIFTED_IDLE_BITS:.*]] = arith.shli %[[DEADLOCK_IDLE_BITS]]
   // CHECK: %[[DEADLOCK_BITS:.*]] = arith.ori %[[DEADLOCK_WAITING_BITS]], %[[DEADLOCK_SHIFTED_IDLE_BITS]]
-  // CHECK: %[[DEADLOCK_STATUS:.*]] = "tt.reduce"(%[[DEADLOCK_BITS]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[DEADLOCK_STATUS:.*]] = "tt.reduce"(%[[DEADLOCK_BITS]]) <{axis = 0 : i32}>
   // CHECK: arith.andi {{.*}} : i32
   // CHECK-NOT: "tt.reduce"
   // CHECK: arith.cmpi eq, %[[DEADLOCK_STATUS]], {{.*}} : i32
@@ -3677,8 +3677,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK: %[[WAIT_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
   // CHECK: %[[WAIT_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
   // CHECK: %[[WAIT_K_INDICES:.*]] = arith.select %[[WAIT_K_EQ]], %[[WAIT_K_RANGE]], {{.*}}tensor<2xi32,
-  // CHECK: %[[WAIT_K_INDEX:.*]] = "tt.reduce"(%[[WAIT_K_INDICES]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
-  // CHECK: %[[WAIT_K_ANY:.*]] = "tt.reduce"(%[[WAIT_K_EQ]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[WAIT_K_INDEX:.*]] = "tt.reduce"(%[[WAIT_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[WAIT_K_ANY:.*]] = "tt.reduce"(%[[WAIT_K_EQ]]) <{axis = 0 : i32}>
   // CHECK: %[[WAIT_K_ONE:.*]] = arith.constant 1 : i32
   // CHECK: %[[WAIT_K_PARITY:.*]] = arith.andi %[[WAIT_K_PHASE]], %[[WAIT_K_ONE]] : i32
   // CHECK: %[[WAIT_K_PHASE_STRIDE:.*]] = arith.constant 64 : i32
@@ -3704,8 +3704,8 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK: %[[TRANSFER_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
   // CHECK: %[[TRANSFER_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
   // CHECK: %[[TRANSFER_K_INDICES:.*]] = arith.select %[[TRANSFER_K_EQ]], %[[TRANSFER_K_RANGE]], {{.*}}tensor<2xi32,
-  // CHECK: %[[TRANSFER_K_INDEX:.*]] = "tt.reduce"(%[[TRANSFER_K_INDICES]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
-  // CHECK: %[[TRANSFER_K_ANY:.*]] = "tt.reduce"(%[[TRANSFER_K_EQ]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[TRANSFER_K_INDEX:.*]] = "tt.reduce"(%[[TRANSFER_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[TRANSFER_K_ANY:.*]] = "tt.reduce"(%[[TRANSFER_K_EQ]]) <{axis = 0 : i32}>
   // Write tracking has no origin axis: its full phase stride is 32.
   // CHECK: %[[TRANSFER_K_WRITE_ONE:.*]] = arith.constant 1 : i32
   // CHECK: %[[TRANSFER_K_WRITE_PHASE:.*]] = arith.andi %[[TRANSFER_K_PHASE]], %[[TRANSFER_K_WRITE_ONE]] : i32
@@ -3743,10 +3743,10 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
   // CHECK: %[[PROXY_K_EQ:.*]] = arith.cmpi eq, {{.*}} : tensor<2xi64,
   // CHECK: %[[PROXY_K_RANGE:.*]] = tt.make_range {end = 2 : i32, start = 0 : i32}
   // CHECK: %[[PROXY_K_INDICES:.*]] = arith.select %[[PROXY_K_EQ]], %[[PROXY_K_RANGE]], {{.*}}tensor<2xi32,
-  // CHECK: %[[PROXY_K_INDEX:.*]] = "tt.reduce"(%[[PROXY_K_INDICES]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
-  // CHECK: %[[PROXY_K_ANY:.*]] = "tt.reduce"(%[[PROXY_K_EQ]]) <{axis = 0 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[PROXY_K_INDEX:.*]] = "tt.reduce"(%[[PROXY_K_INDICES]]) <{axis = 0 : i32}>
+  // CHECK: %[[PROXY_K_ANY:.*]] = "tt.reduce"(%[[PROXY_K_EQ]]) <{axis = 0 : i32}>
   // CHECK: %[[PROXY_K_SELECTED_PHASES:.*]] = arith.select {{.*}}tensor<2x2xi{{32|64}},
-  // CHECK: %[[PROXY_K_PHASES:.*]] = "tt.reduce"(%[[PROXY_K_SELECTED_PHASES]]) <{axis = 1 : i32, in_thread_reduction = "tree"}>
+  // CHECK: %[[PROXY_K_PHASES:.*]] = "tt.reduce"(%[[PROXY_K_SELECTED_PHASES]]) <{axis = 1 : i32}>
   // CHECK: %[[PROXY_K_STRIDE:.*]] = arith.constant 16 : i32
   // CHECK-NEXT: %[[PROXY_K_OFFSET:.*]] = arith.muli %[[PROXY_K_INDEX]], %[[PROXY_K_STRIDE]] : i32
   // CHECK-NEXT: %[[PROXY_K_PTR:.*]] = tt.addptr {{.*}}, %[[PROXY_K_OFFSET]] : !tt.ptr<i64>, i32

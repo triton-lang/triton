@@ -938,12 +938,19 @@ def TT_ReduceOp: TT_Op<"reduce",
       preserves the target's existing tree-based lowering; `sequential` uses
       one accumulator chain. Vectorization and inter-thread reduction are
       unaffected. This does not specify a global element order or constrain
-      subsequent instruction-level optimizations.
+      subsequent instruction-level optimizations. Omitting the attribute is
+      equivalent to `tree`.
     }];
     let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis,
-                        DefaultValuedAttr<StrAttr, "\"tree\"">:$in_thread_reduction);
+                        OptionalAttr<StrAttr>:$in_thread_reduction);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
+    let builders = [
+      OpBuilder<(ins "ValueRange":$srcs, "int":$axis), [{
+        build($_builder, $_state, srcs, $_builder.getI32IntegerAttr(axis),
+              ::mlir::StringAttr{});
+      }]>,
+    ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
     let extraClassDeclaration = [{
