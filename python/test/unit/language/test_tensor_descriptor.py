@@ -1325,7 +1325,7 @@ def mxfp8_mxfp4_matmul_tma(  #
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 @pytest.mark.skipif(is_hip(), reason="HIP devices don't have full support for MX formats")
 def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
-    if BLOCK_N == 256 and BLOCK_K == 256:
+    if BLOCK_K == 256 and (BLOCK_N == 256 or is_sm12x()):
         NUM_STAGES = min(NUM_STAGES, 2)
 
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
