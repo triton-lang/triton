@@ -441,6 +441,7 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     return module
 
 
+@pytest.mark.parametrize("initially_disabled", [False, True])
 @pytest.mark.parametrize("change_line_info", [False, True])
 @pytest.mark.parametrize("filename, extra_lines, decorators, indentation", [
     ("kernel.py", 0, 1, 4),
@@ -450,10 +451,10 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
     ("kernel.py", 0, 1, 8),
 ], ids=["unchanged", "file", "line", "decorator", "column"])
 def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, fresh_triton_cache, change_line_info,
-                                           filename, extra_lines, decorators, indentation):
+                                           initially_disabled, filename, extra_lines, decorators, indentation):
     from textwrap import dedent, indent
 
-    fresh_knobs.compilation.disable_line_info = False
+    fresh_knobs.compilation.disable_line_info = initially_disabled
 
     def load_kernel(filename="kernel.py", extra_lines=0, decorators=1, indentation=4):
         code = dedent("""\
@@ -476,14 +477,17 @@ def test_source_locations_invalidate_cache(tmp_path: pathlib.Path, fresh_knobs, 
     original_key = original.cache_key
     original_compiled = triton.compile(triton.compiler.ASTSource(original, {"X": "*i32"}))
 
-    fresh_knobs.compilation.disable_line_info = change_line_info
+    finally_disabled = initially_disabled != change_line_info
+    fresh_knobs.compilation.disable_line_info = finally_disabled
     updated = load_kernel(filename, extra_lines, decorators, indentation)
     updated_compiled = triton.compile(triton.compiler.ASTSource(updated, {"X": "*i32"}))
     source_changed = (filename, extra_lines, decorators, indentation) != ("kernel.py", 0, 1, 4)
+    # Without line info the source location does not reach the kernel, so it is not hashed.
+    key_changed = change_line_info or (source_changed and not finally_disabled)
     assert original.src == updated.src
-    assert (original_key != updated.cache_key) == source_changed
+    assert (original_key != updated.cache_key) == key_changed
     # Column-only changes may produce identical binary bytes.
-    assert (original_compiled.hash != updated_compiled.hash) == (source_changed or change_line_info)
+    assert (original_compiled.hash != updated_compiled.hash) == key_changed
     if change_line_info:
         assert original_compiled.kernel != updated_compiled.kernel
 
