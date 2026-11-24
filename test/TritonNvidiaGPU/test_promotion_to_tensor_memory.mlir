@@ -67,3 +67,55 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 16]], warp = [[16, 0], [32, 0]], block = []}>
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 256, colStride = 1>
+!a = !ttg.memdesc<64x32xbf16, #shared_a, #ttg.shared_memory>
+!b256 = !ttg.memdesc<32x256xbf16, #shared_b, #ttg.shared_memory>
+!b512 = !ttg.memdesc<32x512xbf16, #shared_b, #ttg.shared_memory>
+!d256 = !ttg.memdesc<64x256xf32, #tmem, #ttng.tensor_memory, mutable>
+!d512 = !ttg.memdesc<64x512xf32, #tmem, #ttng.tensor_memory, mutable>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @promote_lhs_m64
+  tt.func @promote_lhs_m64(%lhs: tensor<64x32xbf16, #linear>, %b: !b256, %d: !d256, %p: i1) {
+    // CHECK: %[[A:.*]] = ttng.tmem_alloc
+    // CHECK: ttng.tc_gen5_mma %[[A]],
+    %a = ttg.local_alloc %lhs : (tensor<64x32xbf16, #linear>) -> !a
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b256, !d256
+    tt.return
+  }
+
+  // CHECK-LABEL: @keep_lhs_in_smem_interleaved_n
+  tt.func @keep_lhs_in_smem_interleaved_n(%lhs: tensor<64x32xbf16, #linear>, %b: !b512, %d: !d512, %p: i1) {
+    // CHECK: %[[A:.*]] = ttg.local_alloc
+    // CHECK: ttng.tc_gen5_mma %[[A]],
+    %a = ttg.local_alloc %lhs : (tensor<64x32xbf16, #linear>) -> !a
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p : !a, !b512, !d512
+    tt.return
+  }
+}
+
+// -----
+
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [0, 0]], block = [[64, 0]]}>
+#shared_a = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16, CGALayout = [[1, 0]]}>
+#shared_b = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 16, CGALayout = [[0, 1]]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 64, blockN = 64, colStride = 1, CGALayout = [[1, 0]], twoCTAs = true>
+!a = !ttg.memdesc<128x16xf16, #shared_a, #ttg.shared_memory>
+!b = !ttg.memdesc<16x64xf16, #shared_b, #ttg.shared_memory>
+!d = !ttg.memdesc<128x64xf32, #tmem, #ttng.tensor_memory, mutable>
+// CHECK: #[[$A_LAYOUT:.*]] = #ttng.tensor_memory_encoding<blockM = 64, blockN = 32, colStride = 1, {{.*}}twoCTAs = true>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @promote_duplicated_lhs_m64_two_ctas
+  tt.func @promote_duplicated_lhs_m64_two_ctas(%lhs: tensor<128x16xf16, #linear>, %b: !b, %d: !d, %p: i1) {
+    // CHECK: %[[A:.*]] = ttng.tmem_alloc {{.*}} -> !ttg.memdesc<128x16xf16, #[[$A_LAYOUT]],
+    // CHECK: ttng.tc_gen5_mma %[[A]],
+    %a = ttg.local_alloc %lhs : (tensor<128x16xf16, #linear>) -> !a
+    ttng.tc_gen5_mma %a, %b, %d, %p, %p {two_ctas} : !a, !b, !d
+    tt.return
+  }
+}
