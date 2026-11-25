@@ -708,3 +708,26 @@ def test_ir_module_released_at_shutdown(tmp_path):
     script.write_text(code)
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True)
     assert "nanobind: leaked" not in result.stderr, result.stderr
+
+
+def test_overflow_check_preserves_debug_variable(monkeypatch):
+    monkeypatch.setenv("TRITON_DISABLE_LINE_INFO", "0")
+    monkeypatch.setenv("LLVM_EXTRACT_DI_LOCAL_VARIABLES", "1")
+
+    @triton.jit
+    def kernel(out, i, j, n):
+        block_start = i * j + n
+        tl.store(out, block_start)
+
+    signature = {"out": "*i32", "i": "i32", "j": "i32", "n": "i32"}
+    compiled = triton.compile(
+        ASTSource(kernel, signature),
+        target=GPUTarget("cuda", 80, 32),
+        options={"debug": True, "sanitize_overflow": True},
+    )
+    llir = compiled.asm["llir"]
+    types = re.findall(r'!DILocalVariable\(name: "block_start", [^\n]*\btype: !(\d+)\)', llir)
+    assert len(types) == 1
+    assert re.search(rf'^!{types[0]} = !DIBasicType\(name: "int", size: 32\b', llir, re.MULTILINE)
+    checks = re.findall(r'tt\.assert .*"int32 overflow detected for operation (mul|add)"', compiled.asm["ttir"])
+    assert checks == ["mul", "add"]
