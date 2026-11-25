@@ -312,23 +312,13 @@ allocateTMem(Operation *parentOp,
       if (isa<TensorMemoryEncodingAttr>(mmaOp.getA().getType().getEncoding())) {
         TMemAllocation allocSize = getTmemAllocSizes(mmaOp.getA().getType());
         if (allocSize.numRows == 64) {
-          // HW restriction, the A alloc and accumulator needs to be in the same
-          // rows.
+          // 64-row allocations must occupy the same half of each warp.
+          // 128-row allocations always start at row 0.
           SmallVector<Operation *> lhsAllocs = getAlloc(mmaOp.getA());
           SmallVector<Operation *> accAllocs = getAlloc(mmaOp.getAccumulator());
           for (Operation *lhsAlloc : lhsAllocs)
             for (Operation *accAlloc : accAllocs)
               rowIdConstraints.joinOps(lhsAlloc, accAlloc);
-        } else {
-          // TODO: we need to handle cases where the format is blockM and we
-          // have multiple blocks.
-          assert((cast<TensorMemoryEncodingAttr>(
-                      mmaOp.getA().getType().getEncoding())
-                          .getBlockM() != 64 &&
-                  cast<TensorMemoryEncodingAttr>(
-                      mmaOp.getAccumulator().getType().getEncoding())
-                          .getBlockM() != 64) &&
-                 "interleaved layout with TMEM operand is not supported yet.");
         }
       }
     }

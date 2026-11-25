@@ -4,7 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Tools/LayoutUtils.h"
-#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallSet.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -28,8 +28,6 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
   matchAndRewrite(triton::ScanOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ScanLoweringHelper helper(op);
-    if (!helper.isSupported())
-      return op.emitError("scan axis distributed across CTAs is not supported");
 
     auto loc = op.getLoc();
     ScanValues values;
@@ -47,7 +45,7 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
     Value laneId = b.urem(threadId, b.i32_val(warpSize));
     Value warpId = b.udiv(threadId, b.i32_val(warpSize));
 
-    scanWithinCTA(op, helper, values, laneId, warpId, rewriter);
+    emitScan(op, helper, values, laneId, warpId, rewriter);
 
     SmallVector<Value> results;
     for (unsigned i = 0; i < op.getNumOperands(); ++i) {
@@ -63,9 +61,9 @@ struct ScanOpConversion : public ConvertOpToLLVMPattern<triton::ScanOp> {
   }
 
 private:
-  void scanWithinCTA(triton::ScanOp op, const ScanLoweringHelper &helper,
-                     ScanValues &values, Value laneId, Value warpId,
-                     ConversionPatternRewriter &rewriter) const {
+  void emitScan(triton::ScanOp op, const ScanLoweringHelper &helper,
+                ScanValues &values, Value laneId, Value warpId,
+                ConversionPatternRewriter &rewriter) const {
     permuteRegisters(values, helper.getRegisterOrder());
     scanWithinThreads(op, values, helper.getThreadSegmentSize(), rewriter);
     ScanValues intraWarpTotals;
@@ -311,16 +309,28 @@ private:
                       /*forceWarpShuffle=*/false, storePred);
 
     ScanLoweringHelper totalsHelper(totalsLayout, op.getAxis());
-    scanWithinCTA(op, totalsHelper, totals, laneId, warpId, rewriter);
+    emitScan(op, totalsHelper, totals, laneId, warpId, rewriter);
     return getSegmentCarries(op, totals, interWarpTotalsLayout, totalsLayout,
                              interWarpTotalsLayout.getOutDimSize(axis), laneId,
                              warpId, rewriter);
   }
 
-  // The general conversion materializes the replicated totals in registers.
-  // For long, wide tuples this can keep many registers live at once. Grouped
-  // traversal loads one group at a time and maintains a running prefix and
-  // the carries.
+  // An unfused scan saves the running prefix acc for each segment s, then
+  // looks it up per local slot. prev(s) is the preceding segment in scan order.
+  //
+  //   for s in scan order:
+  //     acc = total[s] if s is first else combine(acc, total[s])
+  //     prefix[s] = acc
+  //   for each local segment slot r:
+  //     s = source(r, lane, warp)[axis]
+  //     if segmentRegs == 1: values[r] = prefix[s]
+  //     else if s is not first: apply prefix[prev(s)] to each local value in r
+  //
+  // We fuse the lookup into the scan to avoid keeping every prefix live.
+  // Every thread uses the source layout to select a prefix for carries[r].
+  // For example, with one value per segment and segment index s = 4*r + warp,
+  // the segment offset is warp. For slot 1, all lanes in warp 0 take prefix[4]
+  // of their own column and all lanes in warp 1 take prefix[5].
   void scanInterWarpGroups(triton::ScanOp op, const ScanLoweringHelper &helper,
                            const ScanValues &totals, ScanValues &values,
                            Value laneId, Value warpId,
@@ -359,21 +369,25 @@ private:
           b.gep(smem.getType(), i8_ty, smem, b.i32_val(scratch.offsets[i])));
       types.push_back(getTypeConverter()->convertType(type));
     }
-    auto getOffset = [&](const LinearLayout &layout, unsigned reg) {
-      return applyLinearLayout(loc, rewriter, layout,
-                               {{kReg, b.i32_val(reg)},
-                                {kLane, laneId},
-                                {kWarp, warpId},
-                                {kBlock, b.i32_val(0)}})
-          .front()
-          .second;
+    auto getOffsets = [&](const LinearLayout &layout) {
+      auto regs =
+          llvm::to_vector(llvm::seq<uint32_t>(layout.getInDimSize(kReg)));
+      return applyLinearLayoutVec(loc, rewriter, layout,
+                                  {{kReg, b.i32_val(0)},
+                                   {kLane, laneId},
+                                   {kWarp, warpId},
+                                   {kBlock, b.i32_val(0)}},
+                                  regs);
     };
     auto free = source.getFreeVariableMasks();
+    free.erase(kBlock);
     Value storePred =
-        b.and_(b.icmp_eq(b.and_(laneId, b.i32_val(free[kLane])), b.i32_val(0)),
-               b.icmp_eq(b.and_(warpId, b.i32_val(free[kWarp])), b.i32_val(0)));
+        gpu::emitRedundantThreadPredicate(free, rewriter, loc, targetInfo);
+    if (!storePred)
+      storePred = b.true_val();
+    auto storeOffsets = getOffsets(storeLayout);
     for (auto [r, total] : llvm::enumerate(totals)) {
-      Value offset = getOffset(storeLayout, r);
+      Value offset = storeOffsets[r].front().second;
       for (unsigned i = 0; i < total.size(); ++i) {
         Value ptr = b.gep(smem.getType(), types[i], bases[i], offset);
         targetInfo.storeDShared(rewriter, loc, ptr, Value(), total[i],
@@ -382,56 +396,47 @@ private:
     }
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
 
-    auto inverse = scan.pseudoinvert().sublayout(
-        llvm::to_vector(scan.getOutDimNames()), {kReg, kLane});
+    // location in scan -> location of the same segment in source.
+    auto route = scan.invertAndCompose(source);
+    // scan register -> consumer's register slot in source.
+    auto dstReg = route.sublayout({kReg}, {kReg});
+    // (lane, warp) in source -> segment offset in source.
+    auto laneWarpToSegmentOffset = source.sublayout({kLane, kWarp}, {axis});
+    // scan register -> consumer's segment offset in source.
+    auto scanRegToOffset = route.sublayout({kReg}, {kLane, kWarp})
+                               .compose(laneWarpToSegmentOffset);
+    auto getConsumerOffset = [&](unsigned scanReg) {
+      return scanRegToOffset.apply({{kReg, scanReg}}).front().second;
+    };
+    Value segmentOffset =
+        applyLinearLayout(loc, rewriter, laneWarpToSegmentOffset,
+                          {{kLane, laneId}, {kWarp, warpId}})
+            .front()
+            .second;
     unsigned segmentRegs = values.size() / totals.size();
-    // For one-value segments, the inclusive prefix is already the final
-    // output. Select it directly to avoid a carry combine and its boundary
-    // select.
     bool inclusive = segmentRegs == 1;
-    SmallVector<Value> consumerRegs;
-    SmallVector<SmallVector<std::pair<unsigned, bool>>> consumers(
-        scan.getInDimSize(kReg));
-    SmallVector<ScanCarry> carries;
-    for (unsigned r = 0; r < totals.size(); ++r) {
-      auto coords = applyLinearLayout(loc, rewriter, source,
-                                      {{kReg, b.i32_val(r)},
-                                       {kLane, laneId},
-                                       {kWarp, warpId},
-                                       {kBlock, b.i32_val(0)}});
-      Value index = coords[op.getAxis()].second;
-      Value pred = b.icmp_ne(index, b.i32_val(reverse ? numTotals - 1 : 0));
-      consumerRegs.push_back(
-          applyLinearLayout(loc, rewriter, inverse, coords).front().second);
-      // A simple implementation visits every prefix for every destination:
-      //   for (each prefix Qj)
-      //     for (each destination r)
-      //       carry[r] = select(consumerRegs[r] == j + 1, Qj, carry[r]);
-      //
-      // Enumerating candidate prefixes reduces the selections:
-      //   for (each destination r)
-      //     for (each candidate prefix Qc)
-      //       carry[r] = select(consumerRegs[r] == c + 1, Qc, carry[r]);
-      auto candidates =
-          getScanRegisters(source, inverse, r, op.getAxis(), numTotals,
-                           inclusive ? 0 : (reverse ? 1 : -1),
-                           /*excludeBoundary=*/!inclusive);
-      llvm::sort(candidates, [reverse](unsigned a, unsigned b) {
-        return reverse ? a > b : a < b;
-      });
-      for (unsigned reg : candidates)
-        consumers[reg].emplace_back(r, reg == candidates.back());
-      carries.push_back({{}, pred});
-    }
+    unsigned boundary = reverse ? numTotals - 1 : 0;
+    unsigned lastConsumerOffset =
+        getConsumerOffset(reverse ? 0 : numTotals - 1);
+    // Only the boundary register needs this check.
+    //   Boundary offset -> skip the combine (no preceding segment).
+    //   Other offset    -> apply the carry.
+    Value isNonBoundaryOffset =
+        b.icmp_ne(segmentOffset, b.i32_val(getConsumerOffset(boundary)));
+    ScanValues carries(totals.size());
 
-    unsigned numScans = independentScans.getInDimSize(kReg);
+    auto loadOffsets = getOffsets(loadLayout);
+    unsigned numScans = loadOffsets.size();
     for (unsigned n = 0; n < numScans; ++n) {
       unsigned scanIndex = reverse ? numScans - 1 - n : n;
-      Value base = getOffset(loadLayout, scanIndex);
+      unsigned boundaryReg =
+          dstReg.apply({{kReg, scanIndex * numTotals + boundary}})
+              .front()
+              .second;
+      Value base = loadOffsets[scanIndex].front().second;
       SmallVector<Value> acc;
       for (unsigned i = 0; i < numTotals; ++i) {
         unsigned segment = reverse ? numTotals - 1 - i : i;
-        unsigned reg = scanIndex * numTotals + segment;
         Value index = b.add(base, b.i32_val(segment * stride));
         SmallVector<Value> current;
         for (unsigned i = 0; i < types.size(); ++i) {
@@ -440,33 +445,28 @@ private:
                                                    types[i], b.true_val()));
         }
         acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, current);
-        // `complete` marks the last candidate producer for consumer r in scan
-        // order.
-        // Once all candidates have been considered, apply the selected carry to
-        // the elements of segment r. For example:
-        //   consumers[1] = {{0, false}};
-        //   consumers[2] = {{0, true}, {1, false}};
-        //   consumers[3] = {{1, true}};
-        for (auto [r, complete] : consumers[reg]) {
-          auto &carry = carries[r];
-          if (carry.values.empty()) {
-            carry.values = acc;
-          } else {
-            unsigned consumer = inclusive ? reg : (reverse ? reg - 1 : reg + 1);
-            Value selected = b.icmp_eq(consumerRegs[r], b.i32_val(consumer));
-            for (unsigned i = 0; i < types.size(); ++i)
-              carry.values[i] = b.select(selected, acc[i], carry.values[i]);
-          }
-          if (!complete)
-            continue;
-          if (inclusive) {
-            values[r] = carry.values;
-          } else {
-            for (unsigned i = 0; i < segmentRegs; ++i) {
-              auto &value = values[r * segmentRegs + i];
-              value = combineWithPrefix(op, carry.values, value, rewriter,
-                                        carry.pred);
-            }
+        // A one-value segment takes its own prefix. Otherwise, pass the
+        // prefix to the next segment in scan order.
+        if (!inclusive && i == numTotals - 1)
+          continue;
+        unsigned consumer =
+            inclusive ? segment : (reverse ? segment - 1 : segment + 1);
+        unsigned scanReg = scanIndex * numTotals + consumer;
+        unsigned r = dstReg.apply({{kReg, scanReg}}).front().second;
+        auto &carry = carries[r];
+        unsigned consumerOffset = getConsumerOffset(scanReg);
+        carry = selectPrefix(b, carry, acc, segmentOffset, consumerOffset);
+
+        // After the last consumer offset, the carry is ready for this slot.
+        if (consumerOffset != lastConsumerOffset)
+          continue;
+        if (inclusive) {
+          values[r] = carry;
+        } else {
+          Value pred = r == boundaryReg ? isNonBoundaryOffset : b.true_val();
+          for (unsigned j = 0; j < segmentRegs; ++j) {
+            auto &value = values[r * segmentRegs + j];
+            value = combineWithPrefix(op, carry, value, rewriter, pred);
           }
         }
       }
@@ -550,55 +550,18 @@ private:
     return distance > 0 ? int(stride) : -int(stride);
   }
 
-  static SmallVector<unsigned>
-  getScanRegisters(const LinearLayout &segmentLayout,
-                   const LinearLayout &inverseTotalsLayout, unsigned reg,
-                   unsigned axis, unsigned segmentsPerScan, int offset,
-                   bool excludeBoundary = false) {
-    auto *ctx = segmentLayout.getInDimNames().begin()->getContext();
-    auto kReg = StringAttr::get(ctx, "register");
-    auto kLane = StringAttr::get(ctx, "lane");
-    auto kWarp = StringAttr::get(ctx, "warp");
-    auto kBlock = StringAttr::get(ctx, "block");
-    unsigned mask = segmentsPerScan - 1;
-    llvm::SmallSetVector<unsigned, 8> candidates;
-    for (unsigned warp = 0; warp < segmentLayout.getInDimSize(kWarp); ++warp)
-      for (unsigned lane = 0; lane < segmentLayout.getInDimSize(kLane);
-           ++lane) {
-        auto coords = segmentLayout.apply(
-            {{kReg, reg}, {kLane, lane}, {kWarp, warp}, {kBlock, 0}});
-        auto &index = coords[axis].second;
-        if (excludeBoundary &&
-            (index & mask) == (offset > 0 ? segmentsPerScan - 1 : 0))
-          continue;
-        index = (index & ~mask) | ((index + offset) & mask);
-        candidates.insert(inverseTotalsLayout.apply(coords).front().second);
-      }
-    return llvm::to_vector(candidates);
-  }
-
-  SmallVector<Value> gatherCarry(Location loc, const ScanValues &totals,
-                                 ArrayRef<unsigned> candidates, Value srcReg,
-                                 Value srcLane,
-                                 ConversionPatternRewriter &rewriter,
-                                 std::optional<int> shuffleDistance,
-                                 bool laneLocal) const {
-    assert(!candidates.empty() && "each segment has a warp-local carry");
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto fetch = [&](unsigned reg) {
-      return laneLocal ? totals[reg]
-                       : shuffleValues(loc, totals[reg], srcLane, rewriter,
-                                       shuffleDistance)
-                             .first;
-    };
-    auto carry = fetch(candidates.front());
-    for (unsigned candidate : candidates.drop_front()) {
-      auto incoming = fetch(candidate);
-      Value select = b.icmp_eq(srcReg, b.i32_val(candidate));
-      for (auto [value, source] : llvm::zip(carry, incoming))
-        value = b.select(select, source, value);
-    }
-    return carry;
+  static SmallVector<Value> selectPrefix(TritonLLVMOpBuilder &b,
+                                         ArrayRef<Value> carry,
+                                         ArrayRef<Value> prefix, Value index,
+                                         unsigned candidate) {
+    // The first prefix is the default, so a single candidate needs no select.
+    if (carry.empty())
+      return llvm::to_vector(prefix);
+    Value selected = b.icmp_eq(index, b.i32_val(candidate));
+    SmallVector<Value> result;
+    for (auto [value, incoming] : llvm::zip(carry, prefix))
+      result.push_back(b.select(selected, incoming, value));
+    return result;
   }
 
   SmallVector<ScanCarry>
@@ -616,36 +579,65 @@ private:
     auto kBlock = StringAttr::get(ctx, "block");
     auto axis = StringAttr::get(ctx, "dim" + std::to_string(op.getAxis()));
     bool reverse = op.getReverse();
-    auto inverse = totalsLayout.pseudoinvert().sublayout(
-        llvm::to_vector(totalsLayout.getOutDimNames()), {kReg, kLane});
+    auto dims = llvm::to_vector(totalsLayout.getOutDimNames());
+    auto inverse = totalsLayout.pseudoinvert().sublayout(dims, {kReg, kLane});
     bool laneLocal = inverse.sublayoutIsZero({axis}, {kLane});
     unsigned numSegments = segmentLayout.getOutDimSize(axis);
+    unsigned mask = segmentsPerScan - 1;
+    unsigned boundary = reverse ? mask : 0;
+    int distance = reverse ? -1 : 1;
+    auto shuffleDistance = getShuffleDistance(
+        segmentLayout, inverse, op.getAxis(), segmentsPerScan, distance);
+
+    // For a fixed register, only the remaining low segment bits vary.
+    // Both layouts preserve thread ownership outside the current scan.
+    auto regLayout = segmentLayout.sublayout({kReg}, dims);
+    unsigned regBits = getOutputBasisMask(regLayout, {kReg}, axis);
+    SmallVector<unsigned> offsets;
+    for (unsigned s = 0; s < segmentsPerScan; ++s)
+      if (!(s & regBits))
+        offsets.push_back(s);
+
+    Value blockId = targetInfo.getClusterCTAId(rewriter, loc);
     SmallVector<ScanCarry> carries;
-    auto shuffleDistance =
-        getShuffleDistance(segmentLayout, inverse, op.getAxis(),
-                           segmentsPerScan, reverse ? -1 : 1);
     for (unsigned r = 0; r < segmentLayout.getInDimSize(kReg); ++r) {
       auto coords = applyLinearLayout(loc, rewriter, segmentLayout,
                                       {{kReg, b.i32_val(r)},
                                        {kLane, laneId},
                                        {kWarp, warpId},
-                                       {kBlock, b.i32_val(0)}});
+                                       {kBlock, blockId}});
       Value segment = coords[op.getAxis()].second;
       Value segmentInScan = segment;
       if (segmentsPerScan != numSegments)
-        segmentInScan = b.and_(segment, b.i32_val(segmentsPerScan - 1));
-      Value pred = b.icmp_ne(segmentInScan,
-                             b.i32_val(reverse ? segmentsPerScan - 1 : 0));
+        segmentInScan = b.and_(segment, b.i32_val(mask));
+      Value pred = b.icmp_ne(segmentInScan, b.i32_val(boundary));
       coords[op.getAxis()].second = shiftWithinSegment(
-          b, segment, reverse ? -1 : 1, segmentsPerScan, numSegments);
+          b, segment, distance, segmentsPerScan, numSegments);
       auto src = applyLinearLayout(loc, rewriter, inverse, coords);
       Value srcReg = src[0].second;
       Value srcLane = src[1].second;
-      auto candidates =
-          getScanRegisters(segmentLayout, inverse, r, op.getAxis(),
-                           segmentsPerScan, reverse ? 1 : -1);
-      auto carry = gatherCarry(loc, totals, candidates, srcReg, srcLane,
-                               rewriter, shuffleDistance, laneLocal);
+
+      auto prefixCoords = regLayout.apply({{kReg, r}});
+      unsigned base = prefixCoords[op.getAxis()].second;
+      llvm::SmallSet<unsigned, 8> visited;
+      SmallVector<Value> carry;
+      for (unsigned offset : offsets) {
+        unsigned s = base | offset;
+        if ((s & mask) == boundary)
+          continue;
+        prefixCoords[op.getAxis()].second = s - distance;
+        unsigned reg = inverse.apply(prefixCoords).front().second;
+        if (!visited.insert(reg).second)
+          continue;
+        auto prefix = laneLocal ? totals[reg]
+                                : shuffleValues(loc, totals[reg], srcLane,
+                                                rewriter, shuffleDistance)
+                                      .first;
+        carry = selectPrefix(b, carry, prefix, srcReg, reg);
+      }
+      // Segment bit 0 belongs to a lane, warp or CTA, so every register
+      // has at least one non-boundary consumer.
+      assert(!carry.empty());
       carries.push_back({std::move(carry), pred});
     }
     return carries;

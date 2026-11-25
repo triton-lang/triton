@@ -47,21 +47,10 @@ bool isCrossCTAGatherScatter(ttg::MemDescType memDescTy, RankedTensorType regTy,
         return true;
   }
 
-  LinearLayout regLayout = ttg::toLinearLayout(regTy)
-                               .removeZeroBasesAlongDim(kRegister)
-                               .transposeOuts(allDims);
-  // Replace `axis` with a descriptor-sized input, then check whether the
-  // remaining result coordinates select a remote CTA.
-  SmallVector<StringAttr> nonIndexedDims = allDims;
-  nonIndexedDims.erase(nonIndexedDims.begin() + axis);
-  LinearLayout indexedLayout =
-      regLayout.sublayout(llvm::to_vector(regLayout.getInDimNames()),
-                          nonIndexedDims) *
-      LinearLayout::identity1D(sharedLayout.getOutDimSize(axisDim), axisDim,
-                               axisDim);
-  indexedLayout = indexedLayout.transposeOuts(allDims);
+  LinearLayout regLayout =
+      ttg::toLinearLayout(regTy).removeZeroBasesAlongDim(kRegister);
   LinearLayout conversion =
-      invertAndComposeLocal(sharedLayout, indexedLayout, {kBlock});
+      getGatherScatterLayout(sharedLayout, regLayout, axisDim);
   return !conversion.isIdentityOnOutDim(kBlock);
 }
 

@@ -486,6 +486,16 @@ void init_triton_llvm(py::module_ &m) {
               fn->addFnAttr(name, val);
           },
           py::arg("name"), py::arg("val") = "")
+      .def(
+          "get_fn_attr",
+          [](llvm::Function *fn,
+             const std::string &name) -> std::optional<std::string> {
+            auto attr = fn->getFnAttribute(name);
+            if (!attr.isValid())
+              return std::nullopt;
+            return attr.getValueAsString().str();
+          },
+          py::arg("name"))
       .def("remove_fn_attr", [](llvm::Function *fn,
                                 std::string &name) { fn->removeFnAttr(name); })
       .def("add_fn_asan_attr",
@@ -819,44 +829,72 @@ void init_triton_llvm(py::module_ &m) {
     llvm::parallel::strategy = llvm::hardware_concurrency(1);
   });
 
-  m.def("link_extern_libs", [](llvm::Module *dstMod,
-                               const std::vector<std::string> &paths) {
-    if (paths.empty())
-      return;
+  m.def(
+      "link_extern_libs",
+      [](llvm::Module *dstMod, const std::vector<std::string> &paths,
+         const std::string &targetCPU, const std::string &targetFeatures) {
+        if (paths.empty())
+          return;
 
-    LLVMContext &ctx = dstMod->getContext();
-    llvm::Linker linker(*dstMod);
-    for (const std::string &path : paths) {
-      llvm::SMDiagnostic err;
-      std::unique_ptr<llvm::Module> libMod = llvm::parseIRFile(path, err, ctx);
-      if (!libMod) {
-        std::string message = "Failed to parse library at " + path;
-        throw std::invalid_argument(message);
-      }
-      libMod->setTargetTriple(Triple(dstMod->getTargetTriple()));
-      libMod->setDataLayout(dstMod->getDataLayout());
+        LLVMContext &ctx = dstMod->getContext();
+        llvm::Linker linker(*dstMod);
+        for (const std::string &path : paths) {
+          llvm::SMDiagnostic err;
+          std::unique_ptr<llvm::Module> libMod =
+              llvm::parseIRFile(path, err, ctx);
+          if (!libMod) {
+            std::string message = "Failed to parse library at " + path;
+            throw std::invalid_argument(message);
+          }
+          libMod->setTargetTriple(Triple(dstMod->getTargetTriple()));
+          libMod->setDataLayout(dstMod->getDataLayout());
 
-      std::unordered_set<std::string> externalFns;
-      for (llvm::Function &fn : libMod->functions()) {
-        if (!fn.isDeclaration())
-          externalFns.insert(fn.getName().str());
-      }
+          for (llvm::Function &fn : libMod->functions()) {
+            if (fn.isIntrinsic())
+              continue;
+            if (!targetCPU.empty())
+              fn.addFnAttr("target-cpu", targetCPU);
+            if (targetFeatures.empty())
+              continue;
 
-      if (linker.linkInModule(std::move(libMod),
-                              llvm::Linker::Flags::LinkOnlyNeeded)) {
-        std::string message = "Failed to link library at " + path;
-        throw std::invalid_argument(message);
-      }
+            // LLVM applies features in order, including their dependencies.
+            // Append library settings last so they override destination
+            // defaults.
+            std::string merged = targetFeatures;
+            auto libraryFeatures = fn.getFnAttribute("target-features");
+            if (libraryFeatures.isValid() &&
+                !libraryFeatures.getValueAsString().empty()) {
+              merged += ',';
+              merged += libraryFeatures.getValueAsString().str();
+            }
+            fn.addFnAttr("target-features", merged);
+          }
 
-      // Mark linked-in functions as internal because backends use external
-      // linkage as a signifier of kernel functions.
-      for (llvm::Function &fn : dstMod->functions()) {
-        if (externalFns.contains(fn.getName().str())) {
-          fn.setLinkage(llvm::GlobalValue::InternalLinkage);
+          std::unordered_set<std::string> externalFns;
+          for (llvm::Function &fn : libMod->functions()) {
+            if (!fn.isDeclaration())
+              externalFns.insert(fn.getName().str());
+          }
+
+          if (linker.linkInModule(std::move(libMod),
+                                  llvm::Linker::Flags::LinkOnlyNeeded)) {
+            std::string message = "Failed to link library at " + path;
+            throw std::invalid_argument(message);
+          }
+
+          // Mark linked-in functions as internal because backends use external
+          // linkage as a signifier of kernel functions.
+          for (llvm::Function &fn : dstMod->functions()) {
+            if (externalFns.contains(fn.getName().str())) {
+              fn.setLinkage(llvm::GlobalValue::InternalLinkage);
+            }
+          }
         }
-      }
-    }
-  });
+      },
+      py::arg("module"), py::arg("paths"), py::kw_only(),
+      py::arg("target_cpu") = "", py::arg("target_features") = "",
+      "Link external libraries, optionally preparing generic library functions "
+      "with target settings. Explicit library features take precedence.");
 }
 
 static void triton_stacktrace_signal_handler(void *) {
