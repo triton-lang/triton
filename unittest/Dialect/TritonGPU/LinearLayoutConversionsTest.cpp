@@ -3244,7 +3244,7 @@ TEST_F(LinearLayoutConversionsTest, TensorMemory_two_ctas_one_column) {
                   LinearLayout::identity1D(2, S("block"), S("dim0"));
   EXPECT_EQ(toLinearLayout({128, 1}, enc), expected);
 
-  auto oneColumnEnc = TensorMemoryEncodingAttr::get(&ctx, 64, 1, 1, cga,
+  auto oneColumnEnc = TensorMemoryEncodingAttr::get(&ctx, 64, 2, 1, cga,
                                                     /*twoCTAs=*/true);
   EXPECT_EQ(toLinearLayout({128, 1}, oneColumnEnc),
             expected.resizeInDim(S("col"), 1));

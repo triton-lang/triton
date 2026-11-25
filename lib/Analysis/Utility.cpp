@@ -342,16 +342,15 @@ ScanLoweringHelper::ScanLoweringHelper(const LinearLayout &inputLayout,
                                        unsigned axis, triton::ScanOp op)
     : op(op), axis(axis), originalLayout(inputLayout) {
   permutedLayout = buildPermutedLayout();
-  if (!isSupported())
-    return;
 
   auto *ctx = originalLayout.getInDimNames().begin()->getContext();
   auto kWarp = StringAttr::get(ctx, "warp");
+  auto kBlock = StringAttr::get(ctx, "block");
   auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
   unsigned axisSize = originalLayout.getOutDimSize(axisDim);
-  // Cross-CTA scans are unsupported, so the lowest warp axis bit bounds
-  // a contiguous warp-local segment.
-  unsigned warpMask = getOutputBasisMask(originalLayout, {kWarp}, axisDim);
+  // A warp-local segment ends at the first axis bit owned by a warp or CTA.
+  unsigned warpMask =
+      getOutputBasisMask(originalLayout, {kWarp, kBlock}, axisDim);
   warpSegmentSize = 1u << llvm::countr_zero(warpMask | axisSize);
   // The lowest lane axis bit also bounds a thread-local segment.
   auto kLane = StringAttr::get(ctx, "lane");
@@ -522,7 +521,10 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
         getInputBasisMask(*interWarpTotalsLayout, kLane, {axisDim});
     // Unmerged lane contributions correspond to independent segments.
     // TODO(Keren): relax the constraint.
-    if (sourceLaneMask == totalsLaneMask)
+    // Grouped loads use CTA-local scratch. Layout conversion handles peer CTAs.
+    auto kBlock = StringAttr::get(ctx, "block");
+    if (sourceLaneMask == totalsLaneMask &&
+        source.sublayoutIsZero({kBlock}, {axisDim}))
       interWarpScanType = InterWarpScanType::Grouped;
     else
       interWarpScanType = scanLanes > 1 ? InterWarpScanType::Warp
@@ -546,15 +548,6 @@ LinearLayout ScanLoweringHelper::buildInterWarpScanLayout() {
   return LinearLayout(std::move(bases),
                       llvm::to_vector(interWarpTotalsLayout->getOutDimNames()))
       .removeZeroBasesAlongDim(kReg);
-}
-
-bool ScanLoweringHelper::isSupported() {
-  // A CTA may own or replicate an independent scan, but two CTAs cannot own
-  // different parts of one scan's axis. TODO(Keren): support cross-CTA scans
-  auto *ctx = originalLayout.getInDimNames().begin()->getContext();
-  auto axisDim = *std::next(originalLayout.getOutDimNames().begin(), axis);
-  return originalLayout.sublayoutIsZero({StringAttr::get(ctx, "block")},
-                                        {axisDim});
 }
 
 LayoutConversionScratchConfig
