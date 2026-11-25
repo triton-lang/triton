@@ -79,6 +79,11 @@ public:
   FunctionBuilder(ModuleOp module, AuxDataMap &auxData)
       : module(module), auxData(auxData) {}
 
+  // OR the per-thread gather or scatter CTA masks across the issuing partition.
+  Value createGatherScatterCTAMask(ImplicitLocOpBuilder &b,
+                                   gpu::MemDescType memDesc, Value indices,
+                                   Value mask, unsigned axis);
+
   // Create a function that fills a global tensor with a scalar value.
   void createFillGlobalTensorCall(ImplicitLocOpBuilder &b, Value ptr,
                                   RankedTensorType type, Value scalar);
@@ -351,6 +356,7 @@ private:
 
   ModuleOp module;
   AuxDataMap &auxData;
+  DenseMap<Region *, Value> gatherScatterScratch;
 };
 
 } // namespace instrument

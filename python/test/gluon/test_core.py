@@ -2200,7 +2200,7 @@ def test_device_tma_stride_alignment():
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
                block_layout_b: ttgl.constexpr, cga_layout_c: ttgl.constexpr, acc_layout: ttgl.constexpr,
-               shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
+               mem_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
                ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
     a_offs_m = ttgl.arange(0, M)[:, None]
     a_offs_k = ttgl.arange(0, K)[None, :]
@@ -2213,7 +2213,11 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     a_tile = ttgl.load(ttgl.set_auto_layout(a_ptrs, block_layout_a))
     b_tile = ttgl.load(ttgl.set_auto_layout(b_ptrs, block_layout_b))
 
-    smem_a = ttgl.allocate_shared_memory(operand_dtype, [M, K], shared_layout_a, a_tile)
+    if isinstance(mem_layout_a, TensorMemoryLayout):
+        lhs = allocate_tensor_memory(operand_dtype, [M, K], mem_layout_a)
+        lhs.store(ttgl.convert_layout(a_tile, lhs.get_reg_layout()))
+    else:
+        lhs = ttgl.allocate_shared_memory(operand_dtype, [M, K], mem_layout_a, a_tile)
     smem_b = ttgl.allocate_shared_memory(operand_dtype, [K, N], shared_layout_b, b_tile)
 
     if USE_TCGEN05:
@@ -2224,14 +2228,14 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
-        tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False, mbarriers=[mma_barrier])
-        mbarrier.wait(mma_barrier, phase=0, deps=[smem_a, smem_b])
+        tcgen05_mma(lhs, smem_b, acc_tmem, use_acc=False, mbarriers=[mma_barrier])
+        mbarrier.wait(mma_barrier, phase=0, deps=[lhs, smem_b])
         mbarrier.invalidate(mma_barrier)
 
         acc = acc_tmem.load()
     else:
         acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=acc_layout)
-        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
+        acc = hopper.warpgroup_mma(lhs, smem_b, acc, is_async=ASYNC)
 
         if ASYNC:
             acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
@@ -4045,21 +4049,34 @@ def test_tcgen05_mma_zero_n_bases(K, N, mn_major, storage_n, block_n, scaled, tw
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("block_m", [64, 128])
-def test_tcgen05_mma_projected_tmem_layout(block_m):
-    M, N, K = 2 * block_m, 16, 128
-    cga_a, cga_b = ((1, 0), ), ((0, 0), )
+@pytest.mark.parametrize("M,N,block_m,two_ctas,tmem_lhs", [
+    (128, 16, 64, True, False),
+    (256, 16, 128, True, False),
+    # A is duplicated across row 64. D either repeats or advances along N.
+    (128, 16, 64, True, True),
+    (128, 32, 64, True, True),
+    (256, 32, 64, True, True),
+    # Both A and D use row 16 for the second M tile.
+    (128, 64, 64, False, True),
+])
+def test_tcgen05_mma_projected_tmem_layout(M, N, block_m, two_ctas, tmem_lhs):
+    K = 128
+    cga_a = ((1, 0), ) if two_ctas else ()
+    cga_b = ((0, int(N == 32)), ) if two_ctas else ()
     a_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0], cga_layout=cga_a)
     b_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0], cga_layout=cga_b)
-    a_shared = ttgl.NVMMASharedLayout(128, 8, cga_layout=cga_a)
+    if tmem_lhs:
+        a_mem = TensorMemoryLayout((block_m, 2 * K if two_ctas else K), 1, cga_layout=cga_a, two_ctas=two_ctas)
+    else:
+        a_mem = ttgl.NVMMASharedLayout(128, 8, cga_layout=cga_a)
     b_shared = ttgl.NVMMASharedLayout(32, 8, transposed=True, cga_layout=cga_b)
-    acc_layout = TensorMemoryLayout((block_m, 32), 1, cga_layout=cga_a, two_ctas=True)
+    acc_layout = TensorMemoryLayout((block_m, 32), 1, cga_layout=cga_a, two_ctas=two_ctas)
     torch.manual_seed(0)
     a = (torch.randint(-8, 9, (M, K), device="cuda").float() / 4).to(torch.float8_e4m3fn)
     b = (torch.randint(-8, 9, (K, N), device="cuda").float() / 4).to(torch.float8_e4m3fn)
     out = torch.empty((M, N), device="cuda", dtype=torch.float32)
-    mma_kernel[(1, )](a, b, out, M, N, K, a_layout, b_layout, cga_a, acc_layout, a_shared, b_shared, ttgl.float32,
-                      False, True, num_warps=4, num_ctas=2)
+    mma_kernel[(1, )](a, b, out, M, N, K, a_layout, b_layout, cga_a, acc_layout, a_mem, b_shared, ttgl.float32, False,
+                      True, num_warps=4, num_ctas=2 if two_ctas else 1)
     torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
 
 
@@ -5374,14 +5391,6 @@ def _fp6_store_tile(src, dst, desc, ROWS: ttgl.constexpr, WIDTH: ttgl.constexpr)
     fence_async_shared()
     tma.async_store(desc, [pid * (ROWS + 1) + 1, 0], stage)
     tma.store_wait(0, deps=[stage])
-
-
-def test_fp6_tma_store_reshaped_source_sm100():
-    layout = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
-    desc_type = f"tensordesc<u8[1,128],{layout!r}>"
-    signature = {"src": "*u8", "dst": "*u8", "desc": desc_type, "ROWS": "constexpr", "WIDTH": "constexpr"}
-    source = gluon.GluonASTSource(_fp6_store_tile, signature, {"ROWS": 2, "WIDTH": 64})
-    triton.compile(source, target=GPUTarget("cuda", 100, 32))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),

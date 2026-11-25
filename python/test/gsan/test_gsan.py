@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 import triton
@@ -10,7 +12,8 @@ from triton.experimental.gluon.language.nvidia.ampere import async_copy
 from triton.experimental.gluon.language.nvidia import hopper
 from triton.tools.tensor_descriptor import TensorDescriptor
 
-from triton._internal_testing import is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x, run_in_process
+from triton._internal_testing import (is_blackwell, is_cuda, is_ampere_or_newer, is_hopper_or_newer, is_sm12x,
+                                      run_in_process, skip_if_unsupported_cluster_size)
 from triton.experimental.gsan import configure, create_mem_pool
 from triton._C.libtriton.gsan_testing import AtomicScope, ScalarClock
 from triton.experimental.gsan._testing import shadow_granularity as get_shadow_granularity, shadow_cell_address
@@ -1915,6 +1918,109 @@ def test_tma_load_store_uses_pool_granularity(fresh_knobs, with_allocator, shado
         cell = shadow_cell_from_address(target.data_ptr() + offset)
         assert cell.write_clock.epoch != 0
         assert cell.num_reads != 0
+
+
+@gluon.jit
+def tma_im2col_gsan_kernel(desc, out, pred, COORDS: gl.constexpr, OFFSETS: gl.constexpr, MULTICAST: gl.constexpr):
+    smem = gl.allocate_shared_memory(desc.dtype, desc.block_shape, desc.layout)
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, desc.nbytes_per_cta, pred=pred)
+    hopper.tma.async_load_im2col(desc, COORDS, OFFSETS, bar, smem, pred=pred, multicast=MULTICAST)
+    hopper.mbarrier.wait(bar, phase=0, pred=pred, deps=[smem])
+    hopper.mbarrier.invalidate(bar)
+    if pred:
+        layout: gl.constexpr = gl.BlockedLayout([1, 4], [4, 8], [gl.num_warps(), 1], [1, 0],
+                                                cga_layout=desc.layout.cga_layout)
+        values = smem.load(layout)
+        rows = gl.arange(0, desc.block_shape[0], layout=gl.SliceLayout(1, layout))
+        cols = gl.arange(0, desc.block_shape[1], layout=gl.SliceLayout(0, layout))
+        gl.store(out + rows[:, None] * desc.block_shape[1] + cols[None, :], values)
+
+
+def _im2col_reference(desc, coords, offsets, pred, rows_per_cta):
+    source = desc.base.cpu()
+    expected = source.new_zeros(desc.block_shape)
+    if not pred:
+        return expected
+
+    element_strides = desc.element_strides or [1] * source.ndim
+    # Each pixel-split CTA starts a separate TMA traversal at its own W coordinate.
+    for first_row in range(0, desc.block_shape[0], rows_per_cta):
+        pixel = list(coords[:-1])
+        pixel[-1] += first_row
+        for row in range(first_row, first_row + rows_per_cta):
+            index = (pixel[0], *(p + offset for p, offset in zip(pixel[1:], offsets)))
+            if all(0 <= i < size for i, size in zip(index, source.shape)):
+                channels = source[index][coords[-1]:coords[-1] + desc.block_shape[1]]
+                expected[row, :channels.numel()] = channels
+
+            for dim in reversed(range(1, len(pixel))):
+                pixel[dim] += element_strides[dim]
+                if pixel[dim] < source.shape[dim] + desc.pixel_box_upper_corner[dim - 1]:
+                    break
+                pixel[dim] = desc.pixel_box_lower_corner[dim - 1]
+            else:
+                pixel[0] += element_strides[0]
+    return expected
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper")
+@pytest.mark.parametrize("rank, num_warps", [(3, 1), (4, 4), (5, 8)])
+@pytest.mark.parametrize("pred", [False, True])
+@pytest.mark.parametrize("cga_layout", [
+    pytest.param([], id="single"),
+    pytest.param([[0, 0]], id="multicast"),
+    pytest.param([[1, 0]], id="split-pixels"),
+    pytest.param([[0, 1]], id="split-channels"),
+])
+def test_tma_im2col_gsan_load(with_gsan, with_allocator, rank, num_warps, pred, cga_layout):
+    num_ctas = 2**len(cga_layout)
+    skip_if_unsupported_cluster_size(num_ctas)
+    # A pixel split shifts the second CTA's starting W coordinate by eight.
+    # Keep that start inside the box while allowing traversal to wrap.
+    width = 19 if cga_layout == [[1, 0]] else 3
+    storage_shape = [5] + [3] * (rank - 3) + [width, 56]
+    layout = gl.NVMMASharedLayout(128, 32, rank=2, cga_layout=cga_layout)
+    # Rank 3 exercises the high bit of the unsigned 16-bit filter offset.
+    # Distinct corners at higher ranks check the order of the spatial fields.
+    lower = [-32768] if rank == 3 else list(range(2 - rank, 0))
+    upper = lower if rank == 3 else [c + 1 for c in lower]
+    coords = (0, ) + tuple(c + 1 for c in lower) + (4, )
+    offsets = tuple(-c for c in lower)
+    storage = torch.arange(1, math.prod(storage_shape) + 1, dtype=torch.int32, device="cuda").reshape(storage_shape)
+    source = storage[..., :52]  # Leave a gap between adjacent pixels.
+    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col.from_tensor(source, [16, 64], layout,
+                                                                  element_strides=[2] * (rank - 1) + [1],
+                                                                  pixel_box_lower_corner=lower,
+                                                                  pixel_box_upper_corner=upper)
+    output = storage.new_zeros(desc.block_shape)
+    compiled = tma_im2col_gsan_kernel[(1, )](desc, output, pred, coords, offsets, cga_layout == [[0, 0]],
+                                             num_ctas=num_ctas, num_warps=num_warps)
+    assert "__triton_gsan_load_im2col_tensor_desc" in compiled.asm["llir"]
+    rows_per_cta = desc.block_shape[0] // (num_ctas if cga_layout == [[1, 0]] else 1)
+    expected = _im2col_reference(desc, coords, offsets, pred, rows_per_cta)
+    torch.testing.assert_close(output.cpu(), expected)
+    first_pixel = (0, ) + (1, ) * (rank - 2)
+    assert bool(shadow_cell_from_address(source[first_pixel + (4, )].data_ptr()).num_reads) == pred
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell FP4 TMA")
+@pytest.mark.parametrize("shadow_granularity", [1], indirect=True)
+def test_tma_im2col_gsan_fp4_padded_load(with_gsan, with_allocator):
+    # The first message reads the final 64 packed bytes. The second is out of bounds.
+    storage = torch.arange(1, 129, dtype=torch.uint8, device="cuda").reshape(1, 1, 128)
+    layout = gl.NVMMASharedLayout(128, 8, rank=2, fp4_padded=True)
+    desc = gluon.nvidia.hopper.TensorDescriptorIm2Col.from_tensor(storage, [8, 128], layout, pixel_box_lower_corner=[0],
+                                                                  pixel_box_upper_corner=[0])
+    output = storage.new_zeros(desc.block_shape)
+    coords = (0, 0, 64)
+    offsets = (0, )
+    tma_im2col_gsan_kernel[(1, )](desc, output, True, coords, offsets, False)
+    expected = _im2col_reference(desc, coords, offsets, pred=True, rows_per_cta=desc.block_shape[0])
+    torch.testing.assert_close(output.cpu(), expected)
+    assert shadow_cell_from_address(storage.data_ptr() + 63).num_reads == 0
+    assert shadow_cell_from_address(storage.data_ptr() + 64).num_reads != 0
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")

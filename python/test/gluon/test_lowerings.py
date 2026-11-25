@@ -159,7 +159,10 @@ def _scan_layouts():
         # Each lane receives a full sequence of totals in registers. CTA ranks differ from scan order.
         cta_registers = linear([[2, 0], [8, 0], [16, 0], [32, 0]], [[0, 1 << i] for i in range(5)], [[0, 0], [0, 0]],
                                [[4, 0], [1, 0]], [64, 32])
+        # A fixed register receives carries from segments selected by both warp and CTA.
+        cta_warp = linear([[2, 0], [8, 0]], [[0, 1 << i] for i in range(5)], [[4, 0], [0, 0]], [[1, 0]], [16, 32])
         cases += [
+            pytest.param(cta_warp, *cta_warp.shape, 0, torch.int32, id="cta_warp_carries"),
             pytest.param(cta_major, *cta_major.shape, 0, torch.int8, id="cta_major"),
             pytest.param(cta_minor, *cta_minor.shape, 0, torch.int32, id="cta_minor"),
             pytest.param(cta_replicated, *cta_replicated.shape, 1, torch.bool, id="cta_replicated"),
@@ -270,6 +273,28 @@ def test_scan_distributed_layouts(layout, M, N, axis, dtype, reverse, device):
     kernel[(1, )](a, b, out_a, out_b, M, N, layout, axis, reverse, num_warps=4, num_ctas=num_ctas)
     torch.testing.assert_close(out_a.cpu(), expected_a, rtol=0, atol=0)
     torch.testing.assert_close(out_b.cpu(), expected_b, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="requires CTA clusters")
+def test_grouped_scan_replicated_cta_scratch(device):
+    skip_if_unsupported_cluster_size(2)
+
+    @gluon.jit
+    def kernel(X, Y, M: ttgl.constexpr, N: ttgl.constexpr):
+        src: ttgl.constexpr = ttgl.BlockedLayout([2, 1], [1, 32], [4, 1], [1, 0], [[0, 0]])
+        dst: ttgl.constexpr = ttgl.BlockedLayout([2, 1], [1, 32], [4, 1], [1, 0], [[0, 1]])
+        rows = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, src))
+        cols = ttgl.arange(0, N, layout=ttgl.SliceLayout(0, src))
+        offsets = rows[:, None] * N + cols[None, :]
+        values = ttgl.load(X + offsets)
+        result = ttgl.associative_scan(values, 0, _combine)
+        # Each CTA stores different columns, so both must have populated their scratch.
+        ttgl.store(Y + ttgl.convert_layout(offsets, dst), ttgl.convert_layout(result, dst))
+
+    x = torch.randint(1, 10, (512, 64), dtype=torch.int32, device=device)
+    y = torch.empty_like(x)
+    kernel[(1, )](x, y, *x.shape, num_warps=4, num_ctas=2)
+    torch.testing.assert_close(y, torch.cumsum(x, dim=0, dtype=x.dtype), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("op", ["cumsum", "cumprod"])

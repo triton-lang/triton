@@ -16,6 +16,17 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 invertAndComposeLocal(const LinearLayout &A, const LinearLayout &B,
                       ArrayRef<StringAttr> localDims);
 
+// Return the shared-memory address map for a gather or scatter.
+// Let h = (register, lane, warp, issuing CTA). regLayout(h) gives the
+// coordinates of the gather result or scatter input. The returned layout
+// takes h and a runtime index j along axis and returns (offset, target CTA).
+// For example, if regLayout(h) = (r, c) and axis = "dim1", then
+// sharedLayout(offset, target CTA) = (r, j).
+// The offset and CTA are relative to the shared descriptor's origin.
+[[nodiscard]] LinearLayout
+getGatherScatterLayout(const LinearLayout &sharedLayout,
+                       const LinearLayout &regLayout, StringAttr axis);
+
 // Map registers to shared addresses for a store. Extra high register bits
 // repeat the source values across the remaining CTA replicas.
 [[nodiscard]] LinearLayout

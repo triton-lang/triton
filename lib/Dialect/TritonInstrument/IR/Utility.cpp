@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonInstrument/IR/FunctionBuilder.h"
 #include "triton/Dialect/TritonInstrument/Transforms/ConSanTargetHooks.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TMAUtils.h"
 #include "triton/Tools/LayoutUtils.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -84,7 +85,7 @@ ValueType createBufferDescriptorsTensor(ImplicitLocOpBuilder &builder,
 
 ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
                                 ArrayRef<int64_t> shape, int bitWidth,
-                                int64_t initialValue,
+                                ArrayRef<int64_t> initialValues,
                                 FunctionBuilder &funcBuilder) {
   auto type =
       getIntTensorType(b.getInsertionBlock()->getParent(), shape, bitWidth);
@@ -98,7 +99,6 @@ ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
   auto alloc = createThirdPartyScratchAlloc(b, b.getLoc(), ptrType, sizeInBytes,
                                             /*alignment=*/16,
                                             /*sharedClusterState=*/true);
-  Value cstInit = arith::ConstantIntOp::create(b, initialValue, bitWidth);
   Value ctaId = ExperimentalClusterCTAIdOp::create(b, b.getLoc());
   Value zero = arith::ConstantIntOp::create(b, 0, 32);
   Value isCTA0 =
@@ -113,7 +113,19 @@ ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
   cf::CondBranchOp::create(b, isCTA0, ifBlock, ValueRange{}, thenBlock,
                            ValueRange{});
   b.setInsertionPointToStart(ifBlock);
-  funcBuilder.createFillGlobalTensorCall(b, alloc, type, cstInit);
+  // The last dimension is the slowest-varying in scratch memory.
+  int64_t count = numEls / initialValues.size();
+  auto typePerValue =
+      getIntTensorType(b.getInsertionBlock()->getParent(), {count}, bitWidth);
+  for (auto [idx, initial] : llvm::enumerate(initialValues)) {
+    Value ptr = alloc;
+    if (idx) {
+      Value offset = arith::ConstantIntOp::create(b, idx * count, 32);
+      ptr = triton::AddPtrOp::create(b, ptrType, alloc, offset);
+    }
+    Value val = arith::ConstantIntOp::create(b, initial, bitWidth);
+    funcBuilder.createFillGlobalTensorCall(b, ptr, typePerValue, val);
+  }
   b.setInsertionPointToStart(thenBlock);
   return {alloc, type};
 }
@@ -121,7 +133,7 @@ ValueType createInitStateTensor(ImplicitLocOpBuilder &b,
 ValueType createZeroInitStateTensor(ImplicitLocOpBuilder &b,
                                     ArrayRef<int64_t> shape, int bitWidth,
                                     FunctionBuilder &funcBuilder) {
-  return createInitStateTensor(b, shape, bitWidth, 0, funcBuilder);
+  return createInitStateTensor(b, shape, bitWidth, {0}, funcBuilder);
 }
 
 bool hasCpAsync(ModuleOp module) {
@@ -523,6 +535,10 @@ Region *AuxDataMap::RegionToValueMap::getEnclosingParitionOrFunctionRegion(
   return nullptr;
 }
 
+bool tracksLoadSeparately(Operation *op) {
+  return isa<AsyncLoadOpInterface>(op) && lookupNumCTAs(op) > 1;
+}
+
 LogicalResult
 AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                             FunctionBuilder &fb,
@@ -535,7 +551,9 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   if (failed(layout))
     return failure();
   threadLayout = *layout;
+  bool hasClusterLoads = false;
   entryPoint.walk([&](Operation *op) {
+    hasClusterLoads |= tracksLoadSeparately(op);
     std::optional<MemEffectsOpInfo> info = hooks.getMemEffectsOpInfo(op);
     if (info && llvm::any_of(info->barriers, [](const auto &barrier) {
           return barrier.trackingMode ==
@@ -581,9 +599,15 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
 
     int numBufs = llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
 
+    SmallVector<int64_t> shape{numCTAs, numBufs, numCTAs};
+    SmallVector<int64_t> initial{0};
+    if (hasClusterLoads && memType == MemType::SHARED_MEM) {
+      shape.push_back(2);
+      initial.push_back(-1); // No outstanding load before the first issue.
+    }
     writeVisibility[iMemType].insert(
-        entryRegion, createZeroInitStateTensor(b, {numCTAs, numBufs, numCTAs},
-                                               frontierBitWidth, fb));
+        entryRegion,
+        createInitStateTensor(b, shape, frontierBitWidth, initial, fb));
     passValueToWarpSpecialize(writeVisibility[iMemType].at(entryRegion),
                               writeVisibility[iMemType]);
     readVisibility[iMemType].insert(
@@ -631,7 +655,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     passValueToWarpSpecialize(waiting.at(entryRegion), waiting);
 
     activeMasks.insert(entryRegion,
-                       createInitStateTensor(b, {numCTAs}, 32, 1, fb));
+                       createInitStateTensor(b, {numCTAs}, 32, {1}, fb));
     passValueToWarpSpecialize(activeMasks.at(entryRegion), activeMasks);
     for (MemType memType : {MemType::SHARED_MEM, MemType::TENSOR_MEM}) {
       int iMemType = (int)memType;
@@ -641,10 +665,11 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
               ? 0
               : llvm::NextPowerOf2(bufferStatePlans[iMemType].numLanes - 1);
       if (numMBarriers > 0 && numBufs > 0) {
+        SmallVector<int64_t> shape{numCTAs, numBufs, numCTAs, numBarriers, 2};
+        if (hasClusterLoads && memType == MemType::SHARED_MEM)
+          shape.push_back(2);
         writeTracking[iMemType].insert(
-            entryRegion,
-            createZeroInitStateTensor(
-                b, {numCTAs, numBufs, numCTAs, numBarriers, 2}, 8, fb));
+            entryRegion, createZeroInitStateTensor(b, shape, 8, fb));
         passValueToWarpSpecialize(writeTracking[iMemType].at(entryRegion),
                                   writeTracking[iMemType]);
         readTracking[iMemType].insert(
@@ -743,102 +768,94 @@ void AuxDataMap::createStartupClusterBarrier(const ConSanTargetHooks &hooks) {
          "target must provide a cluster initialization barrier");
 }
 
+static SharedMemoryAccess getTMAAccess(TMALoadLikeOpInterface load) {
+  auto type = cast<MemDescType>(load.getResult().getType());
+  auto mode = isa<TensorDescIm2ColType>(load.getDesc().getType())
+                  ? TMAMode::Im2Col
+                  : TMAMode::Tiled;
+  auto shape = getTMABlockShape(type, /*packedSize=*/true, mode);
+  LinearLayout messages;
+  if (auto gather = dyn_cast<AsyncTMAGatherOp>(load.getOperation())) {
+    messages = getTMAGatherScatterLayouts(gather.getXOffsets().getType(), type)
+                   .messageToShared;
+    shape[0] = 1; // messageToShared already enumerates every gathered row.
+  } else {
+    messages = getTMAMessageLayouts(type, mode).messageToShared;
+  }
+
+  // Add the elements within each message to its starting shared address.
+  auto shared = toLinearLayoutIgnoringPadding(type);
+  auto elements = shared.pseudoinvert();
+  auto *ctx = type.getContext();
+  for (auto [dim, extent] : standardOutDimPairs(ctx, shape))
+    elements = elements.resizeInDim(dim, extent);
+  auto block = StringAttr::get(ctx, "block");
+  uint32_t mask =
+      load.getMulticast() ? shared.getFreeVariableMasks().lookup(block) : 0;
+  return {load.getResult(), messages.concatIns(elements), mask};
+}
+
+std::optional<SharedMemoryAccess> getSharedMemoryAccess(Operation *op) {
+  if (lookupNumCTAs(op) == 1)
+    return std::nullopt;
+  if (auto load = dyn_cast<TMALoadLikeOpInterface>(op))
+    return getTMAAccess(load);
+  Value buffer, tensor;
+  if (auto load = dyn_cast<LocalLoadOp>(op)) {
+    buffer = load.getSrc();
+    tensor = load.getResult();
+  } else if (auto store = dyn_cast<LocalStoreOp>(op)) {
+    buffer = store.getDst();
+    tensor = store.getSrc();
+  } else if (auto store = dyn_cast<AsyncSharedStoreOp>(op)) {
+    buffer = store.getDst();
+    tensor = store.getSrc();
+  } else if (auto alloc = dyn_cast<LocalAllocOp>(op)) {
+    buffer = alloc.getResult();
+    tensor = alloc.getSrc();
+  }
+  if (!tensor || !cast<RankedTensorType>(tensor.getType()).getEncoding())
+    return std::nullopt;
+  auto elements = toLinearLayout(cast<RankedTensorType>(tensor.getType()));
+  auto shared =
+      toLinearLayoutIgnoringPadding(cast<MemDescType>(buffer.getType()));
+  auto block = StringAttr::get(op->getContext(), "block");
+  auto conversion = isa<LocalStoreOp, LocalAllocOp>(op)
+                        ? invertAndComposeStore(shared, elements)
+                        : invertAndComposeLocal(shared, elements, {block});
+  return SharedMemoryAccess{buffer, std::move(conversion), 0};
+}
+
 namespace {
 
 SmallVector<BufferAccessRegion>
-getTMAAccessRegions(TMALoadLikeOpInterface load,
-                    BufferRegionAnalysis &analysis) {
-  Operation *op = load.getOperation();
-  auto type = cast<MemDescType>(load.getResult().getType());
-  auto gather = dyn_cast<AsyncTMAGatherOp>(op);
-  // Tiled and im2col copies of a full allocation cover the whole local
-  // footprint. Gather can assign those addresses to different issuers.
-  if (!gather && type.getShape() == type.getAllocShape())
+getSharedAccessRegions(const SharedMemoryAccess &access,
+                       BufferRegionAnalysis &analysis) {
+  auto block = StringAttr::get(access.buffer.getContext(), "block");
+  if (access.conversion.isTrivialOver({block}))
     return {};
-  auto *ctx = op->getContext();
-  auto block = StringAttr::get(ctx, "block");
-  auto dims = standardOutDimNames(ctx, type.getRank());
-  auto shapePerCTA = getShapePerCTA(type);
-  // origins: block -> (rowOrigin, columnOrigin)
-  auto origins = LinearLayout(LinearLayout::BasesT{},
-                              standardOutDimPairs(ctx, shapePerCTA),
-                              /*requireSurjective=*/false) *
-                 getCGALayout(type.getEncoding()).getLinearLayout();
-  auto accessType = type.cloneWith(shapePerCTA, type.getElementType());
-  // Express each issuer's gather rows as a contiguous logical range so
-  // getSubView can compute its footprint.
-  if (gather) {
-    // We have xOffsets and the shared layout
-    // rows: (register, lane, warp, issuerCTA) -> destination row
-    // shared: (shared offset, targetCTA)       -> (destination row, column)
-    //
-    auto rows = toLinearLayout(gather.getXOffsets().getType());
-    // Get the block from offset along X and the block from shared along Y
-    origins = rows.sublayout({block}, {dims[0]})
-                  .concatOuts(origins.sublayout({block}, {dims[1]}));
-    int64_t localRows = rows.getTotalOutDimSize() /
-                        rows.removeZeroBasesAlongDim(block).getInDimSize(block);
-    // {registers=[1, 2, 8, 0, 0], lanes= [0, 0, 0, 0, 0], warps=[0], block=[4]}
-    // transform into a permutation on dim0 that keeps block's bases at the end
-    // {dim0=[1, 2, 8, 4]}
-    rows = rows.reshapeIns({{dims[0], rows.getTotalInDimSize()}})
-               .removeZeroBasesAlongDim(dims[0]);
-    auto allocShape =
-        dropPipeliningDim(type.getAllocShape(), type.getEncoding());
-    // Pad the permutation to the full alloc shape
-    rows =
-        ensureLayoutNotSmallerThan(rows, {dims[0]}, {allocShape[0]}, dims[0]);
-    // Extend to two dimensions, leaving columns unchanged.
-    auto coordinates =
-        rows * LinearLayout::identity1D(allocShape[1], dims[1], dims[1]);
-    // Express shared memory in coordinates where each issuer's rows are
-    // contiguous
-    auto layout = toLinearLayout(type).invertAndCompose(coordinates);
-    auto encoding = SharedLinearEncodingAttr::get(
-        ctx, std::move(layout),
-        cast<SharedEncodingTrait>(type.getEncoding()).getAlignment());
-    accessType = MemDescType::get(
-        {localRows, shapePerCTA[1]}, type.getElementType(), encoding,
-        type.getMemorySpace(), type.getMutableMemory(), allocShape);
-  }
-
-  unsigned numCTAs = lookupNumCTAs(op);
-  uint32_t broadcastMask =
-      toLinearLayout(type).getFreeVariableMasks().lookup(block);
-  // For each issuer, a valid TMA view's base and CTA determine its footprint.
+  auto type = cast<MemDescType>(access.buffer.getType());
   std::set<BufferAccessRegion> regions;
-  for (unsigned issuer = 0; issuer < numCTAs; ++issuer) {
-    if (load.getMulticast() && (issuer & broadcastMask))
+  for (unsigned issuer = 0; issuer < access.conversion.getInDimSize(block);
+       ++issuer) {
+    if (issuer & access.multicastMask)
       continue;
-    auto coordinates = origins.apply({{block, issuer}});
-    auto origin =
-        llvm::to_vector_of<int64_t>(llvm::make_second_range(coordinates));
-    auto offsets = getMemDescSubsliceUnpaddedOffsets(type, origin);
     for (const BufferRegionView &view :
-         analysis.getRegionInfo(load.getResult()).views) {
-      auto subview = analysis.getSubView(
-          accessType, view, offsets.storageOffset, offsets.byteOffset,
-          offsets.partitionOffset, offsets.ctaOffset);
-      for (const auto &[target, addresses] : subview.region.ctaAddresses) {
-        // Subviews include every replica; unicast selects the issuer's replica.
-        if (!load.getMulticast() &&
-            ((target ^ view.affineCTAOffset ^ issuer) & broadcastMask))
-          continue;
+         analysis.getRegionInfo(access.buffer).views)
+      for (auto &addresses : view.getAccessAddresses(
+               type, access.conversion, issuer, access.multicastMask))
         regions.insert({1u << view.affineCTAOffset,
                         issuer,
                         {view.region.baseOffset,
                          view.region.length,
-                         {{target, addresses}}}});
-      }
-    }
+                         {std::move(addresses)}}});
   }
   return llvm::to_vector(regions);
 }
 
 } // namespace
 
-std::pair<unsigned, const llvm::SmallBitVector &>
-AuxDataMap::getBufferAccessState(
+std::pair<unsigned, llvm::SmallBitVector> AuxDataMap::getBufferAccessState(
     const BufferAccessRegion &access,
     const BufferStateCandidates &candidates) const {
   auto candidate = llvm::find_if(candidates.cases, [&](const auto &entry) {
@@ -846,13 +863,13 @@ AuxDataMap::getBufferAccessState(
            entry.ctaMask == access.candidateCTAs;
   });
   assert(candidate != candidates.cases.end());
-  int index = static_cast<int>(MemType::SHARED_MEM);
-  const auto &regions = bufferRegions[index];
-  auto region = llvm::lower_bound(regions, access.region);
-  assert(region != regions.end() && *region == access.region);
-  return {std::distance(candidates.cases.begin(), candidate),
-          bufferStatePlans[index]
-              .regionMasks[std::distance(regions.begin(), region)]};
+  const auto &plan = bufferStatePlans[static_cast<int>(MemType::SHARED_MEM)];
+  const auto &addresses = access.region.ctaAddresses.front().second;
+  llvm::SmallBitVector mask(plan.numLanes);
+  for (unsigned lane : candidate->mask.set_bits())
+    if (plan.laneAddresses[lane].intersects(addresses))
+      mask.set(lane);
+  return {std::distance(candidates.cases.begin(), candidate), std::move(mask)};
 }
 
 LogicalResult
@@ -897,11 +914,11 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
     for (const MemoryAccess &access : getMemoryAccesses(op))
       collectCandidates(access.value);
 
-    if (numCTAs > 1) {
-      if (auto load = dyn_cast<TMALoadLikeOpInterface>(op)) {
-        auto accesses = getTMAAccessRegions(load, *analysis);
-        if (!accesses.empty())
-          bufferAccessRegions[{op, load.getResult()}] = std::move(accesses);
+    if (numCTAs > 1 && !isa<AsyncSharedStoreOp>(op)) {
+      if (auto access = getSharedMemoryAccess(op)) {
+        auto regions = getSharedAccessRegions(*access, *analysis);
+        if (!regions.empty())
+          bufferAccessRegions[{op, access->buffer}] = std::move(regions);
       }
     }
 
@@ -930,9 +947,14 @@ AuxDataMap::getBuffersAndBarriers(ModuleOp module, FuncOp entryPoint,
         analysis->getAllUsedBufferRegions(regionType);
     if (memType == MemType::SHARED_MEM) {
       llvm::append_range(regions, staticSharedRegions);
-      for (const auto &[key, accesses] : bufferAccessRegions)
+      // TMA messages define independently completed regions. Register tiles
+      // select lanes from this partition without subdividing them further.
+      for (const auto &[key, accesses] : bufferAccessRegions) {
+        if (!isa<TMALoadLikeOpInterface>(key.first))
+          continue;
         for (const auto &access : accesses)
           regions.push_back(access.region);
+      }
     }
     llvm::sort(regions);
     regions.erase(std::unique(regions.begin(), regions.end()), regions.end());
