@@ -319,7 +319,8 @@ private:
                         arith::MaxUIOp>(combinerOp) &&
         combinerOp->getResult(0).getType().isInteger(1) &&
         llvm::hasSingleElement(combineRegion.front().without_terminator());
-    bool sequential = op.getInThreadReduction() == InThreadReduction::SEQUENTIAL;
+    bool sequential =
+        op.getInThreadReduction() == InThreadReduction::SEQUENTIAL;
     bool usePredicateChains = !sequential && isPureBooleanCombiner &&
                               targetInfo.preferThreePredicateChains();
     // Keep the narrow-origin operand on the left for mixed-precision op
