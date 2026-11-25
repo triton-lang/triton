@@ -44,6 +44,8 @@ def ConvertTritonGPUToLLVM : Pass<"convert-triton-gpu-to-llvm", "mlir::ModuleOp"
         Option<"ptxVersion", "ptx-version",
                "int32_t", /*default*/"80",
                "PTX version">,
+        Option<"conSan", "consan", "bool", /*default*/"false",
+               "Use normal region simplification for ConSan-instrumented IR">,
     ];
 }
 
