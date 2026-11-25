@@ -3023,9 +3023,6 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     :param {in_thread_reduction_arg}: how to combine register-resident values for each
         independent result: ``"tree"`` (default) preserves the target's existing
         tree-based lowering; ``"sequential"`` uses one accumulator chain.
-        This does not change inter-thread reduction or specify a global element
-        order. Layout, vectorization, and subsequent compiler optimizations may
-        affect the final instruction order and floating-point results.
     :type {in_thread_reduction_arg}: str"""
         if return_indices_arg is not None:
             docstr += f"""
@@ -3072,9 +3069,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, in_thread_reduction="tree",
     :param in_thread_reduction: how to combine register-resident values for each
         independent result: ``"tree"`` (default) preserves the target's existing
         tree-based lowering; ``"sequential"`` uses one accumulator chain.
-        This does not change inter-thread reduction or specify a global element
-        order. Layout, vectorization, and subsequent compiler optimizations may
-        affect the final instruction order and floating-point results.
     :type in_thread_reduction: str
 
     """

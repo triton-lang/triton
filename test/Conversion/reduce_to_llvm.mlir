@@ -1068,7 +1068,7 @@ tt.func private @reduce_broadcast_halves_minui_small(%arg0: tensor<8x4xi32, #hal
 // INTHREAD: llvm.return
 tt.func private @reduce_f16_to_f32(%arg0: tensor<1x16xf16, #blocked_mixed_reduce>) -> tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_mixed_reduce}>> {
   %wide = arith.extf %arg0 : tensor<1x16xf16, #blocked_mixed_reduce> to tensor<1x16xf32, #blocked_mixed_reduce>
-  %sum = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "sequential"}> ({
+  %sum = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = 1 : i32}> ({
   ^bb0(%lhs: f32, %rhs: f32):
     %add = arith.addf %lhs, %rhs : f32
     tt.reduce.return %add : f32
@@ -1107,7 +1107,7 @@ tt.func private @reduce_f16_to_f32(%arg0: tensor<1x16xf16, #blocked_mixed_reduce
 tt.func private @reduce_f16_to_f32_independent_lanes(
     %arg0: tensor<8x64xf16, #blocked_independent_mixed_reduce>) -> tensor<64xf32, #ttg.slice<{dim = 0, parent = #blocked_independent_mixed_reduce}>> {
   %wide = arith.extf %arg0 : tensor<8x64xf16, #blocked_independent_mixed_reduce> to tensor<8x64xf32, #blocked_independent_mixed_reduce>
-  %sum = "tt.reduce"(%wide) <{axis = 0 : i32, in_thread_reduction = "sequential"}> ({
+  %sum = "tt.reduce"(%wide) <{axis = 0 : i32, in_thread_reduction = 1 : i32}> ({
   ^bb0(%lhs: f32, %rhs: f32):
     %add = arith.addf %lhs, %rhs : f32
     tt.reduce.return %add : f32
@@ -1185,7 +1185,7 @@ tt.func private @reduce_f16_to_f32_default(%arg0: tensor<1x16xf16, #blocked_mixe
 // INTHREAD: llvm.insertvalue %[[FIRST]],
 // INTHREAD: llvm.insertvalue %[[A3]],
 tt.func private @sequential_tuple_noncommutative(%first: tensor<1x4xf32, #blocked_seq_tuple>, %values: tensor<1x4xf32, #blocked_seq_tuple>) -> (tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_seq_tuple}>>, tensor<1xf32, #ttg.slice<{dim = 1, parent = #blocked_seq_tuple}>>) {
-  %r:2 = "tt.reduce"(%first, %values) <{axis = 1 : i32, in_thread_reduction = "sequential"}> ({
+  %r:2 = "tt.reduce"(%first, %values) <{axis = 1 : i32, in_thread_reduction = 1 : i32}> ({
   ^bb0(%a: f32, %b: f32, %c: f32, %d: f32):
     %sum = arith.addf %b, %d : f32
     tt.reduce.return %a, %sum : f32, f32

@@ -129,6 +129,16 @@ def TT_PropagateNanAttr : I32EnumAttr<
     let cppNamespace = "::mlir::triton";
 }
 
+// Register-local reduction scheduling.
+def TT_InThreadReductionAttr : I32EnumAttr<
+    "InThreadReduction", "in-thread reduction strategy",
+    [
+      I32EnumAttrCase<"TREE", 0, "tree">,
+      I32EnumAttrCase<"SEQUENTIAL", 1, "sequential">
+    ]> {
+  let cppNamespace = "::mlir::triton";
+}
+
 // InputPrecision
 def TT_InputPrecisionAttr : I32EnumAttr<
     "InputPrecision", "",

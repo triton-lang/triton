@@ -936,7 +936,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
   // SM107: ret;
   tt.func public @reduce_f16_to_f32_tree(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xf16, #blocked_mixed_reduce>) {
     %wide = arith.extf %arg0 : tensor<1x2048xf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
-    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "tree"}> ({
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = 0 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
       %sum = arith.addf %lhs, %rhs : f32
       tt.reduce.return %sum : f32
@@ -952,7 +952,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
   // SM107: ret;
   tt.func public @reduce_f16_to_f32_sequential(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xf16, #blocked_mixed_reduce>) {
     %wide = arith.extf %arg0 : tensor<1x2048xf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
-    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "sequential"}> ({
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = 1 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
       %sum = arith.addf %lhs, %rhs : f32
       tt.reduce.return %sum : f32
@@ -984,7 +984,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
   // SM107: ret;
   tt.func public @reduce_bf16_to_f32_tree(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xbf16, #blocked_mixed_reduce>) {
     %wide = arith.extf %arg0 : tensor<1x2048xbf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
-    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "tree"}> ({
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = 0 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
       %sum = arith.addf %lhs, %rhs : f32
       tt.reduce.return %sum : f32
@@ -1000,7 +1000,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
   // SM107: ret;
   tt.func public @reduce_bf16_to_f32_sequential(%out: !tt.ptr<f32>, %arg0: tensor<1x2048xbf16, #blocked_mixed_reduce>) {
     %wide = arith.extf %arg0 : tensor<1x2048xbf16, #blocked_mixed_reduce> to tensor<1x2048xf32, #blocked_mixed_reduce>
-    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = "sequential"}> ({
+    %r = "tt.reduce"(%wide) <{axis = 1 : i32, in_thread_reduction = 1 : i32}> ({
     ^bb0(%lhs: f32, %rhs: f32):
       %sum = arith.addf %lhs, %rhs : f32
       tt.reduce.return %sum : f32

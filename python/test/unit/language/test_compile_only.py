@@ -730,4 +730,4 @@ def test_reduction_in_thread_policy_compile_only(frontend, policy, arch):
     if policy == "tree":
         assert "in_thread_reduction" not in compiled.asm["ttgir"]
     else:
-        assert 'in_thread_reduction = "sequential"' in compiled.asm["ttgir"]
+        assert "in_thread_reduction = 1 : i32" in compiled.asm["ttgir"]
