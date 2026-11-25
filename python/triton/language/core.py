@@ -1292,45 +1292,31 @@ class tensor(base_value):
     def ravel(self) -> tensor:
         ...
 
-    def all(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
+    def all(self, axis=None, keep_dims=False) -> tensor:
         ...
 
-    def any(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
+    def any(self, axis=None, keep_dims=False) -> tensor:
         ...
 
-    def max(
-        self,
-        axis=None,
-        return_indices=False,
-        return_indices_tie_break_left=True,
-        keep_dims=False,
-        in_thread_reduction="tree",
-    ) -> tensor:
+    def max(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
-    def argmax(self, axis, tie_break_left=True, keep_dims=False, in_thread_reduction="tree") -> tensor:
+    def argmax(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
-    def min(
-        self,
-        axis=None,
-        return_indices=False,
-        return_indices_tie_break_left=True,
-        keep_dims=False,
-        in_thread_reduction="tree",
-    ) -> tensor:
+    def min(self, axis=None, return_indices=False, return_indices_tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
-    def argmin(self, axis, tie_break_left=True, keep_dims=False, in_thread_reduction="tree") -> tensor:
+    def argmin(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
     def sum(self, axis=None, keep_dims=False, dtype=None, in_thread_reduction="tree") -> tensor:
         ...
 
-    def xor_sum(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
+    def xor_sum(self, axis=None, keep_dims=False) -> tensor:
         ...
 
-    def reduce_or(self, axis=None, keep_dims=False, in_thread_reduction="tree") -> tensor:
+    def reduce_or(self, axis=None, keep_dims=False) -> tensor:
         ...
 
     def cumsum(self, axis=0, reverse=False, dtype=None) -> tensor:
@@ -3018,7 +3004,7 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _semantic=N
 
 
 def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None,
-                          dtype_arg: str = None) -> Callable[[T], T]:
+                          dtype_arg: str = None, in_thread_reduction_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -3031,14 +3017,16 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
     :param axis: the dimension along which the reduction should be done. If None, reduce all dimensions
     :type axis: int
     :param keep_dims: if true, keep the reduced dimensions with length 1
-    :type keep_dims: bool
-    :param in_thread_reduction: how to combine register-resident values for each
+    :type keep_dims: bool"""
+        if in_thread_reduction_arg is not None:
+            docstr += f"""
+    :param {in_thread_reduction_arg}: how to combine register-resident values for each
         independent result: ``"tree"`` (default) preserves the target's existing
         tree-based lowering; ``"sequential"`` uses one accumulator chain.
         This does not change inter-thread reduction or specify a global element
         order. Layout, vectorization, and subsequent compiler optimizations may
         affect the final instruction order and floating-point results.
-    :type in_thread_reduction: str"""
+    :type {in_thread_reduction_arg}: str"""
         if return_indices_arg is not None:
             docstr += f"""
     :param {return_indices_arg}: if true, return index corresponding to the {name} value

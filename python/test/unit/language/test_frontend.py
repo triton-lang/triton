@@ -2350,12 +2350,9 @@ def test_cache_policy_ir_attrs():
 
 @pytest.mark.parametrize("frontend", ["triton", "gluon"])
 @pytest.mark.parametrize("policy", ["tree", "sequential", "invalid"])
-@pytest.mark.parametrize("op",
-                         ["reduce", "sum", "max", "min", "argmax", "argmin", "all", "any", "xor_sum", "reduce_or"])
+@pytest.mark.parametrize("op", ["reduce", "sum"])
 @pytest.mark.parametrize("axis,keep_dims", [(1, True), (None, False)])
 def test_reduction_in_thread_policy(frontend, policy, op, axis, keep_dims):
-    if frontend == "gluon" and op in ("argmax", "argmin"):
-        pytest.skip("Gluon does not expose argmax/argmin")
     jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
     reduction = getattr(lang, op)
 
