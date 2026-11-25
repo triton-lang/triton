@@ -136,7 +136,7 @@ class CUDAOptions:
     # Disable LLVM loop strength reduction for this kernel's code generation.
     disable_lsr: bool = False
     enable_reflect_ftz: bool = True  # ftz in libdevice
-    enable_reflect_prec_sqrt: bool = False  # Correctly rounded sqrt in libdevice
+    enable_precise_libdevice: bool = False
     launch_cooperative_grid: bool = False
     launch_pdl: bool = False
     clc: bool = False
@@ -154,6 +154,8 @@ class CUDAOptions:
     fpsan_homomorphic_casts: bool = False
 
     def __post_init__(self):
+        if self.enable_precise_libdevice:
+            object.__setattr__(self, "enable_reflect_ftz", False)
         if self.max_occupancy is not None and (type(self.max_occupancy) is not int or self.max_occupancy <= 0):
             raise ValueError("max_occupancy must be a positive integer or None")
         default_libdir = Path(__file__).parent / 'lib'
@@ -556,7 +558,7 @@ class CUDABackend(BaseBackend):
         enable_fpsan = is_enabled(opt, "fpsan")
         ret = llvm.translate_to_asm(src, triple, proc, features, flags, opt.enable_fp_fusion, False, enable_fpsan,
                                     sched4reg=opt.sched4reg, enable_fpsan=enable_fpsan, disable_lsr=opt.disable_lsr,
-                                    abi="shortptr", enable_reflect_prec_sqrt=opt.enable_reflect_prec_sqrt)
+                                    abi="shortptr", enable_reflect_prec_sqrt=opt.enable_precise_libdevice)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
         assert len(names) == 1

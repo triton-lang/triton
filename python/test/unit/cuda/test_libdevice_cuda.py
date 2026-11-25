@@ -44,7 +44,7 @@ def test_libdevice_sqrt_precision_reflection(enable_fp_fusion, fresh_knobs, fres
     for tag, precise in enumerate([None, False, True, None, False]):
         options = {"enable_fp_fusion": enable_fp_fusion, "enable_reflect_ftz": False}
         if precise is not None:
-            options["enable_reflect_prec_sqrt"] = precise
+            options["enable_precise_libdevice"] = precise
         compiled = kernel[(1,)](x, out, x.numel(), tag, **options)
         assert compiled.metadata.enable_fp_fusion == enable_fp_fusion
         if tag == 0:
@@ -60,17 +60,17 @@ def test_libdevice_sqrt_precision_reflection(enable_fp_fusion, fresh_knobs, fres
             assert "sqrt.rn.f32" not in ptx
 
     from triton.backends.nvidia.compiler import CUDAOptions
-    assert CUDAOptions().hash() == CUDAOptions(enable_reflect_prec_sqrt=False).hash()
-    assert CUDAOptions().hash() != CUDAOptions(enable_reflect_prec_sqrt=True).hash()
-    assert not metadata[None].enable_reflect_prec_sqrt
-    assert not metadata[False].enable_reflect_prec_sqrt
-    assert metadata[True].enable_reflect_prec_sqrt
+    assert CUDAOptions().hash() == CUDAOptions(enable_precise_libdevice=False).hash()
+    assert CUDAOptions().hash() != CUDAOptions(enable_precise_libdevice=True).hash()
+    assert not metadata[None].enable_precise_libdevice
+    assert not metadata[False].enable_precise_libdevice
+    assert metadata[True].enable_precise_libdevice
 
     # The same source and specialization must select different binary-cache
     # entries when precision changes, and retain the existing default entry.
     common = {"enable_fp_fusion": enable_fp_fusion, "enable_reflect_ftz": False}
-    approximate = kernel.warmup(x, out, x.numel(), 0, grid=(1,), enable_reflect_prec_sqrt=False, **common)
-    precise = kernel.warmup(x, out, x.numel(), 0, grid=(1,), enable_reflect_prec_sqrt=True, **common)
+    approximate = kernel.warmup(x, out, x.numel(), 0, grid=(1,), enable_precise_libdevice=False, **common)
+    precise = kernel.warmup(x, out, x.numel(), 0, grid=(1,), enable_precise_libdevice=True, **common)
     restored = kernel.warmup(x, out, x.numel(), 0, grid=(1,), **common)
     assert approximate.hash == default_hash == restored.hash
     assert approximate.hash != precise.hash
@@ -85,7 +85,7 @@ def test_libdevice_sqrt_precision_reflection(enable_fp_fusion, fresh_knobs, fres
     backend = CUDABackend(target)
 
     def translate(precise):
-        options = backend.parse_options({**common, "enable_reflect_prec_sqrt": precise})
+        options = backend.parse_options({**common, "enable_precise_libdevice": precise})
         assert options.enable_fp_fusion == enable_fp_fusion
         ptx = backend.make_ptx(approximate.asm["llir"], {}, options, target.arch)
         assert ("sqrt.rn.f32" in ptx) == precise
@@ -93,6 +93,33 @@ def test_libdevice_sqrt_precision_reflection(enable_fp_fusion, fresh_knobs, fres
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(translate, [False, True] * 4))
+
+
+@pytest.mark.parametrize("enable_reflect_ftz", [False, True])
+def test_libdevice_precise_option_disables_ftz(enable_reflect_ftz, fresh_triton_cache):
+    if not is_cuda():
+        pytest.skip("requires CUDA")
+    from triton.backends.nvidia.compiler import CUDAOptions
+    assert CUDAOptions(enable_reflect_ftz=enable_reflect_ftz).enable_reflect_ftz == enable_reflect_ftz
+    options = CUDAOptions(enable_reflect_ftz=enable_reflect_ftz, enable_precise_libdevice=True)
+    assert not options.enable_reflect_ftz
+    assert options.hash() == CUDAOptions(enable_precise_libdevice=True).hash()
+    assert options.hash() != CUDAOptions(enable_reflect_ftz=False).hash()
+
+    @triton.jit
+    def kernel(X, Out):
+        offsets = tl.arange(0, 4)
+        x = tl.load(X + offsets)
+        tl.store(Out + offsets, libdevice.sqrt(x))
+
+    tiny = torch.finfo(torch.float32).tiny
+    x = torch.tensor([tiny * torch.finfo(torch.float32).eps, tiny / 2, tiny, -0.], device="cuda")
+    out = torch.empty_like(x)
+    compiled = kernel[(1,)](x, out, enable_reflect_ftz=enable_reflect_ftz, enable_precise_libdevice=True)
+    assert not compiled.metadata.enable_reflect_ftz
+    assert compiled.metadata.enable_precise_libdevice
+    assert "sqrt.rn.f32" in compiled.asm["ptx"]
+    assert torch.equal(out.view(torch.int32), torch.sqrt(x).view(torch.int32))
 
 
 @pytest.mark.parametrize("rounding", ["rna", "rn"])
