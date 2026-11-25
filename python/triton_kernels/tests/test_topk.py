@@ -63,6 +63,26 @@ def test_topk_arbitrary_k_forward_backward(k, apply_softmax, use_provided_indice
     assert_close(x_ref.grad, x.grad)
 
 
+@pytest.mark.parametrize("active_rows", [0, 3, 7])
+@pytest.mark.parametrize("device_count", [False, True])
+@pytest.mark.parametrize("apply_softmax", [False, True])
+def test_topk_backward_active_rows(active_rows, device_count, apply_softmax):
+    torch.manual_seed(0)
+    x = torch.randn(7, 13, device="cuda", requires_grad=True)
+    x_ref = x.detach().clone().requires_grad_()
+    count = torch.tensor(active_rows, device=x.device, dtype=torch.int32) if device_count else active_rows
+    actual = topk(x, 3, apply_softmax=apply_softmax, n_rows=count)
+    expected = torch.topk(x_ref[:active_rows], 3, dim=-1).values
+    if apply_softmax:
+        expected = expected.softmax(dim=-1)
+    # Only active output rows contribute to the loss.
+    grad = torch.zeros_like(actual.vals)
+    grad[:active_rows] = torch.randn_like(expected)
+    actual.vals.backward(grad)
+    expected.backward(grad[:active_rows])
+    torch.testing.assert_close(x.grad, x_ref.grad)
+
+
 @pytest.mark.parametrize("use_provided_indices", [False, True])
 @pytest.mark.parametrize("n_rows", [1, 7, 16, 31, 32, 128])
 @pytest.mark.parametrize("k", [8, 18, 33, 63, 64])
