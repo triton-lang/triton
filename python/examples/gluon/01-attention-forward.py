@@ -945,11 +945,12 @@ def attention_kernel(  #
     c0_chnl.prime()
     c1_chnl.prime()
     exp_turnstile.prime()
-    if gl.num_ctas() > 1:
-        # With 4 CTAs, the q/kv empty barriers also receive the other CTA pair's
-        # multicast tcgen05 commits. Wait until every CTA has primed, or a fast
+    if qk_mma_barrier_count > 1:
+        # The q/kv empty barriers also receive the other CTA pair's multicast
+        # tcgen05 commits (4 CTAs). Wait until every CTA has primed, or a fast
         # pair's commit can land before a slow CTA's prime and underflow the
-        # barrier's pending count.
+        # barrier's pending count. With 1 or 2 CTAs every commit depends on the
+        # receiving CTA's own prime, so no barrier is needed.
         bw.cluster.barrier()
 
     chnls = (q_chnl, kv_chnl, o_chnl, epi_chnl, s0_chnl, s1_chnl, c0_chnl, c1_chnl, exp_turnstile)
