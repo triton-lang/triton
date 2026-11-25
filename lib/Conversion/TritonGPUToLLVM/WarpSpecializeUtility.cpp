@@ -4,7 +4,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/OperationSupport.h"
@@ -465,18 +464,6 @@ static void rewriteDefaultRegion(WarpSpecializeOp ws,
   callbacks.reallocRegisters(b, ws, RegisterReallocPhase::DefaultPartitionEnd,
                              0);
   b.replaceOp(ws, after->getArguments());
-}
-
-bool mlir::triton::canDirectDispatch(ArrayRef<WarpSpecializeOp> sites) {
-  if (sites.size() != 1)
-    return false;
-  Block *site = sites.front()->getBlock();
-  DominanceInfo dom;
-  return !site->isReachable(site) &&
-         llvm::all_of(site->getParent()->getOps<LLVM::ReturnOp>(),
-                      [&](LLVM::ReturnOp ret) {
-                        return dom.dominates(site, ret->getBlock());
-                      });
 }
 
 using WarpRoute = std::pair<unsigned, Block *>;

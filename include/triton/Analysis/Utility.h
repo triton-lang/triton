@@ -13,6 +13,7 @@ namespace mlir {
 
 namespace triton::gpu {
 class ConvertLayoutOp;
+class WarpSpecializeOp;
 } // namespace triton::gpu
 
 // Match zero-filled storage: negative floating-point zero must be preserved.
@@ -363,6 +364,10 @@ bool isCvtDimSync(const triton::LinearLayout &srcLayout,
                   const triton::LinearLayout &dstLayout, StringAttr dim);
 
 namespace triton {
+
+/// A single site can dispatch directly if every returning path executes it
+/// once.
+bool canDirectDispatch(ArrayRef<gpu::WarpSpecializeOp> wsOps);
 
 bool canUseWarpBallotHistogram(HistogramOp op);
 

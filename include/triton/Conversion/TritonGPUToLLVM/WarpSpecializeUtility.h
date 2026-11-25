@@ -93,10 +93,6 @@ struct WarpSpecializeCallbacks {
   SmallVector<int32_t> workerRegisterPartitions;
 };
 
-/// A single site can dispatch directly if every returning path executes it
-/// once.
-bool canDirectDispatch(ArrayRef<gpu::WarpSpecializeOp> wsOps);
-
 /// Common implementation of warp specialize lowering.
 /// Uses callbacks for backend-specific barrier and register reallocation
 /// operations.

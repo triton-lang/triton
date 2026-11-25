@@ -1,3 +1,4 @@
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv | FileCheck %s --check-prefix=STATE
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [2, 2], order = [1, 0]}>
@@ -49,6 +50,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %preserved = ttg.local_load %live
         : !ttg.memdesc<128xi32, #nested_shared, #nested_smem, mutable>
         -> tensor<128xi32, #nested_src>
+    tt.return
+  }
+}
+
+// -----
+
+// STATE: module {{.*}}ttg.shared = 0 : i32
+// STATE-NEXT: tt.func @direct_ws
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @direct_ws() {
+    ttg.warp_specialize()
+    default { ttg.warp_yield }
+    partition0() num_warps(4) { ttg.warp_return } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+// STATE: module {{.*}}ttg.shared = 4 : i32
+// STATE-NEXT: tt.func @early_return_ws
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @early_return_ws(%skip: i1) {
+    cf.cond_br %skip, ^exit, ^work
+  ^exit:
+    tt.return
+  ^work:
+    ttg.warp_specialize()
+    default { ttg.warp_yield }
+    partition0() num_warps(4) { ttg.warp_return } : () -> ()
     tt.return
   }
 }
