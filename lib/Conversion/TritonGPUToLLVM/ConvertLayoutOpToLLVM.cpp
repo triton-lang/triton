@@ -100,15 +100,13 @@ struct ConvertLayoutOpConversion
     auto dstTy = op.getType();
 
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto smemBase =
-        LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto inVals = unpackUniqueTensorElements(loc, src, rewriter);
     auto outVals = mlir::convertLayoutViaSharedMemory(
-        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, smemBase, op,
+        loc, rewriter, srcLayout, dstLayout, inVals, llvmElemTy, {0}, op,
         targetInfo);
 
-    Value result = packUniqueTensorElements(loc, getTypeConverter(), outVals,
-                                            rewriter, dstTy);
+    Value result = packUniqueTensorElements(loc, getTypeConverter(),
+                                            outVals.front(), rewriter, dstTy);
     rewriter.replaceOp(op, result);
   }
 
@@ -436,57 +434,21 @@ struct ConvertLayoutOpConversion
   }
 };
 
-} // namespace
+struct SharedTransfer {
+  LinearLayout storeCvt, loadCvt;
+  ColumnAction permLoad;
+  SmallVector<Value> inputs;
+  int nReps;
+};
 
-namespace mlir {
-
-using namespace mlir::triton::gpu;
-
-SmallVector<Value> convertLayoutViaSharedMemory(
-    Location loc, ConversionPatternRewriter &rewriter,
-    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
-    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
-    Operation *sourceOp, const TargetInfoBase &targetInfo, Value storePred) {
+SharedTransfer prepareTransfer(Location loc, RewriterBase &rewriter,
+                               const LinearLayout &srcLayout,
+                               const LinearLayout &dstLayout,
+                               const SharedMemoryPack &pack,
+                               ArrayRef<SmallVector<Value>> inVals,
+                               const TargetInfoBase &targetInfo) {
   auto *ctx = rewriter.getContext();
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  if (!storePred)
-    storePred = b.true_val();
-  // We handle transformations recursively as they all need a preprocessing
-  // and a postprocessing step.
-
-  // Handle pointer types as 64-bit integers
-  if (isa<LLVM::LLVMPointerType>(llvmElemTy)) {
-    auto llvmElemTyPtr = i64_ty;
-    auto newInVals = llvm::to_vector(llvm::map_range(inVals, [&](Value v) {
-      return b.ptrtoint(llvmElemTyPtr, v).getResult();
-    }));
-    auto outVals = convertLayoutViaSharedMemory(
-        loc, rewriter, srcLayout, dstLayout, newInVals, llvmElemTyPtr, smemBase,
-        sourceOp, targetInfo, storePred);
-    for (auto &v : outVals) {
-      v = b.inttoptr(llvmElemTy, v);
-    }
-    return outVals;
-  }
-
-  // Handle sub-byte elements like i1
-  if (llvmElemTy.getIntOrFloatBitWidth() < 8) {
-    // Upcast to i8
-    auto i8ElemTy = i8_ty;
-    auto newInVals = llvm::to_vector(llvm::map_range(
-        inVals, [&](Value v) { return b.zext(i8ElemTy, v).getResult(); }));
-    auto outVals = convertLayoutViaSharedMemory(
-        loc, rewriter, srcLayout, dstLayout, newInVals, i8ElemTy, smemBase,
-        sourceOp, targetInfo, storePred);
-    for (auto &v : outVals) {
-      v = b.trunc(llvmElemTy, v, LLVM::IntegerOverflowFlags::nuw);
-    }
-    return outVals;
-  }
-
-  // At this point we have a type that's at least 8-bit
-  // and we don't have broadcasting in the registers
-  auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+  int bitwidth = pack.type.getElementTypeBitWidth();
   int numBanks = targetInfo.getSharedMemoryBanks();
   int32_t vecBitwidth =
       triton::gpu::getVecBitwidthLdSt(srcLayout, dstLayout, bitwidth);
@@ -496,7 +458,6 @@ SmallVector<Value> convertLayoutViaSharedMemory(
 
   // Extract reps from smem
   auto kReg = str_attr("register");
-  auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
   auto kReps = str_attr("reps");
   auto nReps = smem.getInDimSize(kReps);
@@ -510,7 +471,6 @@ SmallVector<Value> convertLayoutViaSharedMemory(
   auto permStore =
       regPermForDivide(totalStoreCvt, reps, /*left=*/false).value();
   totalStoreCvt = permStore.apply(totalStoreCvt);
-  auto permutedInVals = permStore.apply(inVals);
   auto permLoad = regPermForDivide(totalLoadCvt, reps, /*left=*/false).value();
   totalLoadCvt = permLoad.apply(totalLoadCvt);
 
@@ -524,13 +484,151 @@ SmallVector<Value> convertLayoutViaSharedMemory(
   loadCvt = loadCvt.reshapeOuts(
       {{kOffset, loadCvt.getTotalOutDimSize() / nBlock}, {kBlock, nBlock}});
 
-  auto tileSize = storeCvt.getInDimSize(kReg);
+  // Apply one swizzle and register order to all fields, then interleave words.
+  unsigned count = pack.type.getNumElements();
+  if (count > 1) {
+    auto fields = LinearLayout::identity1D(count, kReg, kOffset);
+    storeCvt = fields * storeCvt;
+    loadCvt = fields * loadCvt;
+  }
+  SmallVector<Value> inputs(storeCvt.getInDimSize(kReg) * nReps);
+  for (const auto &field : pack.fields) {
+    auto values = permStore.apply(inVals[field.index]);
+    for (auto [r, value] : llvm::enumerate(values))
+      llvm::copy(pack.encode(loc, rewriter, field, value),
+                 inputs.begin() + r * count + field.firstWord);
+  }
+  return {std::move(storeCvt), std::move(loadCvt), std::move(permLoad),
+          std::move(inputs), nReps};
+}
 
-  assert(permutedInVals.size() == tileSize * nReps);
-  SmallVector<Value> outVals;
-  auto affineOffset = b.i32_val(0);
-  auto maskSpanAffineOffset = 0;
+} // namespace
 
+namespace mlir {
+
+using namespace mlir::triton::gpu;
+
+// Form power-of-two packs up to maxPackBits using the narrowest field's
+// width as the word size. A field wider than the limit forms its own pack.
+SmallVector<SharedMemoryPack> getSharedMemoryPacks(TritonLLVMOpBuilder &b,
+                                                   Value smem,
+                                                   ArrayRef<Type> elemTypes,
+                                                   ArrayRef<unsigned> offsets,
+                                                   unsigned maxPackBits) {
+  auto widths = llvm::map_to_vector(elemTypes, [](Type ty) -> unsigned {
+    return std::max(8, getIntOrFloatOrPtrBitWidth(ty));
+  });
+  auto *ctx = smem.getContext();
+  auto makePack = [&](ArrayRef<unsigned> fields) {
+    unsigned wordBits = widths[fields.back()];
+    auto wordTy = IntegerType::get(ctx, wordBits);
+    SharedMemoryPack pack;
+    unsigned numWords = 0;
+    for (unsigned i : fields) {
+      unsigned words = widths[i] / wordBits;
+      pack.fields.push_back({i, elemTypes[i], numWords, words});
+      numWords += words;
+    }
+    pack.type = vec_ty(wordTy, numWords);
+    pack.base = smem;
+    if (unsigned offset = offsets[fields.front()])
+      pack.base = b.gep(smem.getType(), IntegerType::get(ctx, 8), smem,
+                        LLVM::GEPArg(offset));
+    return pack;
+  };
+  if (elemTypes.size() == 1)
+    return {makePack({0})};
+
+  // The allocator lays out fields widest first. Each pack reuses consecutive
+  // scratch slices starting at its first field's offset.
+  auto indices = llvm::to_vector(llvm::seq<unsigned>(elemTypes.size()));
+  llvm::sort(indices,
+             [&](unsigned i, unsigned j) { return offsets[i] < offsets[j]; });
+  SmallVector<SharedMemoryPack> packs;
+  ArrayRef<unsigned> remaining = indices;
+  while (!remaining.empty()) {
+    unsigned bits = 0, count = 1;
+    for (auto [i, field] : llvm::enumerate(remaining)) {
+      bits += widths[field];
+      if (bits > maxPackBits)
+        break;
+      if (llvm::isPowerOf2_32(bits))
+        count = i + 1;
+    }
+    packs.push_back(makePack(remaining.take_front(count)));
+    remaining = remaining.drop_front(count);
+  }
+  return packs;
+}
+
+SmallVector<Value> SharedMemoryPack::encode(Location loc,
+                                            RewriterBase &rewriter,
+                                            const Field &field,
+                                            Value value) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type wordTy = type.getElementType();
+  if (isa<LLVM::LLVMPointerType>(field.type))
+    value = b.ptrtoint(i64_ty, value);
+  else if (field.type.getIntOrFloatBitWidth() < 8)
+    return {b.zext(wordTy, value)};
+  if (field.numWords > 1)
+    return unpackLLVector(loc, b.bitcast(value, vec_ty(wordTy, field.numWords)),
+                          rewriter);
+  if (isa<FloatType>(field.type))
+    value = b.bitcast(value, wordTy);
+  return {value};
+}
+
+Value SharedMemoryPack::decode(Location loc, RewriterBase &rewriter,
+                               const Field &field,
+                               ArrayRef<Value> words) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  words = words.slice(field.firstWord, field.numWords);
+  bool isPtr = isa<LLVM::LLVMPointerType>(field.type);
+  Type scalarTy = isPtr ? i64_ty : field.type;
+  if (scalarTy.getIntOrFloatBitWidth() < 8)
+    return b.trunc(scalarTy, words.front(), LLVM::IntegerOverflowFlags::nuw);
+  Value value =
+      words.size() == 1 ? words.front() : packLLVector(loc, words, rewriter);
+  if (value.getType() != scalarTy)
+    value = b.bitcast(value, scalarTy);
+  if (isPtr)
+    return b.inttoptr(field.type, value);
+  return value;
+}
+
+SmallVector<SmallVector<Value>> convertLayoutViaSharedMemory(
+    Location loc, ConversionPatternRewriter &rewriter,
+    const LinearLayout &srcLayout, const LinearLayout &dstLayout,
+    ArrayRef<SmallVector<Value>> inVals, ArrayRef<Type> elemTypes,
+    ArrayRef<unsigned> offsets, Operation *sourceOp,
+    const TargetInfoBase &targetInfo, Value storePred) {
+  auto *ctx = rewriter.getContext();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  if (!storePred)
+    storePred = b.true_val();
+
+  Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, sourceOp);
+  // Only common register bits left out of the vector can become repetitions.
+  // Reserving room for all of them makes every multi-field pack single-round.
+  unsigned maxPackBits = 0;
+  if (elemTypes.size() > 1) {
+    auto common =
+        getCommonRegBases(srcLayout.flattenOuts(), dstLayout.flattenOuts());
+    maxPackBits = 128u >> common.size();
+  }
+  auto packs = getSharedMemoryPacks(b, smem, elemTypes, offsets, maxPackBits);
+  SmallVector<SharedTransfer, 1> transfers;
+  transfers.reserve(packs.size());
+  int maxReps = 0;
+  for (const auto &pack : packs) {
+    transfers.push_back(prepareTransfer(loc, rewriter, srcLayout, dstLayout,
+                                        pack, inVals, targetInfo));
+    maxReps = std::max(maxReps, transfers.back().nReps);
+  }
+
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
   bool isWarpSync = mlir::isCvtDimSync(srcLayout, dstLayout, kWarp);
   bool isBlockSync = mlir::isCvtDimSync(srcLayout, dstLayout, kBlock);
   auto emitBarrier = [&]() {
@@ -544,29 +642,46 @@ SmallVector<Value> convertLayoutViaSharedMemory(
   };
 
   auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-  for (int i = 0; i < nReps; ++i) {
-    if (i > 0)
-      emitBarrier();
-    auto tileInVals =
-        ArrayRef<Value>(permutedInVals).slice(i * tileSize, tileSize);
-    // Store
-    lowerLdSt(loc, ctx, storeCvt, tileInVals, llvmElemTy, smemBase,
-              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
-              /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
-              warpId, rewriter, targetInfo, /*maybeMaxVecElems=*/{},
-              makeSharedStoreEmitter(targetInfo, storePred));
+  auto zero = b.i32_val(0);
+  SmallVector<SmallVector<Value>> outVals(elemTypes.size());
+  for (int rep = 0; rep < maxReps; ++rep) {
+    if (rep > 0)
+      emitBarrier(); // Finish the previous loads before reusing scratch.
+    for (auto [transfer, pack] : llvm::zip_equal(transfers, packs)) {
+      if (rep >= transfer.nReps)
+        continue;
+      auto tileSize = transfer.inputs.size() / transfer.nReps;
+      auto tile = ArrayRef(transfer.inputs).slice(rep * tileSize, tileSize);
+      lowerLdSt(loc, ctx, transfer.storeCvt, tile, pack.type.getElementType(),
+                pack.base,
+                /*paddingShifts=*/{}, zero, 0,
+                /*affineBlockOffset=*/{}, 0, laneId, warpId, rewriter,
+                targetInfo, /*maybeMaxVecElems=*/{},
+                makeSharedStoreEmitter(targetInfo, storePred));
+    }
     emitBarrier();
-    // Load
-    auto tileOutVals = lowerLdSt(
-        loc, ctx, loadCvt, {}, llvmElemTy, smemBase, /*paddingShifts=*/{},
-        affineOffset, maskSpanAffineOffset, /*affineBlockOffset=*/Value(),
-        /*maskSpanAffineBlock=*/0, laneId, warpId, rewriter, targetInfo,
-        /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
-    llvm::append_range(outVals, tileOutVals);
+    for (auto [transfer, pack] : llvm::zip_equal(transfers, packs)) {
+      if (rep >= transfer.nReps)
+        continue;
+      auto tile = lowerLdSt(
+          loc, ctx, transfer.loadCvt, {}, pack.type.getElementType(), pack.base,
+          /*paddingShifts=*/{}, zero, 0, /*affineBlockOffset=*/{}, 0, laneId,
+          warpId, rewriter, targetInfo,
+          /*maybeMaxVecElems=*/{}, makeSharedLoadEmitter(targetInfo));
+      for (unsigned i = 0; i < tile.size(); i += pack.type.getNumElements()) {
+        auto words = ArrayRef(tile).slice(i, pack.type.getNumElements());
+        for (const auto &field : pack.fields)
+          outVals[field.index].push_back(
+              pack.decode(loc, rewriter, field, words));
+      }
+    }
   }
 
-  // Undo the permLoad used to divideRight
-  outVals = permLoad.inverse().apply(outVals);
+  for (auto [transfer, pack] : llvm::zip_equal(transfers, packs)) {
+    auto order = transfer.permLoad.inverse();
+    for (const auto &field : pack.fields)
+      outVals[field.index] = order.apply(outVals[field.index]);
+  }
   return outVals;
 }
 

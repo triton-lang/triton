@@ -367,7 +367,6 @@ static std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
   auto *ctx = a.getInDimNames().begin()->getContext();
   auto kReg = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  auto dim = a.getTotalOutDimSizeLog2();
   // map from b to a
   LinearLayout cvt = b.invertAndCompose(a);
 
@@ -385,13 +384,11 @@ static std::optional<SmallVector<int32_t>> optimalSwizzlingTile(
   // In this function, we compute a tile (set of bases) such that it matches
   // the tiles of A and B
 
-  auto regA = flatten(a, kReg);
-  auto regB = flatten(b, kReg);
   auto laneA = flatten(a, kLane);
   auto laneB = flatten(b, kLane);
 
   // Compute the number of registers that start the tile
-  SmallVector<int32_t> vbasis = intersectionBasis(regA, regB, dim);
+  auto vbasis = getCommonRegBases(a, b);
   // We need to have at least nRegB vectorisation
   if (vbasis.size() < nRegB) {
     return std::nullopt;
@@ -507,18 +504,18 @@ LinearLayout optimalSwizzling(const LinearLayout &src, const LinearLayout &dst,
   return basis1D.reshapeOuts(outDims);
 }
 
+SmallVector<int32_t> getCommonRegBases(const LinearLayout &srcFlat,
+                                       const LinearLayout &dstFlat) {
+  auto *ctx = srcFlat.getInDimNames().begin()->getContext();
+  auto kReg = StringAttr::get(ctx, "register");
+  return intersectionBasis(flatten(srcFlat, kReg), flatten(dstFlat, kReg),
+                           srcFlat.getTotalOutDimSizeLog2());
+}
+
 std::pair<SmallVector<int32_t>, std::optional<bool>>
 getVecBasisLdSt(const LinearLayout &srcFlat, const LinearLayout &dstFlat,
                 int32_t bitwidth) {
-  auto *ctx = srcFlat.getInDimNames().begin()->getContext();
-  auto kReg = StringAttr::get(ctx, "register");
-  auto kBlock = StringAttr::get(ctx, "block");
-  auto regSrc = flatten(srcFlat, kReg);
-  auto regDst = flatten(dstFlat, kReg);
-  auto blockSrc = flatten(srcFlat, kBlock);
-
-  auto dim = srcFlat.getTotalOutDimSizeLog2();
-  SmallVector<int32_t> vbasis = intersectionBasis(regSrc, regDst, dim);
+  auto vbasis = getCommonRegBases(srcFlat, dstFlat);
   // Restrict the vectorisation to the maximum we can use
   auto maxVecBases = llvm::Log2_32(128 / bitwidth);
   if (vbasis.size() > maxVecBases) {
@@ -528,6 +525,12 @@ getVecBasisLdSt(const LinearLayout &srcFlat, const LinearLayout &dstFlat,
   std::optional<bool> srcFillsBank = std::nullopt;
   if ((1 << vbasis.size()) * bitwidth < 32) {
     auto basesPerBank = llvm::Log2_32(32 / bitwidth);
+    auto *ctx = srcFlat.getInDimNames().begin()->getContext();
+    auto dim = srcFlat.getTotalOutDimSizeLog2();
+    auto kReg = StringAttr::get(ctx, "register");
+    auto regSrc = flatten(srcFlat, kReg);
+    auto regDst = flatten(dstFlat, kReg);
+    auto blockSrc = flatten(srcFlat, StringAttr::get(ctx, "block"));
     auto kWarp = StringAttr::get(ctx, "warp");
     auto warpSrc = removeZeros(flatten(srcFlat, kWarp));
     auto warpDst = removeZeros(flatten(dstFlat, kWarp));

@@ -115,14 +115,8 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
     const SmallVector<SmallVector<Value>> &inVals,
     const LLVMTypeConverter *typeConverter, const TargetInfoBase &targetInfo,
     bool forceWarpShuffle = false, Value storePred = {}) {
-  SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
   auto *ctx = rewriter.getContext();
-  SmallVector<int64_t> shape;
-  for (auto dim : srcLayout.getOutDimNames()) {
-    shape.push_back(srcLayout.getOutDimSize(dim));
-  }
-  auto srcEnc = triton::gpu::LinearEncodingAttr::get(ctx, srcLayout);
-  auto dstEnc = triton::gpu::LinearEncodingAttr::get(ctx, dstLayout);
+  auto elemTypes = op.getElementTypes();
   // The proper way to lower reduce would be to lower it to:
   // reduce_threads / reduce_lanes / convert_layout
   // and let AllocationAnalysis handle the shared memory allocation
@@ -132,7 +126,7 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
   LayoutConversionScratchConfig scratch;
   if (!forceWarpShuffle)
     scratch = getLayoutConversionScratchConfig(
-        srcLayout, dstLayout, op.getElementTypes(),
+        srcLayout, dstLayout, elemTypes,
         [&](const LinearLayout &src, const LinearLayout &dst,
             unsigned bitwidth) {
           auto vecBitwidth =
@@ -146,22 +140,25 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
       op->template getAttrOfType<IntegerAttr>("allocation.offset");
   assert((!scratch.sizeInBytes || baseOffsetAttr) &&
          "expected allocation.offset for shared-memory conversion");
-  int64_t baseOffset = baseOffsetAttr ? baseOffsetAttr.getInt() : 0;
-  auto offsetTy = IntegerType::get(ctx, 32);
-  for (unsigned i = 0; i < op.getNumOperands(); ++i) {
-    auto elemTy = op.getElementTypes()[i];
-    if (storePred) {
-      assert(!forceWarpShuffle && scratch.sizeInBytes &&
-             "selected producers require a shared-memory conversion");
-      auto b = TritonLLVMOpBuilder(loc, rewriter);
-      Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-      Value base =
-          b.gep(smem.getType(), i8_ty, smem, b.i32_val(scratch.offsets[i]));
-      outVals[i] = convertLayoutViaSharedMemory(
-          loc, rewriter, srcLayout, dstLayout, inVals[i],
-          typeConverter->convertType(elemTy), base, op, targetInfo, storePred);
-      continue;
-    }
+  assert((!storePred || scratch.sizeInBytes) &&
+         "selected producers require a shared-memory conversion");
+  // Batch tuple transfers. For a single unpredicated operand, let the
+  // backend select its preferred convert_layout instructions.
+  if (scratch.sizeInBytes && (storePred || inVals.size() > 1)) {
+    auto types = llvm::map_to_vector(
+        elemTypes, [&](Type ty) { return typeConverter->convertType(ty); });
+    return convertLayoutViaSharedMemory(loc, rewriter, srcLayout, dstLayout,
+                                        inVals, types, scratch.offsets, op,
+                                        targetInfo, storePred);
+  }
+
+  SmallVector<int64_t> shape;
+  for (auto dim : srcLayout.getOutDimNames())
+    shape.push_back(srcLayout.getOutDimSize(dim));
+  auto srcEnc = triton::gpu::LinearEncodingAttr::get(ctx, srcLayout);
+  auto dstEnc = triton::gpu::LinearEncodingAttr::get(ctx, dstLayout);
+  SmallVector<SmallVector<Value>> outVals(op.getNumOperands());
+  for (auto [i, elemTy] : llvm::enumerate(elemTypes)) {
     auto srcTy = RankedTensorType::get(shape, elemTy, srcEnc);
     auto dstTy = RankedTensorType::get(shape, elemTy, dstEnc);
     Value packed = packUniqueTensorElements(loc, typeConverter, inVals[i],
@@ -175,8 +172,7 @@ SmallVector<SmallVector<Value>> convertLayoutValues(
       cvt.setForceWarpShuffleAttr(rewriter.getUnitAttr());
     triton::nvidia_gpu::copyClusterBarrierMbarOffset(op, cvt);
     if (scratch.sizeInBytes)
-      cvt->setAttr("allocation.offset",
-                   IntegerAttr::get(offsetTy, baseOffset + scratch.offsets[i]));
+      cvt->setAttr("allocation.offset", baseOffsetAttr);
     Type packedDstTy = typeConverter->convertType(dstTy);
     auto packedDst = UnrealizedConversionCastOp::create(
                          rewriter, loc, packedDstTy, cvt.getResult())

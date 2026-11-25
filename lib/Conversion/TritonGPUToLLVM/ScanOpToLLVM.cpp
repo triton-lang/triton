@@ -362,13 +362,12 @@ private:
     unsigned stride = independentScans.getTotalOutDimSize();
     auto scratch = helper.getGroupedInterWarpScratchConfig();
     Value smem = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-    SmallVector<Value> bases;
-    SmallVector<Type> types;
-    for (auto [i, type] : llvm::enumerate(op.getElementTypes())) {
-      bases.push_back(
-          b.gep(smem.getType(), i8_ty, smem, b.i32_val(scratch.offsets[i])));
-      types.push_back(getTypeConverter()->convertType(type));
-    }
+    auto types = llvm::map_to_vector(op.getElementTypes(), [&](Type ty) {
+      return getTypeConverter()->convertType(ty);
+    });
+    unsigned numScans = independentScans.getInDimSize(kReg);
+    auto packs = getSharedMemoryPacks(b, smem, types, scratch.offsets,
+                                      numScans > 1 ? 128 : 0);
     auto getOffset = [&](const LinearLayout &layout, unsigned reg) {
       return applyLinearLayout(loc, rewriter, layout,
                                {{kReg, b.i32_val(reg)},
@@ -386,10 +385,14 @@ private:
       storePred = b.true_val();
     for (auto [r, total] : llvm::enumerate(totals)) {
       Value offset = getOffset(storeLayout, r);
-      for (unsigned i = 0; i < total.size(); ++i) {
-        Value ptr = b.gep(smem.getType(), types[i], bases[i], offset);
-        targetInfo.storeDShared(rewriter, loc, ptr, Value(), total[i],
-                                storePred);
+      for (const auto &pack : packs) {
+        SmallVector<Value> words;
+        for (const auto &field : pack.fields)
+          llvm::append_range(
+              words, pack.encode(loc, rewriter, field, total[field.index]));
+        Value packed = packLLVector(loc, words, rewriter);
+        Value ptr = b.gep(smem.getType(), pack.type, pack.base, offset);
+        targetInfo.storeDShared(rewriter, loc, ptr, Value(), packed, storePred);
       }
     }
     targetInfo.barrier(loc, rewriter, triton::gpu::AddrSpace::Local);
@@ -423,7 +426,6 @@ private:
         b.icmp_ne(segmentOffset, b.i32_val(getConsumerOffset(boundary)));
     ScanValues carries(totals.size());
 
-    unsigned numScans = independentScans.getInDimSize(kReg);
     for (unsigned n = 0; n < numScans; ++n) {
       unsigned scanIndex = reverse ? numScans - 1 - n : n;
       unsigned boundaryReg =
@@ -435,11 +437,14 @@ private:
       for (unsigned i = 0; i < numTotals; ++i) {
         unsigned segment = reverse ? numTotals - 1 - i : i;
         Value index = b.add(base, b.i32_val(segment * stride));
-        SmallVector<Value> current;
-        for (unsigned i = 0; i < types.size(); ++i) {
-          Value ptr = b.gep(smem.getType(), types[i], bases[i], index);
-          current.push_back(targetInfo.loadDShared(rewriter, loc, ptr, Value(),
-                                                   types[i], b.true_val()));
+        SmallVector<Value> current(types.size());
+        for (const auto &pack : packs) {
+          Value ptr = b.gep(smem.getType(), pack.type, pack.base, index);
+          Value packed = targetInfo.loadDShared(rewriter, loc, ptr, Value(),
+                                                pack.type, b.true_val());
+          auto words = unpackLLVector(loc, packed, rewriter);
+          for (const auto &field : pack.fields)
+            current[field.index] = pack.decode(loc, rewriter, field, words);
         }
         acc = applyCombineOp(loc, rewriter, op.getCombineOp(), acc, current);
         // A one-value segment takes its own prefix. Otherwise, pass the

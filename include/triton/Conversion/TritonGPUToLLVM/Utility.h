@@ -827,13 +827,34 @@ void makeAllWarpGroupsIsolatedFromAbove(Operation *op);
 // Set the correct loop annotation on LLVM branch ops.
 void fixUpLoopAnnotation(ModuleOp mod);
 
-// Use storePred is supplied to skip selected producer lanes.
-SmallVector<Value> convertLayoutViaSharedMemory(
+struct SharedMemoryPack {
+  struct Field {
+    unsigned index;
+    Type type;
+    unsigned firstWord, numWords;
+  };
+  SmallVector<Field> fields;
+  VectorType type;
+  Value base;
+
+  SmallVector<Value> encode(Location loc, RewriterBase &rewriter,
+                            const Field &field, Value value) const;
+  Value decode(Location loc, RewriterBase &rewriter, const Field &field,
+               ArrayRef<Value> words) const;
+};
+
+SmallVector<SharedMemoryPack> getSharedMemoryPacks(TritonLLVMOpBuilder &b,
+                                                   Value smem,
+                                                   ArrayRef<Type> elemTypes,
+                                                   ArrayRef<unsigned> offsets,
+                                                   unsigned maxPackBits);
+
+SmallVector<SmallVector<Value>> convertLayoutViaSharedMemory(
     Location loc, ConversionPatternRewriter &rewriter,
     const LinearLayout &srcLayout, const LinearLayout &dstLayout,
-    ArrayRef<Value> inVals, Type llvmElemTy, Value smemBase,
-    Operation *sourceOp, const TargetInfoBase &targetInfo,
-    Value storePred = {});
+    ArrayRef<SmallVector<Value>> inVals, ArrayRef<Type> elemTypes,
+    ArrayRef<unsigned> offsets, Operation *sourceOp,
+    const TargetInfoBase &targetInfo, Value storePred = {});
 
 void transferSwizzlingLocalMem(triton::gpu::ConvertLayoutOp op, Value src,
                                const TargetInfoBase &targetInfo,

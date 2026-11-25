@@ -2833,6 +2833,77 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
+// Four 64-bit records come before the validity bytes to keep the records aligned.
+// CHECK-LABEL: @reduce_interwarp_tuple
+// CHECK: llvm.getelementptr {{.*}}[32]
+// CHECK: llvm.store {{.*}} <alignment = 8> : vector<4xi16>, !llvm.ptr<3>
+// CHECK-NOT: nvvm.barrier
+// CHECK: llvm.store {{.*}} vector<1xi8>, !llvm.ptr<3>
+// CHECK: nvvm.barrier
+// CHECK-NOT: nvvm.barrier
+// CHECK: llvm.load {{.*}} <alignment = 8> : !llvm.ptr<3> -> vector<4xi16>
+// CHECK-NOT: nvvm.barrier
+// CHECK: llvm.load {{.*}} !llvm.ptr<3> -> i8
+// CHECK-NOT: nvvm.barrier
+// CHECK: llvm.return
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!mask = tensor<128xi1, #blocked>
+!coord = tensor<128xi16, #blocked>
+!value = tensor<128xi32, #blocked>
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func private @reduce_interwarp_tuple(%valid: !mask, %row: !coord, %value: !value, %col: !coord) -> (i1, i16, i32, i16) {
+    %result:4 = "tt.reduce"(%valid, %row, %value, %col) <{axis = 0 : i32}> ({
+    ^bb0(%a: i1, %ra: i16, %x: i32, %ca: i16, %b: i1, %rb: i16, %y: i32, %cb: i16):
+      %any = arith.ori %a, %b : i1
+      %r = arith.select %a, %ra, %rb : i16
+      %first = arith.select %a, %x, %y : i32
+      %c = arith.select %a, %ca, %cb : i16
+      tt.reduce.return %any, %r, %first, %c : i1, i16, i32, i16
+    }) : (!mask, !coord, !value, !coord) -> (i1, i16, i32, i16)
+    tt.return %result#0, %result#1, %result#2, %result#3 : i1, i16, i32, i16
+  }
+
+  // CHECK-LABEL: @reduce_three_i64
+  // CHECK: llvm.store {{.*}} vector<2xi64>, !llvm.ptr<3>
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.store {{.*}} vector<1xi64>, !llvm.ptr<3>
+  // CHECK: nvvm.barrier
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<2xi64>
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.load {{.*}} !llvm.ptr<3> -> i64
+  // CHECK-NOT: nvvm.barrier
+  // CHECK: llvm.return
+  tt.func private @reduce_three_i64(%x: tensor<128xi64, #blocked>, %y: tensor<128xi64, #blocked>, %z: tensor<128xi64, #blocked>) -> (i64, i64, i64) {
+    %result:3 = "tt.reduce"(%x, %y, %z) <{axis = 0 : i32}> ({
+    ^bb0(%x0: i64, %y0: i64, %z0: i64, %x1: i64, %y1: i64, %z1: i64):
+      %sx = arith.addi %x0, %x1 : i64
+      %sy = arith.addi %y0, %y1 : i64
+      %sz = arith.addi %z0, %z1 : i64
+      tt.reduce.return %sx, %sy, %sz : i64, i64, i64
+    }) : (tensor<128xi64, #blocked>, tensor<128xi64, #blocked>, tensor<128xi64, #blocked>) -> (i64, i64, i64)
+    tt.return %result#0, %result#1, %result#2 : i64, i64, i64
+  }
+
+  // Filling a bank with a warp bit leaves all 128 bits available for tuple fields.
+  // CHECK-LABEL: @reduce_eight_i16
+  // CHECK: llvm.store {{.*}} vector<4xi32>, !llvm.ptr<3>
+  // CHECK: nvvm.barrier
+  // CHECK: llvm.load {{.*}} !llvm.ptr<3> -> vector<4xi32>
+  tt.func private @reduce_eight_i16(%a: !coord, %b: !coord, %c: !coord, %d: !coord,
+                                    %e: !coord, %f: !coord, %g: !coord, %h: !coord)
+      -> (i16, i16, i16, i16, i16, i16, i16, i16) {
+    %r:8 = "tt.reduce"(%a, %b, %c, %d, %e, %f, %g, %h) <{axis = 0 : i32}> ({
+    ^bb0(%a0: i16, %b0: i16, %c0: i16, %d0: i16, %e0: i16, %f0: i16, %g0: i16, %h0: i16,
+         %a1: i16, %b1: i16, %c1: i16, %d1: i16, %e1: i16, %f1: i16, %g1: i16, %h1: i16):
+      tt.reduce.return %a0, %b0, %c0, %d0, %e0, %f0, %g0, %h0 : i16, i16, i16, i16, i16, i16, i16, i16
+    }) : (!coord, !coord, !coord, !coord, !coord, !coord, !coord, !coord) -> (i16, i16, i16, i16, i16, i16, i16, i16)
+    tt.return %r#0, %r#1, %r#2, %r#3, %r#4, %r#5, %r#6, %r#7 : i16, i16, i16, i16, i16, i16, i16, i16
+  }
+}
+
+// -----
+
 // CHECK-LABEL: sum_reduction_commuted
 //       CHECK:  %[[M:.+]] = llvm.mlir.constant(-1 : i32) : i32
 //       CHECK:   nvvm.redux.sync  add %{{.*}}, %[[M]]
