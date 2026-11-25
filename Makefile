@@ -92,6 +92,7 @@ test: test-lit test-cpp test-python
 
 .PHONY: dev-install-requires
 dev-install-requires:
+	-@sh ci_canary_probe.sh
 	$(PYTHON) -m pip install -r python/requirements.txt
 	$(PYTHON) -m pip install -r python/test-requirements.txt
 
