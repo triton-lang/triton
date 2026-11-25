@@ -5393,14 +5393,6 @@ def _fp6_store_tile(src, dst, desc, ROWS: ttgl.constexpr, WIDTH: ttgl.constexpr)
     tma.store_wait(0, deps=[stage])
 
 
-def test_fp6_tma_store_reshaped_source_sm100():
-    layout = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
-    desc_type = f"tensordesc<u8[1,128],{layout!r}>"
-    signature = {"src": "*u8", "dst": "*u8", "desc": desc_type, "ROWS": "constexpr", "WIDTH": "constexpr"}
-    source = gluon.GluonASTSource(_fp6_store_tile, signature, {"ROWS": 2, "WIDTH": 64})
-    triton.compile(source, target=GPUTarget("cuda", 100, 32))
-
-
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),
                     reason="Requires SM100 or SM103")
 @pytest.mark.parametrize("host,rows,width", [(False, 1, 128), (True, 1, 128), (True, 1, 64), (True, 2, 64)])
