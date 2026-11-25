@@ -1,11 +1,45 @@
-"""Linear asynchronous bulk copies (without a tensor map)."""
+"""Linear asynchronous bulk memory operations (without a tensor map)."""
 
 from ..._core import builtin, uint64, _unwrap_if_constexpr
 from ... import _core as ttgl
 from ..._semantic import _check
 from .tma import store_wait
 
-__all__ = ["async_load", "async_store", "store_wait"]
+__all__ = ["async_load", "async_store", "prefetch", "store_wait"]
+
+
+@builtin
+def prefetch(pointer, num_bytes, pred=True, _semantic=None):
+    """Prefetch contiguous global-memory ranges into L2 on NVIDIA SM90 and newer.
+
+    Issues a nonblocking cache hint for each enabled range. A subsequent load
+    uses the original pointer and may hit in L2. The operands broadcast to a
+    common shape, so a block of pointers can prefetch several disjoint ranges.
+
+    Args:
+        pointer: Global-memory pointer or tensor of pointers, each 16-byte aligned.
+        num_bytes: Nonnegative 32-bit byte count per range, a multiple of 16.
+        pred: Boolean predicate per range. Defaults to True.
+    """
+    num_bytes = _unwrap_if_constexpr(num_bytes)
+    if isinstance(num_bytes, int):
+        _check(0 <= num_bytes < 2**32 and num_bytes % 16 == 0,
+               lambda: "num_bytes must fit in uint32 and be a multiple of 16")
+    pointer, num_bytes, pred = map(_semantic.to_tensor, (pointer, num_bytes, pred))
+    _check(pointer.dtype.is_ptr() and pointer.dtype.address_space in ("global", "constant"),
+           lambda: "pointer must contain global-memory pointers")
+    _check(num_bytes.dtype.is_int32() or num_bytes.dtype.is_uint32(), lambda: "num_bytes must be int32 or uint32")
+    _check(pred.dtype.is_bool(), lambda: "pred must be boolean")
+    pointer, num_bytes, pred = _semantic.broadcast_tensors(pointer, num_bytes, pred)
+    if _semantic.builder.options.enable_iisan:
+        address = _semantic.cast(pointer, uint64)
+        aligned = _semantic.equal(_semantic.mod(address, 16), 0)
+        ttgl.device_assert(aligned, "bulk.prefetch pointer must be 16-byte aligned", mask=pred, _semantic=_semantic)
+        valid_size = _semantic.and_(_semantic.greater_equal(num_bytes, 0),
+                                    _semantic.equal(_semantic.mod(num_bytes, 16), 0))
+        ttgl.device_assert(valid_size, "bulk.prefetch size must be a nonnegative multiple of 16", mask=pred,
+                           _semantic=_semantic)
+    _semantic.builder.create_prefetch_bulk(pointer.handle, num_bytes.handle, pred.handle)
 
 
 @builtin
