@@ -322,8 +322,10 @@ private:
     bool sequential = op.getInThreadReduction() == InThreadReduction::SEQUENTIAL;
     bool usePredicateChains = !sequential && isPureBooleanCombiner &&
                               targetInfo.preferThreePredicateChains();
-    // Keep the narrow-origin operand on the left for mixed-precision add
-    // folding. Only exchange operands when the combiner permits it.
+    // Keep the narrow-origin operand on the left for mixed-precision op
+    // folding when possible. When lower-precision values are cast to higher
+    // precision and then reduced, an LLVM backend may optimize cast -> binary
+    // op into an optimized instruction.
     bool swapSequentialOperands = sequential && op.isCommutative();
 
     // Reduce register-resident values for each independent result.
