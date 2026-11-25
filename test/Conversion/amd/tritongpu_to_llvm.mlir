@@ -675,6 +675,22 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2 {allocation.offset = 0 : i32} : (tensor<64x!tt.ptr<f32>, #blocked5>, tensor<64xf32, #blocked5>) -> tensor<64xf32, #blocked5>
     tt.return
   }
+
+  // CHECK-LABEL: atomic_runtime_lds_reduction_signed_max
+  tt.func @atomic_runtime_lds_reduction_signed_max(%arg0 : tensor<64x!tt.ptr<i32>, #blocked5>, %arg2 : tensor<64xi32, #blocked5>) {
+    // CHECK: llvm.smax
+    // CHECK: llvm.atomicrmw max
+    %0 = tt.atomic_rmw max, relaxed, gpu, %arg0, %arg2 {allocation.offset = 0 : i32} : (tensor<64x!tt.ptr<i32>, #blocked5>, tensor<64xi32, #blocked5>) -> tensor<64xi32, #blocked5>
+    tt.return
+  }
+
+  // CHECK-LABEL: atomic_runtime_lds_reduction_signed_min
+  tt.func @atomic_runtime_lds_reduction_signed_min(%arg0 : tensor<64x!tt.ptr<i32>, #blocked5>, %arg2 : tensor<64xi32, #blocked5>) {
+    // CHECK: llvm.smin
+    // CHECK: llvm.atomicrmw min
+    %0 = tt.atomic_rmw min, relaxed, gpu, %arg0, %arg2 {allocation.offset = 0 : i32} : (tensor<64x!tt.ptr<i32>, #blocked5>, tensor<64xi32, #blocked5>) -> tensor<64xi32, #blocked5>
+    tt.return
+  }
 }
 
 // -----
