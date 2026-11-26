@@ -476,10 +476,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked1_parent = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [32, 1], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked1 = #ttg.slice<{dim = 0, parent = #blocked1_parent}>
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32}>
+#narrow = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 32}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: tma_scatter_pipeline
-  tt.func public @tma_scatter_pipeline(%arg0: tensor<8x128xf32, #blocked>, %arg1: !tt.tensordesc<1x128xf32, #shared>, %arg2: i32, %arg3: i32) {
+  tt.func public @tma_scatter_pipeline(%arg0: tensor<8x128xf32, #blocked>, %arg1: !tt.tensordesc<1x128xf32, #shared>, %arg2: i32, %arg3: i32, %narrow: !tt.tensordesc<1x128xf32, #narrow>) {
     %c0_i32 = arith.constant 0 : i32
+    // CHECK-COUNT-2: ttg.local_alloc
+    // CHECK: scf.for
     scf.for %arg4 = %c0_i32 to %arg3 step %arg2  : i32 {
       %1 = arith.divsi %arg4, %arg2 : i32
       %2 = tt.splat %1 : i32 -> tensor<8xi32, #blocked1>
@@ -487,6 +490,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       // CHECK-NEXT: ttg.local_store
       // CHECK-NEXT: ttng.async_tma_scatter
       tt.descriptor_scatter %arg1[%2, %1], %arg0 : !tt.tensordesc<1x128xf32, #shared>, tensor<8xi32, #blocked1>, i32, tensor<8x128xf32, #blocked>
+      tt.descriptor_scatter %narrow[%2, %1], %arg0 : !tt.tensordesc<1x128xf32, #narrow>, tensor<8xi32, #blocked1>, i32, tensor<8x128xf32, #blocked>
     }
     tt.return
   }
@@ -542,6 +546,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       tt.descriptor_store %arg1[%1], %arg0 : !tt.tensordesc<1xf32, #shared>, tensor<1xf32, #blocked>
       tt.descriptor_store %arg1[%2], %arg0 : !tt.tensordesc<1xf32, #shared>, tensor<1xf32, #blocked>
     }
+    // CHECK: ttg.local_dealloc %[[ALLOC]]
+    // CHECK-NEXT: tt.return
     tt.return
   }
 }
