@@ -83,3 +83,43 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Explicit descriptors keep their bounds. Masked-off lanes use the size-aligned
+// out-of-bounds offset, which ends past any 32-bit num_records.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: buffer_descriptor_rmw
+  tt.func @buffer_descriptor_rmw(%base: !tt.ptr<i32>, %offset: tensor<32xi32, #blocked>, %value: tensor<32xi32, #blocked>, %mask: tensor<32xi1, #blocked>, %soffset: i32) {
+    %bound = arith.constant -1 : i32
+    // CHECK: %[[DESC:.*]] = rocdl.make.buffer.rsrc
+    %desc = amdg.make_buffer_desc %base, %bound : !tt.ptr<i32> -> !amdg.buffer_desc<i32>
+    // CHECK: llvm.mul
+    // CHECK: llvm.select
+    // CHECK-NOT: rocdl.make.buffer.rsrc
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.add"({{.*}}%[[DESC]]
+    %old = amdg.buffer_atomic_rmw add, relaxed, gpu, %value, %desc[%offset], %mask soffset = %soffset : i32 : !amdg.buffer_desc<i32> -> tensor<32xi32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CAS has no source mask, but duplicated layout lanes are masked off.
+// A zero-bound descriptor is legal and must be preserved.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: buffer_descriptor_cas
+  tt.func @buffer_descriptor_cas(%base: !tt.ptr<i64>, %offset: tensor<16xi32, #blocked>, %value: tensor<16xi64, #blocked>, %cmp: tensor<16xi64, #blocked>, %soffset: i32) {
+    %bound = arith.constant 0 : i32
+    // CHECK: %[[DESC:.*]] = rocdl.make.buffer.rsrc
+    %desc = amdg.make_buffer_desc %base, %bound : !tt.ptr<i64> -> !amdg.buffer_desc<i64>
+    // CHECK: llvm.mul
+    // CHECK: llvm.select
+    // CHECK-NOT: rocdl.make.buffer.rsrc
+    // CHECK: rocdl.raw.ptr.buffer.atomic.cmpswap {{.*}}%[[DESC]]
+    %old = amdg.buffer_atomic_cas relaxed, gpu, %cmp, %value, %desc[%offset] soffset = %soffset : i32 : !amdg.buffer_desc<i64> -> tensor<16xi64, #blocked>
+    tt.return
+  }
+}

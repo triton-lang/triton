@@ -1600,10 +1600,16 @@ LogicalResult BufferAtomicStoreOp::verify() {
 }
 
 LogicalResult BufferAtomicRMWOp::verify() {
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
 LogicalResult BufferAtomicCASOp::verify() {
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
