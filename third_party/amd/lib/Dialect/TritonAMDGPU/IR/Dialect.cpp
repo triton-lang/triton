@@ -297,7 +297,9 @@ LogicalResult verifyTDMLayoutConsistency(Operation *op,
           isa<AsyncTDMCopyGlobalToLocalOp, AsyncTDMFusedCopyGlobalToLocalOp>(
               op);
       bool sameCTA = descPad.getCGALayout() == allocPad.getCGALayout();
-      if (isLoad && numDropped > 0) {
+      // Compare CTA distributions after dropping the descriptor's leading
+      // unit dimensions, so rank-reducing accesses compare like ranks.
+      if (numDropped > 0) {
         auto allocLL = allocPad.getLinearComponent();
         auto kBlock = StringAttr::get(op->getContext(), "block");
         sameCTA =
@@ -1945,13 +1947,6 @@ LogicalResult AsyncTDMFusedCopyGlobalToLocalOp::verify() {
 LogicalResult AsyncTDMCopyLocalToGlobalOp::verify() {
   auto tensorDescTy = getDesc().getType();
   auto smemTy = getSrc().getType();
-
-  // Until store lowering handles rank differences, require one shared memory
-  // dimension per descriptor dimension.
-  if (tensorDescTy.getShape().size() != smemTy.getRank())
-    return emitOpError("TDM store requires the tensor descriptor and shared "
-                       "memory source to have the same rank; rank-reducing "
-                       "stores are not yet supported");
 
   if (failed(verifyTDMAccessPolicy(getOperation(), getCache(),
                                    getCachePolicyAttr(), getScope(),

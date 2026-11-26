@@ -1051,22 +1051,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #shared_3d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
-#shared_2d = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #col_major = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  // The subview matches the descriptor after dropping its leading unit
-  // dimension, but store lowering does not yet support the rank difference.
-  tt.func public @tdm_store_rank_reducing_subview(
-    %tensorDesc: !tt.tensordesc<1x64x64xbf16, #shared_3d>
-  ) {
-    %alloc = ttg.local_alloc : () -> !ttg.memdesc<128x64xbf16, #shared_2d, #smem, mutable>
-    %subview = ttg.memdesc_subslice %alloc[64, 0] : !ttg.memdesc<128x64xbf16, #shared_2d, #smem, mutable> -> !ttg.memdesc<64x64xbf16, #shared_2d, #smem, mutable, 128x64>
-    // expected-error @+1 {{TDM store requires the tensor descriptor and shared memory source to have the same rank; rank-reducing stores are not yet supported}}
-    %token = amdg.async_tdm_copy_local_to_global %tensorDesc from %subview : !ttg.memdesc<64x64xbf16, #shared_2d, #smem, mutable, 128x64> -> !tt.tensordesc<1x64x64xbf16, #shared_3d>
-    tt.return
-  }
-
   // Slicing a middle dimension leaves gaps between groups of rows.
   tt.func public @tdm_load_middle_dim_subview(
     %tensorDesc: !tt.tensordesc<4x8x64xbf16, #shared_3d>,
@@ -1452,18 +1439,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
-#smem = #ttg.shared_memory
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @tdm_store_rank_reduction(%desc: !tt.tensordesc<1x64xf16>, %buf: !ttg.memdesc<64xf16, #shared, #smem, mutable>) {
-    // expected-error @+1 {{TDM store requires the tensor descriptor and shared memory source to have the same rank; rank-reducing stores are not yet supported}}
-    amdg.async_tdm_copy_local_to_global %desc from %buf : !ttg.memdesc<64xf16, #shared, #smem, mutable> -> !tt.tensordesc<1x64xf16>
-    tt.return
-  }
-}
-
-// -----
-
 #inner = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #shared = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 2, partitionDim = 0, partitionLayout = #inner}>
 #smem = #ttg.shared_memory
@@ -1652,6 +1627,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func @tdm_store_padded_column_subview(%desc: !tt.tensordesc<64x32xf16, #desc>, %src: !ttg.memdesc<64x32xf16, #alloc, #smem, mutable, 64x64>) {
     // expected-error @+1 {{is inconsistent with the shared memory allocation layout}}
     amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<64x32xf16, #alloc, #smem, mutable, 64x64> -> !tt.tensordesc<64x32xf16, #desc>
+    tt.return
+  }
+}
+
+// -----
+
+// Rank-reducing stores may only drop leading unit dimensions of the block.
+#desc = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_store_rank_reducing_non_unit_dim(%desc: !tt.tensordesc<2x64x64xbf16, #desc>, %src: !ttg.memdesc<64x64xbf16, #shared, #smem, mutable>) {
+    // expected-error @+1 {{TDM buffer shape must match the descriptor block shape, up to leading unit dimensions}}
+    amdg.async_tdm_copy_local_to_global %desc from %src : !ttg.memdesc<64x64xbf16, #shared, #smem, mutable> -> !tt.tensordesc<2x64x64xbf16, #desc>
     tt.return
   }
 }

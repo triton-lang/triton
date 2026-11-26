@@ -3787,6 +3787,33 @@ def test_tdm_load_slice(CGA_LAYOUT, ROW_START, ROWS, COL_START, COLS):
     assert torch.equal(loaded.cpu(), expected)
 
 
+@gluon.jit
+def tdm_store_rank_reducing_kernel(x_ptr, out_ptr, SHARED_LAYOUT: ttgl.constexpr, DESC_LAYOUT: ttgl.constexpr):
+    batch = ttgl.program_id(0)
+    reg_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
+    offs_m = ttgl.arange(0, 64, layout=ttgl.SliceLayout(1, reg_layout))[:, None]
+    offs_n = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, reg_layout))[None, :]
+
+    smem = ttgl.allocate_shared_memory(ttgl.int16, [64, 64], SHARED_LAYOUT)
+    smem.store(ttgl.load(x_ptr + batch * 64 * 64 + offs_m * 64 + offs_n))
+
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=out_ptr, shape=(4, 64, 64), strides=(64 * 64, 64, 1),
+                                                     block_shape=(1, 64, 64), layout=DESC_LAYOUT)
+    ttgl.amd.cdna5.tdm.async_store(desc, [batch, 0, 0], smem)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+def test_tdm_store_rank_reducing():
+    shared_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    desc_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[2, 1, 0])
+    x = torch.arange(4 * 64 * 64, dtype=torch.int16).reshape(4, 64, 64)
+    out = torch.zeros_like(x).cuda()
+    tdm_store_rank_reducing_kernel[(4, )](x.cuda(), out, SHARED_LAYOUT=shared_layout, DESC_LAYOUT=desc_layout,
+                                          num_warps=4)
+    assert torch.equal(out.cpu(), x)
+
+
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("XBLOCK", [128])
 def test_ws_store_wait_load(XBLOCK):
