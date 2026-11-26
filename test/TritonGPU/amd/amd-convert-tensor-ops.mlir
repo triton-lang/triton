@@ -1,3 +1,6 @@
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-lower-global-reduce | FileCheck %s --check-prefix=SYNC
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-expand-tdm-reduce --tritonamdgpu-convert-tensor-ops --convert-scf-to-cf --tritonamdgpu-update-async-wait-count="gfx-arch=gfx1250" --tritonamdgpu-lower-global-reduce | FileCheck %s --check-prefix=ORDER
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-expand-tdm-reduce --tritonamdgpu-convert-tensor-ops --canonicalize --cse | FileCheck %s --check-prefix=REDUCE
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-tensor-ops | FileCheck %s
 
 // Gather i32: indices arrive with the NVIDIA-oriented slice encoding (#nv_slice)
@@ -149,6 +152,70 @@ module attributes {"ttg.num-ctas" = 4 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %12 = arith.truncf %11 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
     %13 = ttg.convert_layout %12 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked2>
     tt.descriptor_store %6[%2, %3], %13 : !tt.tensordesc<128x128xf16, #shared2>, tensor<128x128xf16, #blocked2>
+    tt.return
+  }
+}
+
+// -----
+
+// ORDER-LABEL: @reduce_keeps_tdm
+// ORDER: amdg.async_tdm_copy_global_to_local
+// ORDER: amdg.async_tdm_intrinsic_wait
+// ORDER: ttg.barrier none
+// ORDER-NEXT: %{{.*}} = tt.atomic_rmw fadd, release, gpu
+
+// ORDER-NOT: ttg.barrier
+// ORDER: ttg.barrier global_write
+// ORDER: amdg.async_tdm_copy_local_to_global
+// ORDER-NOT: amdg.global_reduce
+// ORDER: tt.atomic_rmw fadd, relaxed, gpu
+// ORDER-NEXT: tt.return
+// REDUCE-LABEL: @reduce_keeps_tdm
+// REDUCE: amdg.async_tdm_copy_global_to_local
+// REDUCE: amdg.global_reduce fadd
+// REDUCE: amdg.async_tdm_copy_local_to_global
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [8, 32]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reduce_keeps_tdm(%desc: !tt.tensordesc<8x32xf32, #shared>, %ptr: tensor<8x32x!tt.ptr<f32>, #blocked>) {
+    %zero = arith.constant 0 : i32
+    %tile = tt.descriptor_load %desc[%zero, %zero] : !tt.tensordesc<8x32xf32, #shared> -> tensor<8x32xf32, #blocked>
+    tt.descriptor_reduce add, %desc[%zero, %zero], %tile : !tt.tensordesc<8x32xf32, #shared>, tensor<8x32xf32, #blocked>
+    tt.descriptor_store %desc[%zero, %zero], %tile : !tt.tensordesc<8x32xf32, #shared>, tensor<8x32xf32, #blocked>
+    %ordinary = tt.atomic_rmw fadd, relaxed, gpu, %ptr, %tile : (tensor<8x32x!tt.ptr<f32>, #blocked>, tensor<8x32xf32, #blocked>) -> tensor<8x32xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// SYNC-LABEL: @reduce_ws_participants
+// SYNC: amdg.async_tdm_intrinsic_wait
+// SYNC-NEXT: ttg.barrier none
+// SYNC-NEXT: ttg.warp_specialize
+// SYNC: partition0
+// SYNC: amdg.async_tdm_copy_global_to_local
+// SYNC-NEXT: %{{.*}} = amdg.async_tdm_intrinsic_wait {count = 0
+// SYNC-NEXT: ttg.barrier none
+// SYNC-NEXT: %{{.*}} = tt.atomic_rmw
+// SYNC-NEXT: ttg.barrier global_write
+// SYNC-NEXT: %{{.*}} = amdg.async_tdm_intrinsic_wait {count = 0
+// SYNC-NEXT: ttg.barrier none
+// SYNC-NEXT: ttg.warp_return
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.padded_shared<[32:+4] {order = [1, 0], shape = [8, 32]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @reduce_ws_participants(%desc: !tt.tensordesc<8x32xf32, #shared>, %mem: !ttg.memdesc<8x32xf32, #shared, #smem, mutable>, %ptr: tensor<8x32x!tt.ptr<f32>, #blocked>, %tile: tensor<8x32xf32, #blocked>) {
+    ttg.warp_specialize(%desc, %mem, %ptr, %tile) attributes {warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0(%d: !tt.tensordesc<8x32xf32, #shared>, %m: !ttg.memdesc<8x32xf32, #shared, #smem, mutable>, %p: tensor<8x32x!tt.ptr<f32>, #blocked>, %v: tensor<8x32xf32, #blocked>) num_warps(4) {
+      %load = amdg.async_tdm_copy_global_to_local %d into %m : !tt.tensordesc<8x32xf32, #shared> -> !ttg.memdesc<8x32xf32, #shared, #smem, mutable>
+      amdg.global_reduce fadd, %p, %v : tensor<8x32x!tt.ptr<f32>, #blocked>, tensor<8x32xf32, #blocked>
+      ttg.warp_return
+    } : (!tt.tensordesc<8x32xf32, #shared>, !ttg.memdesc<8x32xf32, #shared, #smem, mutable>, tensor<8x32x!tt.ptr<f32>, #blocked>, tensor<8x32xf32, #blocked>) -> ()
     tt.return
   }
 }

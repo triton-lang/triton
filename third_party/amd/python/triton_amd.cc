@@ -137,6 +137,10 @@ void init_triton_amd_passes_ttgpuir(py::module_ &m) {
                      mlir::createTritonAMDGPUOptimizeDescriptorEncoding);
   ADD_PASS_WRAPPER_0("add_convert_to_tensor_ops",
                      mlir::createTritonAMDGPUConvertToTensorOps);
+  ADD_PASS_WRAPPER_0("add_expand_tdm_reduce",
+                     mlir::createTritonAMDGPUExpandTDMReduce);
+  ADD_PASS_WRAPPER_0("add_lower_global_reduce",
+                     mlir::createTritonAMDGPULowerGlobalReduce);
   mlir::registerConSanAMDHooks();
   m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
     pm.addNestedPass<mlir::triton::FuncOp>(

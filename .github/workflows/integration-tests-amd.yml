@@ -404,8 +404,6 @@ jobs:
           k_core="test_load_store_same_ptr or test_atomic_cas"  # expensive
           k_core+=" or (test_scan2d and shape365) or (test_scan2d and shape869)"
 
-          k_desc="tensor_descriptor_reduce"
-
           k_matmul="test_batched_mxfp"  # expensive
           k_matmul+=" or (test_simple_matmul and False-4-1-512-64-32-2-float64-float64)"  # expensive
           k_matmul+=" or (test_simple_matmul and False-4-1-64-512-32-2-float64-float64)"  # expensive
@@ -427,7 +425,7 @@ jobs:
             python/test/unit/test_debug.py \
             python/test/unit/runtime
           run_rocjitsu_pytest 12 2 \
-            -k "not ($k_core or $k_desc)" -p no:forked \
+            -k "not ($k_core)" -p no:forked \
             python/test/unit/language/test_core.py \
             python/test/unit/language/test_tensor_descriptor.py \
             python/triton_kernels/tests/test_topk.py::test_topk
