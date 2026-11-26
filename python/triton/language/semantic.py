@@ -249,19 +249,17 @@ class TritonSemantic(Generic[TensorTy]):
         # Their temporaries should not be described as the assignment target.
         loc = self.builder.get_loc()
         self.builder.set_loc(loc.without_name())
-        try:
-            lhs = self.cast(lhs, tl.int64)
-            rhs = self.cast(rhs, tl.int64)
-            ret = binary_op(lhs, rhs, False)
-            max_value = lhs_sca_ty.get_int_max_value()
-            max_value = self.scalar_constant(max_value, tl.int64)
-            min_value = lhs_sca_ty.get_int_min_value()
-            min_value = self.scalar_constant(min_value, tl.int64)
-            cond = self.and_(self.less_equal(ret, max_value), self.greater_equal(ret, min_value))
-            msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
-            self.device_assert(cond, msg, None)
-        finally:
-            self.builder.set_loc(loc)
+        lhs = self.cast(lhs, tl.int64)
+        rhs = self.cast(rhs, tl.int64)
+        ret = binary_op(lhs, rhs, False)
+        max_value = lhs_sca_ty.get_int_max_value()
+        max_value = self.scalar_constant(max_value, tl.int64)
+        min_value = lhs_sca_ty.get_int_min_value()
+        min_value = self.scalar_constant(min_value, tl.int64)
+        cond = self.and_(self.less_equal(ret, max_value), self.greater_equal(ret, min_value))
+        msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
+        self.device_assert(cond, msg, None)
+        self.builder.set_loc(loc)
 
     def add(self, input: TensorTy | numbers.Number, other: TensorTy | numbers.Number,
             sanitize_overflow: bool) -> TensorTy:
