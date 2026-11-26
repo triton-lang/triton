@@ -691,13 +691,27 @@ struct TritonAMDGPUUpdateAsyncWaitCountPass
       auto v = [&]() -> int {
         using namespace triton::amdgpu;
         if (auto copyOp = dyn_cast<AsyncTDMCopyGlobalToLocalOp>(op)) {
-          auto smemTy = copyOp.getResult().getType();
           int numWarps = ttg::lookupNumWarps(op);
+          // Count what the lowering emits: it distributes the copy over the
+          // descriptor's per-CTA block shape and shared layout. These differ
+          // from the destination's when it is one piece of a partitioned
+          // buffer (plain descriptor layout). Descriptors without a layout
+          // fall back to the destination's.
           // warp_used_hint changes descriptor layout, not the number of static
           // TDM instructions. Count the sequence sized by numWarps.
+          auto descTy = copyOp.getDesc().getType();
+          Attribute encoding = descTy.getSharedLayout();
+          SmallVector<int64_t> shape;
+          if (encoding) {
+            shape = ttg::getShapePerCTA(encoding, descTy.getShape());
+          } else {
+            auto smemTy = copyOp.getResult().getType();
+            encoding = smemTy.getEncoding();
+            shape = llvm::to_vector(smemTy.getShape());
+          }
           auto [_, numInstr] =
               mlir::LLVM::AMD::distributeTDMWarpsAlignToPartition(
-                  smemTy.getShape(), numWarps, smemTy.getEncoding());
+                  shape, numWarps, encoding);
           return numInstr;
         } else if (isa<AsyncTDMFusedCopyGlobalToLocalOp>(op)) {
           return 1;

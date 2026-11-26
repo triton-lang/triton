@@ -2080,6 +2080,50 @@ def test_runtime_partitioned_tdm_store(BLOCK_M, BLOCK_N, NUM_PARTITIONS, NUM_GRO
 
 
 @gluon.jit
+def partitioned_piece_tdm_load_kernel(src, dst, INDEX: ttgl.constexpr, LAYOUT: ttgl.constexpr,
+                                      PIECE_LAYOUT: ttgl.constexpr, HINT: ttgl.constexpr):
+    blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 1, 16], [1, 2, 16], [1, 4, 1], [2, 1, 0])
+    i0 = ttgl.arange(0, 2, layout=ttgl.SliceLayout(1, ttgl.SliceLayout(2, blocked)))[:, None, None]
+    i1 = ttgl.arange(0, 64, layout=ttgl.SliceLayout(0, ttgl.SliceLayout(2, blocked)))[None, :, None]
+    i2 = ttgl.arange(0, 256, layout=ttgl.SliceLayout(0, ttgl.SliceLayout(1, blocked)))[None, None, :]
+    offs = i0 * (64 * 256) + i1 * 256 + i2
+    buffer = ttgl.allocate_shared_memory(ttgl.uint8, [2, 64, 256], LAYOUT)
+    desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(src, shape=(1, 64, 256), strides=(64 * 256, 256, 1),
+                                                     block_shape=(1, 64, 256), layout=PIECE_LAYOUT)
+    # Fill with a sentinel, TDM-load one piece, read the whole buffer back.
+    buffer.store(ttgl.full([2, 64, 256], 0xEE, ttgl.uint8, blocked))
+    ttgl.barrier()
+    ttgl.amd.cdna5.tdm.async_load(desc, [0, 0, 0], buffer.slice(INDEX, 1, 0), warp_used_hint=HINT)
+    ttgl.amd.cdna5.tdm.async_wait(0)
+    ttgl.barrier()
+    ttgl.store(dst + offs, buffer.load(blocked))
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("index", [0, 1])
+@pytest.mark.parametrize("hint", [None, 1])
+@pytest.mark.parametrize("inner", ["swizzled", "padded"])
+def test_runtime_partitioned_piece_tdm_load(index, hint, inner):
+    """A TDM load into one piece of a partitioned buffer (buffer.slice(index, 1, 0)) fills that piece only.
+
+    The descriptor uses the piece's inner layout; hint=1 lets one warp issue the load; the padded inner layout
+    checks that TDM writes the padding the readers expect.
+    """
+    if inner == "padded":
+        piece_layout = ttgl.PaddedSharedLayout.with_identity_for([[128, 4]], [1, 64, 256], [2, 1, 0])
+    else:
+        piece_layout = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[2, 1, 0])
+    layout = PartitionedSharedLayout(2, 1, 0, piece_layout)
+    torch.manual_seed(0)
+    src = torch.randint(0, 256, (64, 256), dtype=torch.uint8)
+    dst = torch.zeros((2, 64, 256), dtype=torch.uint8, device="cuda")
+    partitioned_piece_tdm_load_kernel[(1, )](src.cuda(), dst, index, layout, piece_layout, hint, num_warps=4)
+    expected = torch.full((2, 64, 256), 0xEE, dtype=torch.uint8)
+    expected[index] = src
+    assert torch.equal(dst.cpu(), expected)
+
+
+@gluon.jit
 def partitioned_local_load_kernel(src_ptr, dst_ptr, M: ttgl.constexpr, N: ttgl.constexpr, shared_layout: ttgl.constexpr,
                                   load_layout: ttgl.constexpr):
     blocked: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [16, 2], [4, 1], [1, 0])

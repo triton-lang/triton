@@ -1008,3 +1008,33 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// TDM loads into one piece of a partitioned buffer are counted like their lowering: one instruction each (descriptor
+// shape and plain layout), not the partitioned destination's distribution.
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 1, 0]}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #shared}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tdm_waitcnt_one_piece_of_partitioned
+  tt.func public @tdm_waitcnt_one_piece_of_partitioned(%desc: !tt.tensordesc<1x64x256xui8, #shared>, %desc2: !tt.tensordesc<2x64x256xui8, #shared>) {
+    %lds = ttg.local_alloc : () -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable>
+    %p0 = ttg.memdesc_subslice %lds[0, 0, 0] : !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    %p1 = ttg.memdesc_subslice %lds[1, 0, 0] : !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %p0 : !tt.tensordesc<1x64x256xui8, #shared> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    %1 = amdg.async_tdm_copy_global_to_local %desc into %p1 : !tt.tensordesc<1x64x256xui8, #shared> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}count = 1
+    %w0 = amdg.async_tdm_wait %0 {num = 0 : i32}
+
+    // A two-row piece of a four-row buffer: still one instruction per load.
+    %big = ttg.local_alloc : () -> !ttg.memdesc<4x64x256xi8, #partitioned, #smem, mutable>
+    %q0 = ttg.memdesc_subslice %big[0, 0, 0] : !ttg.memdesc<4x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    %q1 = ttg.memdesc_subslice %big[2, 0, 0] : !ttg.memdesc<4x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    %2 = amdg.async_tdm_copy_global_to_local %desc2 into %q0 : !tt.tensordesc<2x64x256xui8, #shared> -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    %3 = amdg.async_tdm_copy_global_to_local %desc2 into %q1 : !tt.tensordesc<2x64x256xui8, #shared> -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable, 4x64x256>
+    // CHECK: amdg.async_tdm_intrinsic_wait {{.*}}count = 1
+    %w1 = amdg.async_tdm_wait %2 {num = 0 : i32}
+    tt.return
+  }
+}
