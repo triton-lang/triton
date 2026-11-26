@@ -5,6 +5,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -80,6 +81,8 @@ namespace {
 struct CanonicalizeLLVMIR
     : public mlir::triton::gpu::impl::CanonicalizeLLVMIRBase<
           CanonicalizeLLVMIR> {
+  using CanonicalizeLLVMIRBase::CanonicalizeLLVMIRBase;
+
   void runOnOperation() override {
     LLVM::LLVMFuncOp func = getOperation();
     MLIRContext *context = func.getContext();
@@ -101,7 +104,10 @@ struct CanonicalizeLLVMIR
     }
     triton::gpu::WarpIdOp::getCanonicalizationPatterns(patterns, context);
 
-    (void)applyPatternsGreedily(func, std::move(patterns));
+    GreedyRewriteConfig config;
+    if (conSan)
+      config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Normal);
+    (void)applyPatternsGreedily(func, std::move(patterns), config);
   }
 };
 } // namespace

@@ -168,6 +168,20 @@ __triton_gsan_store_tensor_desc(void *state, const void *desc,
     gsan_profile::descriptor(state, desc, coords, rank, shape, bytes, warp,
                              warps, gsan_profile::kWrite);
 }
+extern "C" GSAN_DEVICE void __triton_gsan_load_im2col_tensor_desc(
+    void *state, const void *desc, const int *coords, int rank,
+    const gsan::int16_t *shape, const gsan::int16_t *offsets, int bytes,
+    int pred, int warp, int warps, const char *, unsigned) {
+  if (!pred)
+    return;
+  auto handleRow = [&](gsan::uintptr_t address, int rowBytes) {
+    gsan_profile::recordRange(state, address, rowBytes, gsan_profile::kRead,
+                              /*atomicBytes=*/0, /*distribute=*/true);
+  };
+  gsan::forEachIm2ColRow(desc, coords, rank, shape, offsets, bytes, warp, warps,
+                         handleRow);
+}
+
 extern "C" GSAN_DEVICE void __triton_gsan_load_indexed_tensor_desc(
     void *state, const void *desc, const int *indices, int count, int y,
     int columns, int bytes, int pred, const char *, unsigned) {

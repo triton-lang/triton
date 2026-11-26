@@ -461,9 +461,11 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
     case LLVM::AtomicBinOp::fadd:
       return b.fadd(res, v);
     case LLVM::AtomicBinOp::max:
+      return b.smax(v, res);
     case LLVM::AtomicBinOp::umax:
       return b.umax(v, res);
     case LLVM::AtomicBinOp::min:
+      return b.smin(v, res);
     case LLVM::AtomicBinOp::umin:
       return b.umin(v, res);
     case LLVM::AtomicBinOp::xchg:

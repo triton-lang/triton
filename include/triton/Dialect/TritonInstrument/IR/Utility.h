@@ -8,6 +8,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonInstrument/IR/ConSanConstants.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <array>
@@ -84,6 +85,8 @@ inline int estimateConSanCaptureCount(int numActiveMemTypes, bool hasMBarriers,
          numCommitKinds;
 }
 
+bool tracksLoadSeparately(Operation *op);
+
 void createAssertInThread(ImplicitLocOpBuilder &b, Value condition,
                           StringRef message);
 // Strides are in elements; an empty list uses contiguous column-major storage.
@@ -143,6 +146,14 @@ struct BufferStateCandidates {
   SmallVector<BufferStateCandidate, 2> cases;
   bool unknown = false;
 };
+
+struct SharedMemoryAccess {
+  Value buffer;
+  LinearLayout conversion;
+  uint32_t multicastMask;
+};
+
+std::optional<SharedMemoryAccess> getSharedMemoryAccess(Operation *op);
 
 struct BufferAccessRegion {
   uint32_t candidateCTAs;
@@ -208,6 +219,8 @@ struct AuxDataMap {
   //   C = CTAs in the cluster.
   //   Cbar, Cbuf, Cthr, Cmask = CTA dimensions qualifying barriers, buffers,
   //       threads, and thread masks respectively. Each has extent C.
+  //   S = optional slot for ordinary writes (0) and async loads (1), used
+  //       for shared memory when tracking cluster loads.
   //   B = tracked buffers for one memory type, power-of-two padded.
   //   K = tracked mbarriers and virtual cluster rendezvous slots,
   //       power-of-two padded.
@@ -234,12 +247,12 @@ struct AuxDataMap {
   // current arrival count, and bits [41..61] hold a signed tx-count.
   RegionToValueMap barrierStates;
 
-  // scratch, <Cbuf x B x Cmask x iV>
+  // scratch, <Cbuf x B x Cmask [x S] x iV>
   // Per-memory-type write frontier. Bit i means logical ConSan thread i can see
   // the latest write to the buffer row.
   RegionToValueMap writeVisibility[numMemTypes];
 
-  // scratch, <Cbuf x B x Cbar x K x F x i8>
+  // scratch, <Cbuf x B x Cbar x K [x S] x F x i8>
   // Per-memory-type buffer/barrier/phase map for writes that a barrier tracks.
   RegionToValueMap writeTracking[numMemTypes];
 
@@ -337,7 +350,7 @@ struct AuxDataMap {
   int getClusterBarrierSlot(Operation *op) const;
 
   // Resolve a registered access to its candidate index and shared state mask.
-  std::pair<unsigned, const llvm::SmallBitVector &>
+  std::pair<unsigned, llvm::SmallBitVector>
   getBufferAccessState(const BufferAccessRegion &access,
                        const BufferStateCandidates &candidates) const;
 

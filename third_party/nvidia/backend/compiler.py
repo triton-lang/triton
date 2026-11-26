@@ -422,6 +422,7 @@ class CUDABackend(BaseBackend):
     def make_llir(self, src, metadata, options, capability):
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
+        consan = is_enabled(options, "consan")
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
@@ -432,11 +433,11 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_global_sanitizer(pm)
 
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-        passes.ttgpuir.add_allocate_warp_groups(pm, is_enabled(options, "consan"))
-        if not any(is_enabled(options, mode) for mode in ("gsan", "consan")):
+        passes.ttgpuir.add_allocate_warp_groups(pm, consan)
+        if not consan and not is_enabled(options, "gsan"):
             passes.ttgpuir.add_optimize_thread_regions(pm)
         passes.convert.add_scf_to_cf(pm)
-        if is_enabled(options, "consan"):
+        if consan:
             passes.ttgpuir.add_prepare_consan_captures(pm, "nvidia")
         passes.gluon.add_inliner(pm)
         nvidia.passes.ttgpuir.add_allocate_shared_memory_nv(pm, capability, ptx_version)
@@ -445,20 +446,20 @@ class CUDABackend(BaseBackend):
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         nvidia.passes.ttnvgpuir.add_proxy_fence_insertion(pm, capability)
         nvidia.passes.ttgpuir.add_membar(pm, capability, ptx_version)
-        if is_enabled(options, "consan"):
+        if consan:
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_cluster_barrier_mbar_allocator(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
-        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
+        nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version, consan)
         nvidia.passes.ttnvgpuir.add_initialize_ws_cluster_barriers(pm, capability, ptx_version)
-        passes.ttgpuir.add_canonicalize_llvm_ir(pm)
+        passes.ttgpuir.add_canonicalize_llvm_ir(pm, consan)
         passes.common.add_cse(pm)
         # Lower Proton segment values before warp specialization captures partition operands.
         instrument(pm, point="llvmir-to-llvm", context=mod.context)
         nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
-        nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
+        nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm, consan)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -519,7 +520,7 @@ class CUDABackend(BaseBackend):
             expand_masked_div_rem=True,
             nvptx_compute_capability=0 if use_slp_vectorizer else capability,
             enable_nvptx_tti=True,
-            merge_nvptx_assert_blocks=is_enabled(options, "consan"),
+            merge_nvptx_assert_blocks=consan,
         )
 
         # Get some metadata

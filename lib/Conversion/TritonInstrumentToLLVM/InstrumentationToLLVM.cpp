@@ -365,6 +365,52 @@ private:
   const TargetInfoBase &targetInfo;
 };
 
+struct GatherScatterCTAMasksOpConversion
+    : public ConvertOpToLLVMPattern<tti::ExperimentalGatherScatterCTAMasksOp> {
+  GatherScatterCTAMasksOpConversion(const LLVMTypeConverter &converter,
+                                    const TargetInfoBase &targetInfo)
+      : ConvertOpToLLVMPattern(converter), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(tti::ExperimentalGatherScatterCTAMasksOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    TritonLLVMOpBuilder b(loc, rewriter);
+    auto layout =
+        ttg::toLinearLayout(op.getIndices().getType())
+            .removeZeroBasesAlongDim(rewriter.getStringAttr("register"));
+    auto indices =
+        unpackUniqueTensorElements(loc, adaptor.getIndices(), rewriter);
+    auto addresses =
+        computeBlockLocalOffsets(loc, op.getMemdesc(), layout, indices,
+                                 op.getAxis(), rewriter, targetInfo);
+    SmallVector<Value> mask;
+    if (adaptor.getMask())
+      mask = unpackUniqueTensorElements(loc, adaptor.getMask(), rewriter);
+
+    Value zero = b.i32_val(0);
+    Value one = b.i32_val(1);
+    Value currentCTA = targetInfo.getClusterCTAId(rewriter, loc);
+    Value laneTargets = zero;
+    for (auto [i, address] : llvm::enumerate(addresses)) {
+      Value target = address.second ? address.second : currentCTA;
+      Value bit = b.shl(one, target);
+      if (!mask.empty())
+        bit = b.select(mask[i], bit, zero);
+      laneTargets = b.or_(laneTargets, bit);
+    }
+
+    rewriter.replaceOp(op, packUniqueTensorElements(loc, getTypeConverter(),
+                                                    {laneTargets}, rewriter,
+                                                    op.getType()));
+    return success();
+  }
+
+private:
+  const TargetInfoBase &targetInfo;
+};
+
 static SmallVector<std::pair<Value, Value>>
 computeLocalOffsetsWithLogicalOffsets(Location loc, ttg::MemDescType memDescTy,
                                       RankedTensorType regTy,
@@ -470,5 +516,6 @@ void mlir::triton::populateInstrumentationToLLVMPatterns(
   patterns.add<MemDescToI32OpConversion>(typeConverter);
   patterns.add<MemoryOffsetToI32OpConversion>(typeConverter);
   patterns.add<ClusterCTAIdOpConversion>(typeConverter, targetInfo);
+  patterns.add<GatherScatterCTAMasksOpConversion>(typeConverter, targetInfo);
   patterns.add<LocalGatherOpConversion>(typeConverter, targetInfo);
 }

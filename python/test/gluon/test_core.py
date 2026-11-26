@@ -81,6 +81,198 @@ def test_inline_asm_shared_amd_compilation(elementwise):
     assert "ds_read_b32" in compiled.asm["amdgcn"]
 
 
+HOPPER_TARGET = GPUTarget("cuda", 90, 32)
+BLACKWELL_TARGET = GPUTarget("cuda", 100, 32)
+
+
+@pytest.mark.parametrize("target,mode", [(HOPPER_TARGET, "scalar"), (HOPPER_TARGET, "broadcast"),
+                                         (BLACKWELL_TARGET, "per_range")])
+def test_bulk_prefetch_codegen(target, mode):
+
+    @gluon.jit
+    def kernel(src, num_bytes, active, MODE: ttgl.constexpr):
+        if MODE == "scalar":
+            async_copy.wait_group(0)
+            hopper.bulk.prefetch(src, 16384)
+        else:
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+            idx = ttgl.arange(0, 256, layout=layout)
+            sizes = ttgl.where(idx + 1 == active, num_bytes, 16384) if MODE == "per_range" else num_bytes
+            hopper.bulk.prefetch(src + idx * 16384, sizes, pred=idx < active)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8", "num_bytes": "u32", "active": "i32"}, {"MODE": mode})
+    ptx = triton.compile(source, target=target).asm["ptx"]
+    # Two distinct ranges per thread in the vector case, one range per program in the scalar case.
+    assert len(re.findall(r"@%?\w+\s+cp\.async\.bulk\.prefetch\.L2\.global\s", ptx)) == (1 if mode == "scalar" else 2)
+    if mode == "scalar":
+        assert ptx.index("cp.async.wait_group") < ptx.index("cp.async.bulk.prefetch.L2.global")
+        assert not re.search(r"\bbar(?:rier)?\.sync\b", ptx)
+
+
+def test_bulk_prefetch_noinline_consan():
+
+    @gluon.jit(noinline=True)
+    def prefetch(src):
+        hopper.bulk.prefetch(src, 64)
+
+    @gluon.jit
+    def kernel(src):
+        prefetch(src)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8"}, {})
+    compiled = triton.compile(source, target=HOPPER_TARGET, options={"instrumentation_mode": "consan"})
+    assert "cp.async.bulk.prefetch.L2.global" in compiled.asm["ptx"]
+
+
+@pytest.mark.parametrize("num_bytes", [-16, 15, 1 << 32])
+def test_bulk_prefetch_invalid_byte_count(num_bytes):
+
+    @gluon.jit
+    def kernel(src, NUM_BYTES: ttgl.constexpr):
+        hopper.bulk.prefetch(src, NUM_BYTES)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*u8"}, {"NUM_BYTES": num_bytes})
+    with pytest.raises(CompilationError, match="multiple of 16"):
+        triton.compile(source, target=HOPPER_TARGET)
+
+
+@gluon.jit
+def _bulk_codegen_kernel(src, out, pred):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+    bar = hopper.mbarrier.allocate_mbarrier()
+    hopper.mbarrier.init(bar, count=1)
+    hopper.mbarrier.expect(bar, 10240, pred=pred)
+    hopper.bulk.async_load(smem, src, 2560, bar, pred=pred)
+    hopper.mbarrier.wait(bar, phase=0, pred=pred)
+    offsets = ttgl.arange(0, 4096, layout)
+    ttgl.store(out + offsets, smem.load(layout), (offsets < 2560) & pred)
+    hopper.mbarrier.invalidate(bar)
+
+
+@pytest.mark.parametrize("capability", [90, 100, 103])
+def test_bulk_async_load_codegen(capability):
+    source = gluon.GluonASTSource(_bulk_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    compiled = triton.compile(source, target=GPUTarget("cuda", capability, 32))
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes") == 1
+    assert re.search(r"@%?\w+ cp.async.bulk.shared::cta.global.mbarrier::complete_tx::bytes.*(0x2800|10240)", ptx)
+    assert "mbarrier.try_wait.parity" in ptx
+
+
+@pytest.mark.parametrize("capability,ptx_version,message", [
+    (80, 86, "compute capability 9.0"),
+    (90, 85, "PTX 8.6"),
+])
+def test_bulk_async_load_unsupported_target(capability, ptx_version, message, capfd):
+    source = gluon.GluonASTSource(_bulk_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    assert message in capfd.readouterr().err
+
+
+def test_bulk_async_load_requires_compile_time_count():
+
+    @gluon.jit
+    def kernel(src, num_elements):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.bulk.async_load(smem, src, num_elements, bar)
+
+    source = gluon.GluonASTSource(kernel, {"src": "*i32", "num_elements": "i32"}, {})
+    with pytest.raises(CompilationError, match="num_elements must be a compile-time integer"):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32))
+
+
+@pytest.mark.parametrize("cga,multicast", [([[1]], False), ([[0]], True), ([[1], [0]], True), ([[0], [1]], False)])
+@pytest.mark.parametrize("num_elements", [128, 256])
+@pytest.mark.parametrize("pred", [False, True])
+def test_bulk_async_load_cluster_count(cga, multicast, num_elements, pred):
+
+    @gluon.jit
+    def kernel(src, SHARED: ttgl.constexpr, NUM_ELEMENTS: ttgl.constexpr, PRED: ttgl.constexpr,
+               MULTICAST: ttgl.constexpr):
+        allocation = ttgl.allocate_shared_memory(ttgl.int32, [2, 256], SHARED)
+        smem = allocation.index(1)
+        bar = hopper.mbarrier.allocate_mbarrier()
+        hopper.mbarrier.init(bar, count=1)
+        hopper.mbarrier.expect(bar, NUM_ELEMENTS * smem.nbytes_per_cta // smem.numel, pred=PRED)
+        hopper.bulk.async_load(smem, src, NUM_ELEMENTS, bar, pred=PRED, multicast=MULTICAST)
+        hopper.mbarrier.wait(bar, phase=0, pred=PRED)
+        hopper.mbarrier.invalidate(bar)
+
+    shared = ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)
+    source = gluon.GluonASTSource(
+        kernel, {"src": "*i32"}, {"SHARED": shared, "NUM_ELEMENTS": num_elements, "PRED": pred, "MULTICAST": multicast})
+    target = GPUTarget("cuda", 90, 32)
+    options = {"num_ctas": 2**len(cga)}
+    if num_elements != 256:
+        with pytest.raises(CompilationError, match="num_elements must equal smem.numel for multi-CTA copies"):
+            triton.compile(source, target=target, options=options)
+    else:
+        # The whole indexed view is sufficient; the allocation is twice as large.
+        compiled = triton.compile(source, target=target, options=options)
+        assert ("cp.async.bulk" in compiled.asm["ptx"]) == pred
+
+
+@gluon.jit
+def _bulk_store_codegen_kernel(src, out, pred):
+    layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [4], [0])
+    values = ttgl.load(src + ttgl.arange(0, 4096, layout))
+    smem = ttgl.allocate_shared_memory(ttgl.int32, [4096], ttgl.SwizzledSharedLayout(1, 1, 1, [0]), values)
+    hopper.bulk.async_store(out, smem, 2560, pred=pred)
+    hopper.bulk.store_wait(0, read_only=False, deps=[smem])
+
+
+@pytest.mark.parametrize("capability,ptx_version", [(90, 80), (90, 86), (100, 86), (103, 88)])
+def test_bulk_async_store_codegen(capability, ptx_version):
+    source = gluon.GluonASTSource(_bulk_store_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    compiled = triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    ptx = compiled.asm["ptx"]
+    assert ptx.count("cp.async.bulk.global.shared::cta.bulk_group") == 1
+    assert re.search(r"@%?\w+ cp.async.bulk.global.shared::cta.bulk_group.*(0x2800|10240)", ptx)
+    assert re.search(r"@%?\w+ cp.async.bulk.commit_group", ptx)
+    assert re.search(r"cp\.async\.bulk\.wait_group\s+0;", ptx)
+    assert "fence.proxy.async.shared::cta" in ptx
+
+
+@pytest.mark.parametrize("num_elements", [0, 3, 129, None])
+def test_bulk_async_store_invalid_count(num_elements):
+
+    @gluon.jit
+    def kernel(out, count, COUNT: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [128], ttgl.SwizzledSharedLayout(1, 1, 1, [0]))
+        hopper.bulk.async_store(out, smem, count if COUNT is None else COUNT)
+        hopper.bulk.store_wait(0, deps=[smem])
+
+    source = gluon.GluonASTSource(kernel, {"out": "*i32", "count": "i32"}, {"COUNT": num_elements})
+    with pytest.raises((CompilationError, RuntimeError)):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32))
+
+
+@pytest.mark.parametrize("cga", [[[1]], [[0]], [[0], [1]]])
+def test_bulk_async_store_partial_cluster_rejected(cga):
+
+    @gluon.jit
+    def kernel(out, SHARED: ttgl.constexpr):
+        smem = ttgl.allocate_shared_memory(ttgl.int32, [256], SHARED)
+        hopper.bulk.async_store(out, smem, 128)
+        hopper.bulk.store_wait(0, deps=[smem])
+
+    source = gluon.GluonASTSource(kernel, {"out": "*i32"},
+                                  {"SHARED": ttgl.SwizzledSharedLayout(1, 1, 1, [0], cga_layout=cga)})
+    with pytest.raises(CompilationError, match="num_elements must equal smem.numel"):
+        triton.compile(source, target=GPUTarget("cuda", 90, 32), options={"num_ctas": 2**len(cga)})
+
+
+@pytest.mark.parametrize("capability,ptx_version,message", [(80, 80, "compute capability 9.0"), (90, 78, "PTX 8.0")])
+def test_bulk_async_store_unsupported_target(capability, ptx_version, message, capfd):
+    source = gluon.GluonASTSource(_bulk_store_codegen_kernel, {"src": "*i32", "out": "*i32", "pred": "i1"}, {})
+    with pytest.raises(RuntimeError):
+        triton.compile(source, target=GPUTarget("cuda", capability, 32), options={"ptx_version": ptx_version})
+    assert message in capfd.readouterr().err
+
+
 @pytest.mark.parametrize("target, binary", [(GPUTarget("cuda", 80, 32), "cubin"),
                                             (GPUTarget("hip", "gfx942", 64), "hsaco")])
 def test_gluon_ast_source_without_driver(target, binary, monkeypatch, fresh_triton_cache):
@@ -2008,7 +2200,7 @@ def test_device_tma_stride_alignment():
 @gluon.jit
 def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexpr, block_layout_a: ttgl.constexpr,
                block_layout_b: ttgl.constexpr, cga_layout_c: ttgl.constexpr, acc_layout: ttgl.constexpr,
-               shared_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
+               mem_layout_a: ttgl.constexpr, shared_layout_b: ttgl.constexpr, acc_dtype: ttgl.constexpr,
                ASYNC: ttgl.constexpr, USE_TCGEN05: ttgl.constexpr):
     a_offs_m = ttgl.arange(0, M)[:, None]
     a_offs_k = ttgl.arange(0, K)[None, :]
@@ -2021,7 +2213,11 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
     a_tile = ttgl.load(ttgl.set_auto_layout(a_ptrs, block_layout_a))
     b_tile = ttgl.load(ttgl.set_auto_layout(b_ptrs, block_layout_b))
 
-    smem_a = ttgl.allocate_shared_memory(operand_dtype, [M, K], shared_layout_a, a_tile)
+    if isinstance(mem_layout_a, TensorMemoryLayout):
+        lhs = allocate_tensor_memory(operand_dtype, [M, K], mem_layout_a)
+        lhs.store(ttgl.convert_layout(a_tile, lhs.get_reg_layout()))
+    else:
+        lhs = ttgl.allocate_shared_memory(operand_dtype, [M, K], mem_layout_a, a_tile)
     smem_b = ttgl.allocate_shared_memory(operand_dtype, [K, N], shared_layout_b, b_tile)
 
     if USE_TCGEN05:
@@ -2032,14 +2228,14 @@ def mma_kernel(a, b, out, M: ttgl.constexpr, N: ttgl.constexpr, K: ttgl.constexp
 
         acc_tmem = allocate_tensor_memory(acc_dtype, [M, N], acc_layout)
 
-        tcgen05_mma(smem_a, smem_b, acc_tmem, use_acc=False, mbarriers=[mma_barrier])
-        mbarrier.wait(mma_barrier, phase=0, deps=[smem_a, smem_b])
+        tcgen05_mma(lhs, smem_b, acc_tmem, use_acc=False, mbarriers=[mma_barrier])
+        mbarrier.wait(mma_barrier, phase=0, deps=[lhs, smem_b])
         mbarrier.invalidate(mma_barrier)
 
         acc = acc_tmem.load()
     else:
         acc = ttgl.zeros([M, N], dtype=acc_dtype, layout=acc_layout)
-        acc = hopper.warpgroup_mma(smem_a, smem_b, acc, is_async=ASYNC)
+        acc = hopper.warpgroup_mma(lhs, smem_b, acc, is_async=ASYNC)
 
         if ASYNC:
             acc = hopper.warpgroup_mma_wait(num_outstanding=0, deps=[acc])
@@ -3853,21 +4049,34 @@ def test_tcgen05_mma_zero_n_bases(K, N, mn_major, storage_n, block_n, scaled, tw
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
-@pytest.mark.parametrize("block_m", [64, 128])
-def test_tcgen05_mma_projected_tmem_layout(block_m):
-    M, N, K = 2 * block_m, 16, 128
-    cga_a, cga_b = ((1, 0), ), ((0, 0), )
+@pytest.mark.parametrize("M,N,block_m,two_ctas,tmem_lhs", [
+    (128, 16, 64, True, False),
+    (256, 16, 128, True, False),
+    # A is duplicated across row 64. D either repeats or advances along N.
+    (128, 16, 64, True, True),
+    (128, 32, 64, True, True),
+    (256, 32, 64, True, True),
+    # Both A and D use row 16 for the second M tile.
+    (128, 64, 64, False, True),
+])
+def test_tcgen05_mma_projected_tmem_layout(M, N, block_m, two_ctas, tmem_lhs):
+    K = 128
+    cga_a = ((1, 0), ) if two_ctas else ()
+    cga_b = ((0, int(N == 32)), ) if two_ctas else ()
     a_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0], cga_layout=cga_a)
     b_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0], cga_layout=cga_b)
-    a_shared = ttgl.NVMMASharedLayout(128, 8, cga_layout=cga_a)
+    if tmem_lhs:
+        a_mem = TensorMemoryLayout((block_m, 2 * K if two_ctas else K), 1, cga_layout=cga_a, two_ctas=two_ctas)
+    else:
+        a_mem = ttgl.NVMMASharedLayout(128, 8, cga_layout=cga_a)
     b_shared = ttgl.NVMMASharedLayout(32, 8, transposed=True, cga_layout=cga_b)
-    acc_layout = TensorMemoryLayout((block_m, 32), 1, cga_layout=cga_a, two_ctas=True)
+    acc_layout = TensorMemoryLayout((block_m, 32), 1, cga_layout=cga_a, two_ctas=two_ctas)
     torch.manual_seed(0)
     a = (torch.randint(-8, 9, (M, K), device="cuda").float() / 4).to(torch.float8_e4m3fn)
     b = (torch.randint(-8, 9, (K, N), device="cuda").float() / 4).to(torch.float8_e4m3fn)
     out = torch.empty((M, N), device="cuda", dtype=torch.float32)
-    mma_kernel[(1, )](a, b, out, M, N, K, a_layout, b_layout, cga_a, acc_layout, a_shared, b_shared, ttgl.float32,
-                      False, True, num_warps=4, num_ctas=2)
+    mma_kernel[(1, )](a, b, out, M, N, K, a_layout, b_layout, cga_a, acc_layout, a_mem, b_shared, ttgl.float32, False,
+                      True, num_warps=4, num_ctas=2 if two_ctas else 1)
     torch.testing.assert_close(out, a.float() @ b.float(), atol=0, rtol=0)
 
 
@@ -5182,14 +5391,6 @@ def _fp6_store_tile(src, dst, desc, ROWS: ttgl.constexpr, WIDTH: ttgl.constexpr)
     fence_async_shared()
     tma.async_store(desc, [pid * (ROWS + 1) + 1, 0], stage)
     tma.store_wait(0, deps=[stage])
-
-
-def test_fp6_tma_store_reshaped_source_sm100():
-    layout = ttgl.NVMMASharedLayout(0, 8, padding="b6p2x16")
-    desc_type = f"tensordesc<u8[1,128],{layout!r}>"
-    signature = {"src": "*u8", "dst": "*u8", "desc": desc_type, "ROWS": "constexpr", "WIDTH": "constexpr"}
-    source = gluon.GluonASTSource(_fp6_store_tile, signature, {"ROWS": 2, "WIDTH": 64})
-    triton.compile(source, target=GPUTarget("cuda", 100, 32))
 
 
 @pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability() not in ((10, 0), (10, 3)),

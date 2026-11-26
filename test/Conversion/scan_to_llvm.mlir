@@ -3,10 +3,12 @@
 // RUN: triton-opt %t/tuple.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TUPLE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=TRANSPOSE
 // RUN: triton-opt %t/warp-transpose.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-TRANSPOSE
-// RUN: not triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm 2>&1 | FileCheck %s --check-prefix=ERROR
+// RUN: triton-opt %t/cross-cta.mlir --allocate-shared-memory --triton-nvidia-gpu-membar=compute-capability=90 | FileCheck %s --check-prefix=SCRATCH-REUSE
+// RUN: triton-opt %t/cross-cta.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm=compute-capability=90 --canonicalize | FileCheck %s --check-prefix=CROSS-CTA
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
+// RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=GROUPED-OFFSETS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
@@ -18,16 +20,30 @@
 // RUN: triton-opt %t/lane-local-carries.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=LOCAL
 
 //--- cross-cta.mlir
-// ERROR: scan axis distributed across CTAs is not supported
+// SCRATCH-REUSE-LABEL: @cross_cta
+// SCRATCH-REUSE: "tt.scan"
+// SCRATCH-REUSE: ttng.cluster_barrier
+// SCRATCH-REUSE-NEXT: {{.*}}"tt.scan"
+// CROSS-CTA-LABEL: llvm.func {{.*}}@cross_cta
+// CROSS-CTA: nvvm.cluster.arrive
+// CROSS-CTA: nvvm.cluster.wait
+// CROSS-CTA: nvvm.mapa
+// CROSS-CTA: llvm.load {{.*}}!llvm.ptr<7>
+// CROSS-CTA: llvm.return
 #layout = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [[32], [64]], block = [[128]]}>
 module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, ttg.target = "cuda:90"} {
-  tt.func @cross_cta(%x: tensor<256xi32, #layout>) -> tensor<256xi32, #layout> {
+  tt.func private @cross_cta(%x: tensor<256xi32, #layout>) -> tensor<256xi32, #layout> {
     %0 = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}> ({
     ^bb0(%a: i32, %b: i32):
       %sum = arith.addi %a, %b : i32
       tt.scan.return %sum : i32
     }) : (tensor<256xi32, #layout>) -> tensor<256xi32, #layout>
-    tt.return %0 : tensor<256xi32, #layout>
+    %1 = "tt.scan"(%0) <{axis = 0 : i32, reverse = true}> ({
+    ^bb0(%a: i32, %b: i32):
+      %sum = arith.addi %a, %b : i32
+      tt.scan.return %sum : i32
+    }) : (tensor<256xi32, #layout>) -> tensor<256xi32, #layout>
+    tt.return %1 : tensor<256xi32, #layout>
   }
 }
 
@@ -295,6 +311,11 @@ tt.func private @test_scan_shuffle_down_gapped(%arg: tensor<4x8xi32, #gapped>) -
 //--- interwarp-groups.mlir
 
 #columns = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+// The register stores share the lane/warp address calculation before CSE.
+// GROUPED-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
+// GROUPED-OFFSETS: llvm.store
+// GROUPED-OFFSETS-NOT: llvm.shl
+// GROUPED-OFFSETS: nvvm.barrier
 // Both operands share one store-to-load barrier and retain their complete table.
 // INTERWARP-GROUPS: ttg.shared = 49152 : i32
 // INTERWARP-GROUPS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
