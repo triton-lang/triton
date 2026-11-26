@@ -462,9 +462,20 @@ LogicalResult verifyTDMCommonLayout(Operation *op,
   if (failed(verifyTDMDescriptor(op, descTy)))
     return failure();
 
-  if (allowSinglePiece)
-    if (auto single = getSinglePieceView(smemTy))
+  if (allowSinglePiece) {
+    if (auto single = getSinglePieceView(smemTy)) {
+      // The load lowering applies the layout only at each warp's start and
+      // writes the rest of the warp's tile row-major, so it cannot place rows
+      // that a padded layout permutes.
+      auto padded =
+          dyn_cast<gpu::PaddedSharedEncodingAttr>(single.getEncoding());
+      if (padded && !isCanonicalRowMajor(padded))
+        return op->emitOpError(
+            "TDM load into one piece of a partitioned buffer requires a "
+            "row-major padded layout");
       smemTy = single;
+    }
+  }
 
   if (auto partitioned =
           dyn_cast<gpu::PartitionedSharedEncodingAttr>(smemTy.getEncoding())) {

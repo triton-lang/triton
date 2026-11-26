@@ -1688,3 +1688,20 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// One piece of a partitioned buffer whose padded inner layout permutes rows (1 and 2): the load lowering writes each
+// warp's tile row-major, so it is rejected.
+#inner = #ttg.padded_shared<[128:+4] {offset = [[0, 0, 1], [0, 0, 2], [0, 0, 4], [0, 0, 8], [0, 0, 16], [0, 0, 32], [0, 0, 64], [0, 0, 128], [0, 2, 0], [0, 1, 0], [0, 4, 0], [0, 8, 0], [0, 16, 0], [0, 32, 0]], block = []}>
+#partitioned = #ttg.partitioned_shared<{numPartitions = 2, numGroups = 1, partitionDim = 0, partitionLayout = #inner}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @tdm_load_piece_with_permuted_padded_layout(%desc: !tt.tensordesc<1x64x256xui8, #inner>) {
+    %lds = ttg.local_alloc : () -> !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable>
+    %part = ttg.memdesc_subslice %lds[1, 0, 0] : !ttg.memdesc<2x64x256xi8, #partitioned, #smem, mutable> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    // expected-error @+1 {{TDM load into one piece of a partitioned buffer requires a row-major padded layout}}
+    %0 = amdg.async_tdm_copy_global_to_local %desc into %part : !tt.tensordesc<1x64x256xui8, #inner> -> !ttg.memdesc<1x64x256xi8, #partitioned, #smem, mutable, 2x64x256>
+    tt.return
+  }
+}
