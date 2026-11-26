@@ -41,36 +41,13 @@ void scheduleLocalLoad(ttg::LocalLoadOp localLoadOp,
                        tt::CoarseSchedule &schedule, int stage,
                        const tt::CoarseSchedule::Cluster &cluster) {
   schedule.insert(localLoadOp, stage, cluster);
-
-  // Place the ConvertLayout users into the same stage so they can be folded
-  // into the load by a later pass. A load left in a different stage than its
-  // conversion keeps a distributed layout across the stage boundary, and the
-  // conversion then lowers through LDS, which puts a round trip back on the
-  // critical path of the dot the prefetch was meant to feed.
-  SmallVector<ttg::ConvertLayoutOp> cvts;
-  for (Operation *user : localLoadOp->getUsers())
-    if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(user))
-      if (cvt->getBlock() == localLoadOp->getBlock())
-        cvts.push_back(cvt);
-
-  // An operand shared by several dots (M/N-sliced GEMMs) carries one identical
-  // conversion per consuming dot. Keep a single conversion per result layout so
-  // folding yields one LDS read rather than one per consumer. The survivor is
-  // moved next to the load so it dominates the uses it takes over.
-  llvm::MapVector<Type, ttg::ConvertLayoutOp> canonical;
-  SmallVector<ttg::ConvertLayoutOp> redundant;
-  for (ttg::ConvertLayoutOp cvt : cvts)
-    if (!canonical.try_emplace(cvt.getType(), cvt).second)
-      redundant.push_back(cvt);
-
-  for (auto &[type, cvt] : canonical) {
-    cvt->moveAfter(localLoadOp);
-    schedule.insert(cvt, stage, cluster);
-  }
-  for (ttg::ConvertLayoutOp cvt : redundant) {
-    cvt.getResult().replaceAllUsesWith(canonical[cvt.getType()].getResult());
-    schedule.erase(cvt);
-    cvt.erase();
+  // If its only user is a ConvertLayout, we place it into the same stage so
+  // it can be folded by a later pass
+  if (localLoadOp->hasOneUse()) {
+    auto cvt = *localLoadOp->getUsers().begin();
+    if (isa<ttg::ConvertLayoutOp>(cvt)) {
+      schedule.insert(cvt, stage, cluster);
+    }
   }
 }
 
@@ -250,12 +227,14 @@ LogicalResult initSchedule(scf::ForOp forOp, int maxDist, Stages &stages,
   // be at least 3 for there to be room between the two.
   //
   // How far ahead is a property of the loop body. Several independent dots
-  // (the M/N/K slicing case) leave room inside one iteration, so only the
-  // leading dot's operands cross the backedge and every other chain is read
-  // one dot ahead of its consumer, where its tile retires a dot later rather
-  // than an iteration later. A single dot is that rule's special case - no
-  // earlier dot to be read after, so all of its operands cross the backedge in
-  // registers.
+  // leave room inside one iteration, so only the leading dot's operands cross
+  // the backedge and every other chain is read one dot ahead of its consumer,
+  // where its tile retires a dot later rather than an iteration later. A single
+  // dot is that rule's special case - no earlier dot to be read after, so all
+  // of its operands cross the backedge in registers.
+  //
+  // Only loops with one pipelined load per dot are interleaved (see
+  // getInterleavableDots): 2x2 M/N slicing, with or without a K split.
   //
   // This applies to tt.dot_scaled as well: its operand local_loads are hoisted
   // the same way, and the scale operands follow whichever stage their own
@@ -438,12 +417,14 @@ void scheduleTDMFill(Operation *tdmOp, Operation *waitOp, int copyStage,
                      tt::CoarseSchedule &schedule, const Stages &stages,
                      const Clusters &clusters) {
   schedule.insert(tdmOp, copyStage, clusters[SCHED_GLOBAL_LOAD]);
-  // If the LocalLoads are scheduled to a later stage than AsyncCopy we need to
-  // place the AsyncCopy prefetches after the AsyncWaits which create a barrier
-  // to ensure all warps are finished reading the shared buffer we will write
-  // into. This is done by scheduling AsyncWait as the first cluster.
-  // If AsyncCopy and LocalLoads are in the same stage we do not assign a
-  // schedule so they are placed before the LocalLoads
+  // The wait runs with the read it guards, in that read's stage and group,
+  // and placeFill sends the copy to the refill group. Under LDS prefetch
+  // each group issues its copy before its wait, so the copy stays in flight
+  // across the wait; with interleaved dots that copy belongs to another
+  // chain. The copy follows the last read of the slot it overwrites, and
+  // Membar makes sure a barrier separates them. If the copy and the read
+  // share a stage, the wait is left unscheduled so it is placed right before
+  // the read.
   if (copyStage != stages[SCHED_LOCAL_LOAD])
     schedule.insert(waitOp, stages[SCHED_ASYNC_WAIT],
                     clusters[SCHED_ASYNC_WAIT]);
@@ -539,10 +520,10 @@ assignReadPlacements(const LoadToStreamOpMap &loadToStreamOp,
 // the backedge shares that slot with its own refill, so the refill clamps
 // instead of wrapping and the read stays first.
 //
-// Advancing exactly half of the groups is a heuristic based on measurements on
-// an fp16 GEMM kernel and is not necessary for correctness. read.group + 1
-// would be enough to guarantee correctness, but in practice it gives worse
-// results.
+// Advancing half of the groups is a performance heuristic; read.group + 1 is
+// enough for correctness. On gfx1250, for an fp16 GEMM with a 256x256x64 tile
+// sliced 2x2 in M/N (num_stages=3, 4096^3 and 8192^3), half is 6-9% faster,
+// and Membar inserts 4 barriers per iteration instead of 8.
 int getRefillGroup(ReadPlacement read, int numGroups) {
   int group = read.group + numGroups / 2;
   group = read.prefetched ? group % numGroups : std::min(group, numGroups - 1);

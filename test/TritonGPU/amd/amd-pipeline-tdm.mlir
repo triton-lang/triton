@@ -761,67 +761,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // -----
 
-// An M-sliced GEMM: one dot per A tile, both sharing a loop-invariant B. Only
-// the leading slice is prefetched across the backedge; the second is read in
-// the iteration that uses it, right before d1. d1 is followed by the second
-// slice's copy, then the wait for the leading slice, then its read for the
-// next iteration. Each copy is issued before the wait that follows it.
-// Contrast with the single-dot kernels above, where both operands stay
-// prefetched as loop-carried registers.
-// LDS_PREFETCH-LABEL: tt.func @sliced_m
-// LDS_PREFETCH-COUNT-2: ttg.local_alloc : () -> !ttg.memdesc<2x512x32xf16
-// LDS_PREFETCH: scf.for
-// LDS_PREFETCH: tt.dot %arg{{[0-9]+}}, %arg1
-// LDS_PREFETCH-NOT: tt.dot
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<512x32xf16
-// LDS_PREFETCH-NOT: tt.dot
-// LDS_PREFETCH: %[[WAIT1:.+]] = amdg.async_tdm_wait
-// LDS_PREFETCH-NOT: tt.dot
-// LDS_PREFETCH: %[[TILE:.+]] = ttg.local_load %{{.+}} token %[[WAIT1]]
-// LDS_PREFETCH: tt.dot %[[TILE]], %arg1
-// LDS_PREFETCH-NOT: amdg.async_tdm_wait
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<512x32xf16
-// LDS_PREFETCH: %[[WAIT0:.+]] = amdg.async_tdm_wait
-// LDS_PREFETCH: ttg.local_load %{{.+}} token %[[WAIT0]]
-// LDS_PREFETCH: scf.yield
-
-#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
-#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0], [4, 0]]}, instrShape = [16, 16, 32]}>
-module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @sliced_m(%a_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
-    %B: tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>,
-    %M: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32})
-    -> (tensor<512x64xf32, #mma>, tensor<512x64xf32, #mma>) {
-    %c512_i32 = arith.constant 512 : i32
-    %c0_i32 = arith.constant 0 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c32_i32 = arith.constant 32 : i32
-    %c1_i32 = arith.constant 1 : i32
-    %cst = arith.constant dense<0.000000e+00> : tensor<512x64xf32, #mma>
-    %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c512_i32 : i32
-    %2 = arith.addi %1, %c512_i32 : i32
-    %3 = arith.extsi %K : i32 to i64
-    %4 = tt.make_tensor_descriptor %a_ptr, [%M, %K], [%3, %c1_i64] : <f16>, <512x32xf16>
-    %5 = arith.divsi %K, %c32_i32 : i32
-    %acc:3 = scf.for %iv = %c0_i32 to %5 step %c1_i32
-        iter_args(%k = %c0_i32, %acc0 = %cst, %acc1 = %cst)
-        -> (i32, tensor<512x64xf32, #mma>, tensor<512x64xf32, #mma>) : i32 {
-      %6 = tt.descriptor_load %4[%1, %k] : !tt.tensordesc<512x32xf16> -> tensor<512x32xf16, #blocked>
-      %7 = tt.descriptor_load %4[%2, %k] : !tt.tensordesc<512x32xf16> -> tensor<512x32xf16, #blocked>
-      %8 = ttg.convert_layout %6 : tensor<512x32xf16, #blocked> -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %9 = ttg.convert_layout %7 : tensor<512x32xf16, #blocked> -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %10 = tt.dot %8, %B, %acc0 : tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<512x64xf32, #mma>
-      %11 = tt.dot %9, %B, %acc1 : tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<512x64xf32, #mma>
-      %12 = arith.addi %k, %c32_i32 : i32
-      scf.yield %12, %10, %11 : i32, tensor<512x64xf32, #mma>, tensor<512x64xf32, #mma>
-    }
-    tt.return %acc#1, %acc#2 : tensor<512x64xf32, #mma>, tensor<512x64xf32, #mma>
-  }
-}
-
-// -----
-
 // A 2x2 M/N-sliced GEMM with the dots in diagonal order: d0 = A0*B0,
 // d1 = A1*B1, d2 = A0*B1, d3 = A1*B0. The d0 operands are prefetched in the
 // last two groups and A1 is read in group 0, so B1, which d1 consumes, has no
@@ -837,62 +776,48 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // LDS_PREFETCH-NOT: tt.dot
 // LDS_PREFETCH: %[[B1:.+]] = ttg.local_load %{{.+}} token %[[WAIT]]
 // LDS_PREFETCH-NOT: tt.dot
-// LDS_PREFETCH: %[[B1_T:.+]] = tt.trans %[[B1]]
-// LDS_PREFETCH: tt.dot %[[A1]], %[[B1_T]]
+// LDS_PREFETCH: tt.dot %[[A1]], %[[B1]]
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 32], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 8]], warp = [[16, 0], [0, 0]], block = []}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
-#shared = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [128, 64]}>
-#shared1 = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [128, 64]}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @sliced_diagonal_dots(%a_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %b_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
-    %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32}, %K: i32 {tt.divisibility = 16 : i32})
-    -> (tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>) {
-    %c1_i64 = arith.constant 1 : i64
-    %c128_i32 = arith.constant 128 : i32
-    %c64_i32 = arith.constant 64 : i32
+  tt.func @sliced_diagonal_dots(%a_desc: !tt.tensordesc<64x64xf16>, %b_desc: !tt.tensordesc<64x64xf16>,
+      %m0: i32, %m1: i32, %n0: i32, %n1: i32, %K: i32)
+      -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) {
     %c0_i32 = arith.constant 0 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c256_i32 : i32
-    %2 = arith.addi %1, %c128_i32 : i32
-    %3 = arith.extsi %K : i32 to i64
-    %4 = tt.make_tensor_descriptor %a_ptr, [%M, %K], [%3, %c1_i64] : <f16>, <128x64xf16, #shared>
-    %5 = tt.make_tensor_descriptor %b_ptr, [%N, %K], [%3, %c1_i64] : <f16>, <128x64xf16, #shared1>
-    %6 = tt.make_tensor_descriptor %b_ptr, [%N, %K], [%3, %c1_i64] : <f16>, <128x64xf16, #shared1>
-    %acc:4 = scf.for %k = %c0_i32 to %K step %c64_i32
-        iter_args(%acc00 = %cst, %acc11 = %cst, %acc01 = %cst, %acc10 = %cst)
-        -> (tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>) : i32 {
-      %7 = tt.descriptor_load %4[%1, %k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %8 = tt.descriptor_load %4[%2, %k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %9 = tt.descriptor_load %5[%1, %k] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %10 = ttg.convert_layout %9 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %11 = tt.trans %10 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %12 = tt.descriptor_load %6[%2, %k] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %13 = ttg.convert_layout %12 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %14 = tt.trans %13 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %15 = ttg.convert_layout %7 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %16 = ttg.convert_layout %8 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %17 = tt.dot %15, %11, %acc00 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %18 = tt.dot %16, %14, %acc11 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %19 = tt.dot %15, %14, %acc01 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %20 = tt.dot %16, %11, %acc10 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      scf.yield %17, %18, %19, %20 : tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>
+    %c64_i32 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %acc:4 = scf.for %k = %c0_i32 to %K step %c64_i32 iter_args(%acc00 = %cst, %acc11 = %cst, %acc01 = %cst, %acc10 = %cst)
+        -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) : i32 {
+      %a0 = tt.descriptor_load %a_desc[%m0, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a1 = tt.descriptor_load %a_desc[%m1, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b0 = tt.descriptor_load %b_desc[%k, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b1 = tt.descriptor_load %b_desc[%k, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a0_op = ttg.convert_layout %a0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a1_op = ttg.convert_layout %a1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %b0_op = ttg.convert_layout %b0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b1_op = ttg.convert_layout %b1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %d00 = tt.dot %a0_op, %b0_op, %acc00 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d11 = tt.dot %a1_op, %b1_op, %acc11 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d01 = tt.dot %a0_op, %b1_op, %acc01 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d10 = tt.dot %a1_op, %b0_op, %acc10 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      scf.yield %d00, %d11, %d01, %d10 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
     }
-    tt.return %acc#0, %acc#1, %acc#2, %acc#3 : tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>
+    tt.return %acc#0, %acc#1, %acc#2, %acc#3 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
   }
 }
 
 // -----
 
 // A 2x2 M/N-sliced GEMM whose K offset is carried across iterations, as in
-// `offs_k += BK`: d0 = A0*B0, d1 = A0*B1, d2 = A1*B0, d3 = A1*B1. Each load
-// keeps its own TDM copy, and the copies of A0, A1, B0 and B1 land in groups
-// 1, 3, 0 and 2. Every copy reads the offset, so its update has to run before
-// the earliest copy, B0's right after d0, not before the A0 copy that comes
-// first in program order; otherwise the loop cannot be pipelined.
+// `offs_k += BK`: d0 = A0*B0, d1 = A0*B1, d2 = A1*B0, d3 = A1*B1. The reads of
+// A0, A1, B0 and B1 land in groups 3, 1, 2 and 0, and each copy goes half the
+// groups after the read that frees its slot: groups 1, 3, 0 and 2. Every copy
+// reads the offset, so its update has to run before the earliest copy, B0's
+// right after d0, not before the A0 copy that comes first in program order;
+// otherwise the loop cannot be pipelined.
 // LDS_PREFETCH-LABEL: tt.func @sliced_carried_k_offset
 // LDS_PREFETCH-COUNT-8: amdg.async_tdm_copy_global_to_local
 // LDS_PREFETCH: scf.for
@@ -900,159 +825,109 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // LDS_PREFETCH-NOT: tt.dot
 // LDS_PREFETCH: arith.addi %{{.+}}, %c64_i32
 // LDS_PREFETCH-NOT: tt.dot
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.+}} : !tt.tensordesc<128x64xf16
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg1 add_offsets = [%{{.+}}, %arg4]
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg0 add_offsets = [%arg2,
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg1 add_offsets = [%{{.+}}, %arg5]
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg0 add_offsets = [%arg3,
+// LDS_PREFETCH: scf.yield
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 32], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 8]], warp = [[16, 0], [0, 0]], block = []}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
-#shared = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [128, 64]}>
-#shared1 = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [128, 64]}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func @sliced_carried_k_offset(%a_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %b0_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32},
-    %b1_ptr: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %M: i32 {tt.divisibility = 16 : i32}, %N: i32 {tt.divisibility = 16 : i32},
-    %K: i32 {tt.divisibility = 16 : i32})
-    -> (tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>) {
-    %c1_i64 = arith.constant 1 : i64
-    %c128_i32 = arith.constant 128 : i32
-    %c64_i32 = arith.constant 64 : i32
+  tt.func @sliced_carried_k_offset(%a_desc: !tt.tensordesc<64x64xf16>, %b_desc: !tt.tensordesc<64x64xf16>,
+      %m0: i32, %m1: i32, %n0: i32, %n1: i32, %K: i32)
+      -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) {
     %c0_i32 = arith.constant 0 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    %0 = tt.get_program_id x : i32
-    %1 = arith.muli %0, %c256_i32 : i32
-    %2 = arith.addi %1, %c128_i32 : i32
-    %3 = arith.extsi %K : i32 to i64
-    %4 = tt.make_tensor_descriptor %a_ptr, [%M, %K], [%3, %c1_i64] : <f16>, <128x64xf16, #shared>
-    %5 = tt.make_tensor_descriptor %b0_ptr, [%N, %K], [%3, %c1_i64] : <f16>, <128x64xf16, #shared1>
-    %6 = tt.make_tensor_descriptor %b1_ptr, [%N, %K], [%3, %c1_i64] : <f16>, <128x64xf16, #shared1>
-    %acc:5 = scf.for %iv = %c0_i32 to %K step %c64_i32
-        iter_args(%k = %c0_i32, %acc00 = %cst, %acc01 = %cst, %acc10 = %cst, %acc11 = %cst)
-        -> (i32, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>) : i32 {
-      %7 = tt.descriptor_load %4[%1, %k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %8 = tt.descriptor_load %4[%2, %k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %9 = tt.descriptor_load %5[%1, %k] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %10 = ttg.convert_layout %9 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %11 = tt.trans %10 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %12 = tt.descriptor_load %6[%1, %k] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %13 = ttg.convert_layout %12 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %14 = tt.trans %13 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %15 = ttg.convert_layout %7 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %16 = ttg.convert_layout %8 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %17 = tt.dot %15, %11, %acc00 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %18 = tt.dot %15, %14, %acc01 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %19 = tt.dot %16, %11, %acc10 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %20 = tt.dot %16, %14, %acc11 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %21 = arith.addi %k, %c64_i32 : i32
-      scf.yield %21, %17, %18, %19, %20 : i32, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>
+    %c64_i32 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %acc:5 = scf.for %iv = %c0_i32 to %K step %c64_i32 iter_args(%k = %c0_i32, %acc00 = %cst, %acc01 = %cst, %acc10 = %cst, %acc11 = %cst)
+        -> (i32, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) : i32 {
+      %a0 = tt.descriptor_load %a_desc[%m0, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a1 = tt.descriptor_load %a_desc[%m1, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b0 = tt.descriptor_load %b_desc[%k, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b1 = tt.descriptor_load %b_desc[%k, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a0_op = ttg.convert_layout %a0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a1_op = ttg.convert_layout %a1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %b0_op = ttg.convert_layout %b0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b1_op = ttg.convert_layout %b1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %d00 = tt.dot %a0_op, %b0_op, %acc00 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d01 = tt.dot %a0_op, %b1_op, %acc01 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d10 = tt.dot %a1_op, %b0_op, %acc10 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d11 = tt.dot %a1_op, %b1_op, %acc11 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %k_next = arith.addi %k, %c64_i32 : i32
+      scf.yield %k_next, %d00, %d01, %d10, %d11 : i32, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
     }
-    tt.return %acc#1, %acc#2, %acc#3, %acc#4 : tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>
+    tt.return %acc#1, %acc#2, %acc#3, %acc#4 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
   }
 }
 
 // -----
 
-// A 2x2 M/N-sliced GEMM: four A and four B quarter loads feed eight dots, two
-// per output quadrant chained through the accumulator. Those chains do not
-// block interleaving, so each quarter is read from LDS next to the dot that
-// first uses it. Every dot keeps its program-order place, including the one
-// whose operands were both first read by earlier dots.
-// LDS_PREFETCH: tt.func public @gemm_tdm_sliceMN_k2_kernel
-// LDS_PREFETCH-COUNT-8: ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16
+// A 2x2 M/N-sliced GEMM with K split in two: four A and four B quarter loads
+// feed eight dots, two per output quadrant chained through the accumulator.
+// Those chains do not block interleaving, so each quarter is read from LDS
+// next to the dot that first uses it. Every dot keeps its program-order place,
+// including d3, whose operands were both first read by earlier dots.
+// LDS_PREFETCH-LABEL: tt.func @sliced_mn_split_k
+// LDS_PREFETCH-COUNT-8: ttg.local_alloc : () -> !ttg.memdesc<2x64x64xf16
 // LDS_PREFETCH: scf.for
-// LDS_PREFETCH: %[[A_BL:.+]] = ttg.local_load
-// LDS_PREFETCH: tt.dot %[[A_BL]]
-// LDS_PREFETCH: %[[B_TR_LOAD:.+]] = ttg.local_load
-// LDS_PREFETCH: %[[B_TR:.+]] = tt.trans %[[B_TR_LOAD]]
-// LDS_PREFETCH: tt.dot %{{.+}}, %[[B_TR]]
+// LDS_PREFETCH: %[[A10:.+]] = ttg.local_load
+// LDS_PREFETCH: tt.dot %[[A10]]
+// LDS_PREFETCH: %[[B01:.+]] = ttg.local_load
+// LDS_PREFETCH: tt.dot %{{.+}}, %[[B01]]
 // LDS_PREFETCH-NOT: tt.dot
-// LDS_PREFETCH: tt.dot %[[A_BL]], %[[B_TR]]
+// LDS_PREFETCH: tt.dot %[[A10]], %[[B01]]
 // LDS_PREFETCH: scf.yield
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
-#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 32], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 8]], warp = [[16, 0], [0, 0]], block = []}>
 #mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
-#shared = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [128, 64]}>
-#shared1 = #ttg.padded_shared<[64:+8] {order = [1, 0], shape = [128, 64]}>
-#shared2 = #ttg.padded_shared<[128:+8] {order = [1, 0], shape = [128, 128]}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
-  tt.func public @gemm_tdm_sliceMN_k2_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-    %c8_i32 = arith.constant 8 : i32
-    %c256_i32 = arith.constant 256 : i32
-    %c1_i64 = arith.constant 1 : i64
-    %c128_i32 = arith.constant 128 : i32
-    %c64_i32 = arith.constant 64 : i32
+  tt.func @sliced_mn_split_k(%a_desc: !tt.tensordesc<64x64xf16>, %b_desc: !tt.tensordesc<64x64xf16>,
+      %m0: i32, %m1: i32, %n0: i32, %n1: i32, %K: i32)
+      -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) {
     %c0_i32 = arith.constant 0 : i32
-    %c255_i32 = arith.constant 255 : i32
-    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #mma>
-    %0 = tt.get_program_id x : i32
-    %1 = arith.addi %arg3, %c255_i32 : i32
-    %2 = arith.divsi %1, %c256_i32 : i32
-    %3 = arith.addi %arg4, %c255_i32 : i32
-    %4 = arith.divsi %3, %c256_i32 : i32
-    %5 = arith.muli %4, %c8_i32 : i32
-    %6 = arith.divsi %0, %5 : i32
-    %7 = arith.muli %6, %c8_i32 : i32
-    %8 = arith.subi %2, %7 : i32
-    %9 = arith.minsi %8, %c8_i32 : i32
-    %10 = arith.remsi %0, %5 : i32
-    %11 = arith.remsi %10, %9 : i32
-    %12 = arith.addi %7, %11 : i32
-    %13 = arith.divsi %10, %9 : i32
-    %14 = arith.muli %12, %c256_i32 : i32
-    %15 = arith.muli %13, %c256_i32 : i32
-    %16 = arith.extsi %arg5 : i32 to i64
-    %17 = tt.make_tensor_descriptor %arg0, [%arg3, %arg5], [%16, %c1_i64] : <f16>, <128x64xf16, #shared>
-    %18 = tt.make_tensor_descriptor %arg1, [%arg4, %arg5], [%16, %c1_i64] : <f16>, <128x64xf16, #shared1>
-    %19 = arith.extsi %arg4 : i32 to i64
-    %20 = tt.make_tensor_descriptor %arg2, [%arg3, %arg4], [%19, %c1_i64] : <f16>, <128x128xf16, #shared2>
-    %21 = arith.addi %14, %c128_i32 : i32
-    %22 = arith.addi %15, %c128_i32 : i32
-    %23:4 = scf.for %arg6 = %c0_i32 to %arg5 step %c128_i32 iter_args(%arg7 = %cst, %arg8 = %cst, %arg9 = %cst, %arg10 = %cst) -> (tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>)  : i32 {
-      %34 = tt.descriptor_load %17[%14, %arg6] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %35 = arith.addi %arg6, %c64_i32 : i32
-      %36 = tt.descriptor_load %17[%14, %35] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %37 = tt.descriptor_load %17[%21, %arg6] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %38 = tt.descriptor_load %17[%21, %35] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked>
-      %39 = tt.descriptor_load %18[%15, %arg6] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %40 = ttg.convert_layout %39 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %41 = tt.trans %40 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %42 = tt.descriptor_load %18[%22, %arg6] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %43 = ttg.convert_layout %42 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %44 = tt.trans %43 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %45 = tt.descriptor_load %18[%15, %35] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %46 = ttg.convert_layout %45 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %47 = tt.trans %46 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %48 = tt.descriptor_load %18[%22, %35] : !tt.tensordesc<128x64xf16, #shared1> -> tensor<128x64xf16, #blocked>
-      %49 = ttg.convert_layout %48 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #linear>
-      %50 = tt.trans %49 {order = array<i32: 1, 0>} : tensor<128x64xf16, #linear> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %51 = ttg.convert_layout %34 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %52 = tt.dot %51, %41, %arg7 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %53 = ttg.convert_layout %37 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %54 = tt.dot %53, %41, %arg8 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %55 = tt.dot %51, %44, %arg9 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %56 = tt.dot %53, %44, %arg10 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %57 = ttg.convert_layout %36 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %58 = tt.dot %57, %47, %52 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %59 = ttg.convert_layout %38 : tensor<128x64xf16, #blocked> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %60 = tt.dot %59, %47, %54 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %61 = tt.dot %57, %50, %55 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      %62 = tt.dot %59, %50, %56 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
-      scf.yield %58, %60, %61, %62 : tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>, tensor<128x128xf32, #mma>
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %acc:4 = scf.for %k0 = %c0_i32 to %K step %c128_i32 iter_args(%acc00 = %cst, %acc10 = %cst, %acc01 = %cst, %acc11 = %cst)
+        -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) : i32 {
+      %k1 = arith.addi %k0, %c64_i32 : i32
+      %a00 = tt.descriptor_load %a_desc[%m0, %k0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a01 = tt.descriptor_load %a_desc[%m0, %k1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a10 = tt.descriptor_load %a_desc[%m1, %k0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a11 = tt.descriptor_load %a_desc[%m1, %k1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b00 = tt.descriptor_load %b_desc[%k0, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b01 = tt.descriptor_load %b_desc[%k0, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b10 = tt.descriptor_load %b_desc[%k1, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b11 = tt.descriptor_load %b_desc[%k1, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a00_op = ttg.convert_layout %a00 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a01_op = ttg.convert_layout %a01 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a10_op = ttg.convert_layout %a10 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a11_op = ttg.convert_layout %a11 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %b00_op = ttg.convert_layout %b00 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b01_op = ttg.convert_layout %b01 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b10_op = ttg.convert_layout %b10 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b11_op = ttg.convert_layout %b11 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %d0 = tt.dot %a00_op, %b00_op, %acc00 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d1 = tt.dot %a10_op, %b00_op, %acc10 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d2 = tt.dot %a00_op, %b01_op, %acc01 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d3 = tt.dot %a10_op, %b01_op, %acc11 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d4 = tt.dot %a01_op, %b10_op, %d0 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d5 = tt.dot %a11_op, %b10_op, %d1 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d6 = tt.dot %a01_op, %b11_op, %d2 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d7 = tt.dot %a11_op, %b11_op, %d3 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      scf.yield %d4, %d5, %d6, %d7 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
     }
-    %24 = arith.truncf %23#0 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
-    %25 = ttg.convert_layout %24 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked1>
-    tt.descriptor_store %20[%14, %15], %25 : !tt.tensordesc<128x128xf16, #shared2>, tensor<128x128xf16, #blocked1>
-    %26 = arith.addi %14, %c128_i32 : i32
-    %27 = arith.truncf %23#1 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
-    %28 = ttg.convert_layout %27 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked1>
-    tt.descriptor_store %20[%26, %15], %28 : !tt.tensordesc<128x128xf16, #shared2>, tensor<128x128xf16, #blocked1>
-    %29 = arith.addi %15, %c128_i32 : i32
-    %30 = arith.truncf %23#2 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
-    %31 = ttg.convert_layout %30 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked1>
-    tt.descriptor_store %20[%14, %29], %31 : !tt.tensordesc<128x128xf16, #shared2>, tensor<128x128xf16, #blocked1>
-    %32 = arith.truncf %23#3 : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
-    %33 = ttg.convert_layout %32 : tensor<128x128xf16, #mma> -> tensor<128x128xf16, #blocked1>
-    tt.descriptor_store %20[%26, %29], %33 : !tt.tensordesc<128x128xf16, #shared2>, tensor<128x128xf16, #blocked1>
-    tt.return
+    tt.return %acc#0, %acc#1, %acc#2, %acc#3 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
   }
 }
