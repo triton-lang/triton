@@ -264,6 +264,8 @@ bool TargetFeatures::supportsClusterLoadBitWidth(int bitWidth) const {
   return false;
 }
 
+bool TargetFeatures::supportsCooperativeAtomics() const { return isCDNA5(); }
+
 bool TargetFeatures::supportsBufferAtomicRMW() const {
   return llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4,
                              ISAFamily::RDNA3, ISAFamily::RDNA4m,
