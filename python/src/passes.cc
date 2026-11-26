@@ -110,9 +110,13 @@ void init_triton_passes_ttgpuir(py::module_ &m) {
                             createTritonInstrumentFpSanitizer, bool);
   ADD_PASS_WRAPPER_0("add_optimize_partition_warps",
                      createTritonGPUOptimizePartitionWarps);
-  m.def("add_canonicalize_llvm_ir", [](mlir::PassManager &pm) {
-    pm.addNestedPass<mlir::LLVM::LLVMFuncOp>(createCanonicalizeLLVMIR());
-  });
+  m.def(
+      "add_canonicalize_llvm_ir",
+      [](mlir::PassManager &pm, bool conSan) {
+        pm.addNestedPass<mlir::LLVM::LLVMFuncOp>(
+            createCanonicalizeLLVMIR(CanonicalizeLLVMIROptions{conSan}));
+      },
+      py::arg("pm"), py::arg("consan") = false);
 }
 
 void init_plugin_passes(py::module_ &m) {
