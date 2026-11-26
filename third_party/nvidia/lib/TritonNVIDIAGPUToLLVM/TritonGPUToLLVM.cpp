@@ -146,8 +146,9 @@ struct ConvertTritonGPUToLLVM
 
   ConvertTritonGPUToLLVM(int32_t computeCapability)
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
-  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
-      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
+  ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion,
+                         bool conSan)
+      : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion, conSan}) {}
   void runOnOperation() override;
 
 private:
@@ -197,9 +198,11 @@ void ConvertTritonGPUToLLVM::runOnOperation() {
   // these large struct types. The normal verifier still checks the cleaned IR.
   RewritePatternSet patterns(mod.getContext());
   LLVM::InsertValueOp::getCanonicalizationPatterns(patterns, mod.getContext());
-  (void)applyPatternsGreedily(
-      mod, std::move(patterns),
-      GreedyRewriteConfig().setUseTopDownTraversal(true));
+  GreedyRewriteConfig config;
+  config.setUseTopDownTraversal(true);
+  if (conSan)
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Normal);
+  (void)applyPatternsGreedily(mod, std::move(patterns), config);
 }
 
 LogicalResult ConvertTritonGPUToLLVM::lowerFunctions(
@@ -331,10 +334,10 @@ createConvertTritonGPUToLLVMPass(int32_t computeCapability) {
   return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability);
 }
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertTritonGPUToLLVMPass(int32_t computeCapability,
-                                 int32_t ptxVersion) {
-  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability,
-                                                  ptxVersion);
+createConvertTritonGPUToLLVMPass(int32_t computeCapability, int32_t ptxVersion,
+                                 bool conSan) {
+  return std::make_unique<ConvertTritonGPUToLLVM>(computeCapability, ptxVersion,
+                                                  conSan);
 }
 
 } // namespace mlir::triton

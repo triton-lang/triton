@@ -8,6 +8,7 @@
 
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=OFFSETS
 // RUN: triton-opt %t/shuffle-offsets.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-OFFSETS
+// RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm | FileCheck %s --check-prefix=GROUPED-OFFSETS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-shared-memory --convert-triton-gpu-to-llvm --canonicalize | FileCheck %s --check-prefix=INTERWARP-GROUPS
 // RUN: triton-opt %t/interwarp-groups.mlir --allocate-amdgpu-shared-memory=arch=gfx1250 --convert-triton-amdgpu-to-llvm=gfx-arch=gfx1250 --canonicalize | FileCheck %s --check-prefix=AMD-INTERWARP-GROUPS
 // RUN: triton-opt %t/gfx90a.mlir --allocate-amdgpu-shared-memory=arch=gfx90a --convert-triton-amdgpu-to-llvm=gfx-arch=gfx90a --canonicalize | FileCheck %s --check-prefix=GFX90A
@@ -310,6 +311,11 @@ tt.func private @test_scan_shuffle_down_gapped(%arg: tensor<4x8xi32, #gapped>) -
 //--- interwarp-groups.mlir
 
 #columns = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [0, 1]}>
+// The register stores share the lane/warp address calculation before CSE.
+// GROUPED-OFFSETS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
+// GROUPED-OFFSETS: llvm.store
+// GROUPED-OFFSETS-NOT: llvm.shl
+// GROUPED-OFFSETS: nvvm.barrier
 // Both operands share one store-to-load barrier and retain their complete table.
 // INTERWARP-GROUPS: ttg.shared = 49152 : i32
 // INTERWARP-GROUPS-LABEL: llvm.func {{.*}}@test_scan_interwarp_groups(
