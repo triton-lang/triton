@@ -854,8 +854,17 @@ struct BufferLoadOpConversion
     }
 
     // Get the mask
-    SmallVector<Value> maskElems =
-        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+    SmallVector<Value> maskElems;
+    // A packed FP6 group is 16 register bytes filled by a 12-byte load, so the
+    // vector is the whole group regardless of offsets and mask.
+    bool fp6Packed = op.getFp6Packed();
+    if (fp6Packed) {
+      vec = 16;
+      if (llMask)
+        maskElems = unpackTensorElements(loc, llMask, rewriter, mask.getType());
+    } else {
+      maskElems = getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+    }
 
     // Get the `other` value (if any)
     SmallVector<Value> otherElems;
@@ -866,7 +875,8 @@ struct BufferLoadOpConversion
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
     Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
     SmallVector<Value> loadedVals;
-    Type vecTy = LLVM::getVectorType(valueElemTy, vec);
+    unsigned loadElems = fp6Packed ? 12 : vec;
+    Type vecTy = LLVM::getVectorType(valueElemTy, loadElems);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Value pred = mask ? maskElems[vecStart] : b.int_val(1, 1);
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
@@ -882,12 +892,15 @@ struct BufferLoadOpConversion
       Value loadVal =
           bufferEmitter.emitLoad(vecTy, rsrcDesc, offsetElems[vecStart],
                                  vecSoffsetBytes, pred, falseVal, *aux);
-      for (size_t ii = 0; ii < vec; ++ii) {
+      for (size_t ii = 0; ii < loadElems; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
         Value loaded = b.extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }
+      // The 4 padding bytes of a packed FP6 group are zero.
+      for (size_t ii = loadElems; ii < vec; ++ii)
+        loadedVals.push_back(b.int_val(8, 0));
     } // end vec
 
     Value resultStruct = packTensorElements(loc, getTypeConverter(), loadedVals,
@@ -943,8 +956,18 @@ struct BufferLoadToLocalOpConversion
     //     [x, x, y, y, ...].
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
     LLVM::AMD::DirectToLdsVecInfo vecInfo;
-    SmallVector<Value> maskElems = getMaskElemsAndDirectToLdsVec(
-        rewriter, loc, llMask, mask, vec, vecInfo);
+    SmallVector<Value> maskElems;
+    // A packed FP6 group is one 16-byte LDS slot filled by a 12-byte transfer,
+    // so the vector is the whole group regardless of offsets and mask.
+    bool fp6Packed = op.getFp6Packed();
+    if (fp6Packed) {
+      vec = vecInfo.fromPtr = vecInfo.fromMask = 16;
+      if (llMask)
+        maskElems = unpackTensorElements(loc, llMask, rewriter, mask.getType());
+    } else {
+      maskElems = getMaskElemsAndDirectToLdsVec(rewriter, loc, llMask, mask,
+                                                vec, vecInfo);
+    }
 
     SmallVector<Value> offsetElems =
         unpackTensorElements(loc, llOffset, rewriter, offset.getType());
@@ -1016,7 +1039,8 @@ struct BufferLoadToLocalOpConversion
                                otherTy, hasOther, vecTy.getNumElements());
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
       assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
-      Value vecBytesVal = b.i32_val(vecBits / 8);
+      // 96-bit transfers still advance LDS by 16 bytes per lane.
+      Value vecBytesVal = b.i32_val(fp6Packed ? 12 : vecBits / 8);
 
       Value maybeSwizzledMaskElem = maskElem;
       if (requiresSrcPtrSwizzling)
@@ -1089,6 +1113,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       : ConvertOpToLLVMPattern(converter, benefit),
         DirectToLdsLoadConversionBase(targetInfo, axisAnalysisPass) {}
 
+  static constexpr llvm::StringLiteral kFp6PackedAttrName = "amdg.fp6_packed";
+
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1116,8 +1142,24 @@ struct AsyncCopyGlobalToLocalOpConversion
     //     [x, x, y, y, ...].
     unsigned vec = getVectorSize(op.getSrc(), axisAnalysisPass);
     LLVM::AMD::DirectToLdsVecInfo vecInfo;
-    auto maskElements = getMaskElemsAndDirectToLdsVec(
-        rewriter, loc, adaptor.getMask(), op.getMask(), vec, vecInfo);
+    SmallVector<Value> maskElements;
+    // A packed FP6 group is one 16-byte LDS slot filled by a 12-byte transfer,
+    // so the vector is the whole group regardless of pointers and mask.
+    bool fp6Packed = op->hasAttr(kFp6PackedAttrName);
+    if (fp6Packed) {
+      if (targetInfo.getISAFamily() != ISAFamily::CDNA4)
+        return op.emitError() << kFp6PackedAttrName << " requires CDNA4";
+      if (!dstTy.getElementType().isInteger(8) || op.getOther())
+        return op.emitError() << kFp6PackedAttrName
+                              << " requires i8 storage and no other value";
+      vec = vecInfo.fromPtr = vecInfo.fromMask = 16;
+      if (op.getMask())
+        maskElements = unpackTensorElements(loc, adaptor.getMask(), rewriter,
+                                            op.getMask().getType());
+    } else {
+      maskElements = getMaskElemsAndDirectToLdsVec(
+          rewriter, loc, adaptor.getMask(), op.getMask(), vec, vecInfo);
+    }
 
     auto srcElems = unpackTensorElements(loc, adaptor.getSrc(), rewriter,
                                          op.getSrc().getType());
@@ -1180,6 +1222,8 @@ struct AsyncCopyGlobalToLocalOpConversion
                                otherTy, hasOther, vecTy.getNumElements());
       int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
       assert(targetInfo.supportsDirectToLdsLoadBitWidth(vecBits));
+      // 96-bit transfers still advance LDS by 16 bytes per lane.
+      int loadBits = fp6Packed ? 96 : vecBits;
       Value maybeSwizzledMaskElem = maskElem;
 
       if (requiresSrcPtrSwizzling)
@@ -1198,14 +1242,14 @@ struct AsyncCopyGlobalToLocalOpConversion
         Value predicatedAddress =
             selectLdsAddressForPredicate(b, cond, shmemAddr);
 
-        emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem,
+        emitAsyncLoad(rewriter, loc, targetInfo, loadBits, srcElem,
                       predicatedAddress, *aux, multicastMask);
       } else {
         // For architectures not supporting per lane LDS addresses we need to
         // emit a branch.
         auto [loadBlock, afterLoadBlock] = emitBranch(rewriter, loc, cond);
 
-        emitAsyncLoad(rewriter, loc, targetInfo, vecBits, srcElem, shmemAddr,
+        emitAsyncLoad(rewriter, loc, targetInfo, loadBits, srcElem, shmemAddr,
                       *aux, multicastMask);
 
         rewriter.setInsertionPointToStart(afterLoadBlock);

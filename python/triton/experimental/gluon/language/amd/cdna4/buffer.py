@@ -6,7 +6,7 @@ The same ops as :mod:`~triton.experimental.gluon.language.amd.cdna3.buffer`, plu
 
 from __future__ import annotations
 
-from ..._core import builtin
+from ..._core import builtin, _unwrap_if_constexpr
 from .. import _buffer
 from ..cdna3._cache_policy import CachePolicy as _CachePolicy
 from ..cdna3.buffer import (buffer_descriptor, buffer_descriptor_type, make_buffer_descriptor, load, store, atomic_load,
@@ -19,7 +19,8 @@ __all__ = [
 
 
 @builtin
-def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, cache_policy=None, _semantic=None):
+def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, cache_policy=None, fp6_packed=False,
+                   _semantic=None):
     """
     Load from global memory through a buffer descriptor directly into shared memory.
 
@@ -42,5 +43,7 @@ def load_to_shared(dest, desc, offsets, mask=None, *, soffset=None, scope=None, 
         scope (str, optional): ``"cta"``, ``"gpu"`` or ``"sys"``. The load reads data visible at that
             scope. It is not atomic and orders nothing. Defaults to None.
         cache_policy (CachePolicy, optional): Cache hints. Defaults to None.
+        fp6_packed (bool): Expand each 12-byte packed FP6 group into a 16-byte slot of ``dest``. Defaults to False.
     """
-    _buffer.load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, _CachePolicy, _semantic)
+    _buffer.load_to_shared(dest, desc, offsets, mask, soffset, scope, cache_policy, _CachePolicy, _semantic,
+                           _unwrap_if_constexpr(fp6_packed))

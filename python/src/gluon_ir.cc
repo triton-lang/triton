@@ -814,13 +814,17 @@ void init_gluon_ir(py::module_ &m) {
       .def(
           "create_async_copy_global_to_local",
           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
-             Value other, Attribute cachePolicy, bool isVolatile) {
-            self.create<ttg::AsyncCopyGlobalToLocalOp>(
+             Value other, Attribute cachePolicy, bool isVolatile,
+             bool fp6Packed) {
+            auto op = self.create<ttg::AsyncCopyGlobalToLocalOp>(
                 pointer, smem, mask, other, cachePolicy, isVolatile,
                 /*contiguity=*/1);
+            if (fp6Packed)
+              op->setAttr("amdg.fp6_packed", UnitAttr::get(self.getContext()));
           },
           py::arg("smem"), py::arg("pointer"), py::arg("mask"),
-          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"))
+          py::arg("other"), py::arg("cachePolicy"), py::arg("isVolatile"),
+          py::arg("fp6_packed") = false)
       .def(
           "create_async_copy_local_to_global",
           [](GluonOpBuilder &self, Value smem, Value pointer, Value mask,
@@ -1295,17 +1299,18 @@ void init_gluon_ir(py::module_ &m) {
           "create_buffer_desc_load",
           [](GluonOpBuilder &self, Type resultType, Value ptr, Value offsets,
              Value mask, Value other, Attribute cachePolicy, Value soffset,
-             std::optional<tt::MemSyncScope> scope) -> Value {
+             std::optional<tt::MemSyncScope> scope, bool fp6Packed) -> Value {
             auto scopeAttr =
                 scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
                       : tt::MemSyncScopeAttr();
             return self.create<ttag::BufferLoadOp>(
                 resultType, ptr, offsets, Value() /*stride*/, cachePolicy, mask,
-                other, /*contiguity=*/1, soffset, scopeAttr);
+                other, /*contiguity=*/1, soffset, scopeAttr, fp6Packed);
           },
           py::arg("resultType"), py::arg("ptr"), py::arg("offsets"),
           py::arg("mask"), py::arg("other"), py::arg("cachePolicy"),
-          py::arg("soffset"), py::arg("scope").none())
+          py::arg("soffset"), py::arg("scope").none(),
+          py::arg("fp6_packed") = false)
       .def(
           "create_buffer_desc_store",
           [](GluonOpBuilder &self, Value storedValue, Value ptr, Value offsets,
@@ -1388,17 +1393,19 @@ void init_gluon_ir(py::module_ &m) {
           "create_buffer_desc_load_to_local",
           [](GluonOpBuilder &self, Value dest, Value ptr, Value offsets,
              Value mask, Value other, Value stride, Attribute cachePolicy,
-             Value soffset, std::optional<tt::MemSyncScope> scope) {
+             Value soffset, std::optional<tt::MemSyncScope> scope,
+             bool fp6Packed) {
             auto scopeAttr =
                 scope ? tt::MemSyncScopeAttr::get(self.getContext(), *scope)
                       : tt::MemSyncScopeAttr();
             self.create<ttag::BufferLoadToLocalOp>(
                 dest, ptr, offsets, mask, other, stride, cachePolicy,
-                /*contiguity=*/1, soffset, scopeAttr);
+                /*contiguity=*/1, soffset, scopeAttr, fp6Packed);
           },
           py::arg("dest"), py::arg("ptr"), py::arg("offsets"), py::arg("mask"),
           py::arg("other"), py::arg("stride"), py::arg("cachePolicy"),
-          py::arg("soffset"), py::arg("scope").none())
+          py::arg("soffset"), py::arg("scope").none(),
+          py::arg("fp6_packed") = false)
       .def("get_amd_cache_policy_gfx9",
            [](GluonOpBuilder &self, bool nontemporal) -> Attribute {
              return ttag::CachePolicyGfx9Attr::get(self.getContext(),
@@ -1432,6 +1439,12 @@ void init_gluon_ir(py::module_ &m) {
            [](GluonOpBuilder &self, Value input, Value scale,
               int axis) -> Value {
              return self.create<ttag::ScaledDowncastFp4Op>(input, scale, axis);
+           })
+      .def("create_scaled_downcast_fp6",
+           [](GluonOpBuilder &self, Value input, Value scale, int axis,
+              tt::ScaleDotElemType format) -> Value {
+             return self.create<ttag::ScaledDowncastFp6Op>(input, scale, axis,
+                                                           format);
            })
       .def("create_scaled_downcast_fp8",
            [](GluonOpBuilder &self, Value input, Value scale, Type elemType,

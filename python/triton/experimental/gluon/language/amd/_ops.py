@@ -12,6 +12,8 @@ _DOWNCAST_FORMAT_TO_ELEM_TYPE = {
     "e4m3": ttgl.float8e4nv,
     "e5m2": ttgl.float8e5,
     "e2m1": ttgl.uint8,
+    "e2m3": ttgl.uint8,
+    "e3m2": ttgl.uint8,
 }
 
 
@@ -287,7 +289,8 @@ def _check_scaled_downcast_scale_shape(input_shape, scale_shape, axis, axis_exte
         f"along axis {axis}, but got {block_size}")
 
 
-def _scaled_downcast(input, scale, elem_type, axis, semantic):
+def _scaled_downcast(input, scale, format, axis, semantic):
+    elem_type = _downcast_format_to_elem_type(format)
     rank = _validate_scaled_downcast_common(input, scale)
     input_shape = input.type.shape
     scale_shape = scale.type.shape
@@ -303,6 +306,17 @@ def _scaled_downcast(input, scale, elem_type, axis, semantic):
                                                              elem_type.to_ir(semantic.builder), axis)
         ret_ty = input.type.with_element_ty(elem_type)
         return ttgl.tensor(handle, ret_ty)
+
+    # fp6: packed with padding, so the output keeps the input shape.
+    if format in ("e2m3", "e3m2"):
+        axis = _normalize_axis(axis, rank, "axis is required for fp6 scaled_downcast")
+        _check_scaled_downcast_scale_shape(
+            input_shape, scale_shape, axis, input_shape[axis],
+            "Expected scale shape for fp6 scaled_downcast to match the input shape on non-axis dimensions")
+
+        handle = semantic.builder.create_scaled_downcast_fp6(input.handle, scale.handle, axis,
+                                                             semantic._str_to_fp_type(format))
+        return ttgl.tensor(handle, input.type.with_element_ty(elem_type))
 
     _check(elem_type in {ttgl.int8, ttgl.uint8},
            lambda: f"Expected elem_type to be fp8 (e4m3/e5m2) or packed fp4 (int8/uint8) but got {elem_type}")
@@ -336,6 +350,9 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       packed into one output byte (even element -> low nibble, next element ->
       high nibble), so the result extent along ``axis`` is halved (the inverse
       of ``scaled_upcast``).
+    * ``"e2m3"`` / ``"e3m2"`` (packed fp6): the output keeps the shape and
+      layout of ``input``; each 16 bytes along ``axis`` hold 16 values in 12
+      bytes followed by 4 zero bytes.
 
     ``axis`` (default: last dim) selects the dimension along which scales are
     shared. ``scale`` must be compact along ``axis`` with one E8M0 byte per
@@ -343,5 +360,5 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
     span a multiple of 8 consecutive input elements.
     """
     axis = _unwrap_if_constexpr(axis)
-    elem_type = _downcast_format_to_elem_type(format)
-    return _scaled_downcast(input, scale, elem_type, axis, _semantic)
+    format = _unwrap_if_constexpr(format)
+    return _scaled_downcast(input, scale, format, axis, _semantic)

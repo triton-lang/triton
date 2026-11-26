@@ -38,7 +38,8 @@ def _cache_policy_attr(cache_policy, cache_modifier, semantic):
 
 
 @builtin
-def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *, cache_policy=None, _semantic=None):
+def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *, cache_policy=None, fp6_packed=False,
+                          _semantic=None):
     """
     AMD global load to shared operation.
 
@@ -80,6 +81,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *
         cache_modifier (str): Cache modifier specifier. Defaults to "".
         cache_policy (CachePolicy, optional): gfx9 cache hints. Cannot be combined with ``cache_modifier``.
             Defaults to None.
+        fp6_packed (bool): Expand each 12-byte packed FP6 group into a 16-byte slot of ``dest``. Defaults to False.
     """
     _check(ptr.type.is_block(), lambda: "expected ptr to be a tensor")
     _check(isinstance(ptr.type.layout, DistributedLayout), lambda: "expected ptr type layout to be a DistributedLayout")
@@ -100,7 +102,7 @@ def global_load_to_shared(dest, ptr, mask=None, other=None, cache_modifier="", *
     other_handle = other.handle if other is not None else ir.value()
     cache_policy = _cache_policy_attr(cache_policy, cache_modifier, _semantic)
     _semantic.builder.create_async_copy_global_to_local(dest.handle, ptr.handle, mask_handle, other_handle,
-                                                        cache_policy, False)
+                                                        cache_policy, False, _unwrap_if_constexpr(fp6_packed))
 
 
 @builtin

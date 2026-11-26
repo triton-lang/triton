@@ -3,7 +3,7 @@ import torch
 
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-from triton._internal_testing import is_hip_cdna4
+from triton._internal_testing import fp6_values, is_hip_cdna4, pack_fp6
 
 
 @gluon.jit
@@ -85,3 +85,44 @@ def test_runtime_scaled_downcast_fp4(dtype, instruction_suffix, scale_byte):
     expected = torch.full((block_m, block_k), expected_byte, dtype=torch.uint8)
     torch.testing.assert_close(output.cpu(), expected)
     assert (f"v_cvt_scalef32_pk_fp4_{instruction_suffix}" in program.asm["amdgcn"])
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("fmt", ["e2m3", "e3m2"])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_runtime_scaled_downcast_fp6(fmt, dtype):
+
+    @gluon.jit
+    def kernel(x_ptr, scale_ptr, out_ptr, FMT: ttgl.constexpr, M: ttgl.constexpr, K: ttgl.constexpr):
+        # Each thread converts 32 consecutive values with one instruction.
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1, 32], [16, 4], [4, 1], [1, 0])
+        scale_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [16, 4], [4, 1], [1, 0])
+        offs_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, layout))[:, None]
+        offs_k = ttgl.arange(0, K, layout=ttgl.SliceLayout(0, layout))[None, :]
+        x = ttgl.load(x_ptr + offs_m * K + offs_k)
+        scale_m = ttgl.arange(0, M, layout=ttgl.SliceLayout(1, scale_layout))[:, None]
+        scale_k = ttgl.arange(0, K // 32, layout=ttgl.SliceLayout(0, scale_layout))[None, :]
+        scale = ttgl.load(scale_ptr + scale_m * (K // 32) + scale_k)
+        ttgl.store(out_ptr + offs_m * K + offs_k, ttgl.amd.cdna4.scaled_downcast(x, scale, FMT, axis=1))
+
+    M, K = 64, 128
+    scale = torch.randint(124, 131, (M, K // 32), dtype=torch.uint8, device="cuda")
+    scale_f = torch.exp2(scale.double() - 127).repeat_interleave(32, dim=1)
+    # Non-negative FP6 values in code order.
+    fp6_magnitudes = fp6_values(fmt, torch.arange(32, device="cuda")).double()
+    fp6_max = fp6_magnitudes[-1]
+    x = (torch.randn((M, K), dtype=torch.float64, device="cuda") * fp6_max * scale_f).to(dtype)
+    out = torch.empty((M, K), dtype=torch.uint8, device="cuda")
+    compiled = kernel[(1, )](x, scale, out, fmt, M, K, num_warps=4)
+    assert f"v_cvt_scalef32_2xpk16_{'fp6' if fmt == 'e2m3' else 'bf6'}_f32" in compiled.asm["amdgcn"]
+
+    # Round x / scale to nearest, ties to even code, saturating to the largest magnitude.
+    a = (x.double() / scale_f).abs()
+    dist = (a[..., None] - fp6_magnitudes).abs()
+    nearest = dist == dist.min(dim=-1, keepdim=True).values
+    even = nearest & (torch.arange(32, device="cuda") % 2 == 0)
+    code = torch.where(even.any(-1), even.int().argmax(-1), nearest.int().argmax(-1))
+    code = torch.where(a >= fp6_max, 31, code) | (torch.signbit(x.float()).int() << 5)
+    groups = pack_fp6(code).reshape(M, -1, 12)
+    expected = torch.cat([groups, torch.zeros_like(groups[..., :4])], -1).reshape(M, K)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
