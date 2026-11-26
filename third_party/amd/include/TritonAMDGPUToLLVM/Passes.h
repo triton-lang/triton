@@ -26,6 +26,11 @@ createConvertWarpPipelinePass(StringRef gfxArch);
 std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPUConvertWarpSpecializeToLLVMPass(StringRef gfxArch);
 
+// Returns true if `module` has warp-pipeline stages for the warp-pipeline
+// conversion pass to convert. Call it before that pass, which removes the
+// stage markers.
+bool hasWarpPipeline(ModuleOp module);
+
 } // namespace mlir::triton::AMD
 
 namespace mlir::triton {

@@ -526,6 +526,10 @@ void init_triton_amd(py::module_ &m) {
     return mlir::triton::AMD::TargetInfo(arch).supportsMultiCTALaunch();
   });
 
+  m.def("has_warp_pipeline", [](mlir::ModuleOp &mod) {
+    return mlir::triton::AMD::hasWarpPipeline(mod);
+  });
+
   m.def("supports_tdm", [](const std::string &arch) {
     return mlir::triton::AMD::TargetInfo(arch).supportsTDM();
   });

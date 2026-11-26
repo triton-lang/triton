@@ -349,7 +349,7 @@ def is_fpsan_supported(base_arch):
 
 
 def is_consan_supported(base_arch):
-    return base_arch == "gfx1250"
+    return base_arch in ["gfx950", "gfx1250"]
 
 
 def _parse_llvm_key_values(attrs, bare_value=""):
@@ -596,6 +596,19 @@ class HIPBackend(BaseBackend):
 
         use_async_copy = is_async_copy_enabled(options.base_arch)
         use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
+        # Whether the block pingpong pass is added below. The ConSan warning uses the same condition.
+        use_block_pingpong_pass = use_block_pingpong and options.num_stages > 1
+        if is_enabled(options, "consan") and is_consan_supported(options.base_arch):
+            if use_block_pingpong_pass:
+                warnings.warn(
+                    "ConSan disables automatic block pingpong scheduling because phase-shifted warp execution "
+                    "is not supported by ConSan; ConSan checks this kernel without pingpong, "
+                    "so the phase-shifted schedule is not checked.")
+            # Also keep the pipeliner from preparing a pingpong schedule. Apply
+            # this on gfx1250 too when pingpong is explicitly requested: ConSan's
+            # execution model cannot represent phase-shifted warps on either GPU.
+            use_block_pingpong = False
+            use_block_pingpong_pass = False
         amd.passes.ttgpuir.add_optimize_descriptor_encoding(pm)
         amd.passes.ttgpuir.add_schedule_loops(pm, options.num_stages)
         amd.passes.ttgpuir.add_pipeline(pm, use_async_copy, use_block_pingpong)
@@ -609,7 +622,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_move_up_prologue_loads(pm)
-        if use_block_pingpong and options.num_stages > 1:
+        if use_block_pingpong_pass:
             amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
 
         if knobs.amd.use_buffer_ops:
@@ -665,6 +678,13 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_llir(src, metadata, options):
         mod = src
+        # Check before warp-pipeline conversion removes the markers.
+        uses_warp_pipeline = amd.has_warp_pipeline(mod)
+        # ConSan cannot model warp-pipeline schedules. The warp pipeline is preserved.
+        if uses_warp_pipeline and is_enabled(options, "consan") and is_consan_supported(options.base_arch):
+            warnings.warn("ConSan capture preparation and instrumentation are disabled for this kernel because "
+                          "warp_pipeline_stage / warp pipeline scheduling is not supported by ConSan; "
+                          "the warp pipeline is preserved and this kernel has no ConSan race coverage.")
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -675,13 +695,13 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         # Reserve LDS space for ConSan captures before allocation computes offsets.
-        if is_enabled(options, "consan") and is_consan_supported(options.base_arch):
+        if is_enabled(options, "consan") and is_consan_supported(options.base_arch) and not uses_warp_pipeline:
             passes.ttgpuir.add_prepare_consan_captures(pm, "amd")
         amd.passes.ttgpuir.add_allocate_shared_memory(pm, options.arch)
         # Instrumentation point here so an extension can override IRs above (e.g., ttir and ttgir).
         instrument(pm, point="ttgpuir-to-llvmir", context=mod.context)
         amd.passes.ttgpuir.add_membar(pm, options.arch)
-        if is_enabled(options, "consan") and is_consan_supported(options.base_arch):
+        if is_enabled(options, "consan") and is_consan_supported(options.base_arch) and not uses_warp_pipeline:
             passes.ttgpuir.add_concurrency_sanitizer(pm)
             passes.gluon.add_canonicalizer(pm)
             passes.common.add_cse(pm)
