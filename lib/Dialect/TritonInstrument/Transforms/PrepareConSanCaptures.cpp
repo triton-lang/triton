@@ -54,6 +54,15 @@ bool hasBarriers(ModuleOp mod) {
   return result;
 }
 
+bool hasSplitClusterBarriers(ModuleOp mod, const ConSanTargetHooks &hooks) {
+  bool result = false;
+  mod.walk([&](Operation *op) {
+    result |= hooks.isSplitClusterBarrierArrive(op) ||
+              hooks.isSplitClusterBarrierWait(op);
+  });
+  return result;
+}
+
 bool hasCpAsync(ModuleOp mod) {
   bool result = false;
   mod.walk([&](Operation *op) {
@@ -120,7 +129,8 @@ public:
       CallGraph<int>(mod).walk<WalkOrder::PostOrder>(markCall, [](auto) {});
     }
     int totalCaptures = tti::estimateConSanCaptureCount(
-        numActiveMemTypes, hasBarriers(mod), hasClusterBarriers,
+        numActiveMemTypes, hasBarriers(mod),
+        hasClusterBarriers || hasSplitClusterBarriers(mod, *hooks),
         getNumCommitKinds(mod, *hooks),
         hasSharedBuffers && hooks->needsAsyncProxyFenceTracking(mod));
     int extraBytes = totalCaptures * tti::kCaptureSizeBytes;

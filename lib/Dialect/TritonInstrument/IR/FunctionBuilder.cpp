@@ -76,6 +76,34 @@ uint32_t makeInterleavedMask(unsigned bit, unsigned numBaseThreads) {
 }
 } // namespace WaitingBits
 
+// Virtual slot of a split cluster barrier. Bit 0 of the lead CTA's row holds
+// the phase read by deadlock detection. Each CTA's row holds its arrival flag,
+// its scope (the base threads that receive the next completion), and the base
+// threads holding an unconsumed completion. Base thread 0 is always in scope.
+namespace ClusterBarrierBits {
+constexpr unsigned phaseBit = 0;
+constexpr unsigned arrivedBit = 1;
+constexpr unsigned scopeLsb = 16;
+constexpr unsigned pendingLsb = 32;
+constexpr uint64_t baseThreadFieldMask = (1ull << MAX_NUM_BASE_THREADS) - 1;
+constexpr uint64_t scopeAndPendingMask =
+    (baseThreadFieldMask << scopeLsb) | (baseThreadFieldMask << pendingLsb);
+static_assert(arrivedBit < scopeLsb &&
+              scopeLsb + MAX_NUM_BASE_THREADS <= pendingLsb &&
+              pendingLsb + MAX_NUM_BASE_THREADS <= 64);
+
+namespace ArriveStatus {
+constexpr int duplicate = 1 << 0;
+constexpr int beforeConsume = 1 << 1;
+constexpr int lostPhase = 1 << 2;
+} // namespace ArriveStatus
+
+namespace WaitStatus {
+constexpr int consumed = 1 << 0;
+constexpr int missingArrival = 1 << 1;
+} // namespace WaitStatus
+} // namespace ClusterBarrierBits
+
 namespace ProxyAccessBits {
 constexpr unsigned readOffset = MAX_NUM_BASE_THREADS;
 constexpr unsigned fencedOffset = 2 * MAX_NUM_BASE_THREADS;
@@ -645,6 +673,51 @@ Value updateWaitingBits(ImplicitLocOpBuilder &b, Value waiting,
   return arith::SelectOp::create(b, mask, withWaiting, waiting);
 }
 
+Value readVirtualBarrierPhase(ImplicitLocOpBuilder &b, Value states,
+                              Value barrierIdx) {
+  auto statesType = cast<RankedTensorType>(states.getType());
+  Value mask = createVirtualBarrierMask(b, barrierIdx, statesType);
+  Value phase = arith::AndIOp::create(
+      b, states, tti::createConstIntTensor(b, b.getLoc(), 1, statesType));
+  phase = arith::SelectOp::create(
+      b, mask, phase, tti::createConstIntTensor(b, b.getLoc(), 0, statesType));
+  return arith::TruncIOp::create(b, b.getI1Type(),
+                                 reduceAll<arith::OrIOp>(b, phase));
+}
+
+// Virtual slots record the waiting threads of every CTA in the lead CTA's row.
+Value updateVirtualBarrierWaiting(ImplicitLocOpBuilder &b, Value waiting,
+                                  Value barrierIdx, Value thread, Value phase,
+                                  Value pred, bool markWaiting) {
+  auto waitingType = cast<RankedTensorType>(waiting.getType());
+  Value mask = arith::AndIOp::create(
+      b, createDimMask(b, barrierIdx, waitingType, /*dim=*/1),
+      createLeadCTAEffectMask(b, waitingType,
+                              arith::ConstantIntOp::create(b, 1, 32)));
+  Value predTensor =
+      triton::SplatOp::create(b, cast<RankedTensorType>(mask.getType()), pred);
+  mask = arith::AndIOp::create(b, mask, predTensor);
+  return updateWaitingBits(b, waiting, waitingType, thread, phase, mask,
+                           markWaiting);
+}
+
+void createPollingLoop(ImplicitLocOpBuilder &b,
+                       function_ref<Value()> buildIteration) {
+  Block *entryBlock = b.getInsertionBlock();
+  Block *continueBlock = entryBlock->splitBlock(b.getInsertionPoint());
+  Block *pollBlock = new Block();
+  entryBlock->getParent()->getBlocks().insert(continueBlock->getIterator(),
+                                              pollBlock);
+  b.setInsertionPointToEnd(entryBlock);
+  cf::BranchOp::create(b, pollBlock);
+
+  b.setInsertionPointToStart(pollBlock);
+  Value done = buildIteration();
+  cf::CondBranchOp::create(b, done, continueBlock, ValueRange{}, pollBlock,
+                           ValueRange{});
+  b.setInsertionPointToStart(continueBlock);
+}
+
 } // namespace
 
 void FunctionBuilder::createFillGlobalTensorCall(ImplicitLocOpBuilder &b,
@@ -1097,28 +1170,13 @@ void FunctionBuilder::createClusterBarrierRendezvousCall(
   auto getPhase = [&]() {
     Value states =
         tti::createLoadScratchMemory(b, b.getLoc(), statesPtr, statesType);
-    Value mask = createVirtualBarrierMask(b, barrierIdxVal, statesType);
-    Value phase = arith::AndIOp::create(
-        b, states, tti::createConstIntTensor(b, b.getLoc(), 1, statesType));
-    phase = arith::SelectOp::create(
-        b, mask, phase,
-        tti::createConstIntTensor(b, b.getLoc(), 0, statesType));
-    Value result = arith::TruncIOp::create(b, b.getI1Type(),
-                                           reduceAll<arith::OrIOp>(b, phase));
-    return result;
+    return readVirtualBarrierPhase(b, states, barrierIdxVal);
   };
   auto updateWaiting = [&](Value phase, Value pred, bool markWaiting) {
     Value waiting =
         tti::createLoadScratchMemory(b, b.getLoc(), waitingPtr, waitingType);
-    Value mask = arith::AndIOp::create(
-        b, createDimMask(b, barrierIdxVal, waitingType, /*dim=*/1),
-        createLeadCTAEffectMask(b, waitingType,
-                                arith::ConstantIntOp::create(b, 1, 32)));
-    Value predTensor = triton::SplatOp::create(
-        b, cast<RankedTensorType>(mask.getType()), pred);
-    mask = arith::AndIOp::create(b, mask, predTensor);
-    Value updated = updateWaitingBits(b, waiting, waitingType, threadVal, phase,
-                                      mask, markWaiting);
+    Value updated = updateVirtualBarrierWaiting(
+        b, waiting, barrierIdxVal, threadVal, phase, pred, markWaiting);
     tti::createStoreScratchMemory(b, b.getLoc(), waitingPtr, updated,
                                   waitingType);
   };
@@ -1139,26 +1197,428 @@ void FunctionBuilder::createClusterBarrierRendezvousCall(
   tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
   tti::createAssertInThread(b, ok, "Deadlock detected at a cluster barrier");
 
-  Block *entryBlock = b.getInsertionBlock();
-  Block *continueBlock = entryBlock->splitBlock(b.getInsertionPoint());
-  Block *phasePollBlock = new Block();
-  entryBlock->getParent()->getBlocks().insert(continueBlock->getIterator(),
-                                              phasePollBlock);
-  b.setInsertionPointToEnd(entryBlock);
-  cf::BranchOp::create(b, phasePollBlock);
+  createPollingLoop(b, [&]() {
+    tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
+    Value currentPhase = getPhase();
+    Value phaseChanged = arith::CmpIOp::create(b, arith::CmpIPredicate::ne,
+                                               currentPhase, savedPhase);
+    updateWaiting(savedPhase, phaseChanged, /*markWaiting=*/false);
+    Value ok = createCheckAllActiveWaitingCall(b, vTrue, insertPoint);
+    tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
+    tti::createAssertInThread(b, ok, "Deadlock detected at a cluster barrier");
+    return phaseChanged;
+  });
+}
 
-  b.setInsertionPointToStart(phasePollBlock);
+namespace {
+
+Value createCurrentCTASlotMask(ImplicitLocOpBuilder &b, Value barrierIdx,
+                               RankedTensorType statesType) {
+  return arith::AndIOp::create(
+      b, createDimMask(b, barrierIdx, statesType, /*dim=*/1),
+      createCTASetMask(b, statesType, /*dim=*/0, createCurrentCTAMask(b)));
+}
+
+Value extractClusterBarrierField(ImplicitLocOpBuilder &b, Value states,
+                                 unsigned lsb, uint64_t mask) {
+  auto type = cast<RankedTensorType>(states.getType());
+  Value shifted = arith::ShRUIOp::create(
+      b, states, tti::createConstIntTensor(b, b.getLoc(), lsb, type));
+  return arith::AndIOp::create(
+      b, shifted, tti::createConstIntTensor(b, b.getLoc(), mask, type));
+}
+
+Value getThreadPendingBit(ImplicitLocOpBuilder &b, Value thread) {
+  Value shift = arith::AddIOp::create(
+      b, arith::ExtUIOp::create(b, b.getI64Type(), thread),
+      arith::ConstantIntOp::create(b, ClusterBarrierBits::pendingLsb, 64));
+  return arith::ShLIOp::create(b, arith::ConstantIntOp::create(b, 1, 64),
+                               shift);
+}
+
+Value readCurrentCTAState(ImplicitLocOpBuilder &b, Value states,
+                          Value currentCTASlot) {
+  auto type = cast<RankedTensorType>(states.getType());
+  return reduceAll<arith::OrIOp>(
+      b, arith::SelectOp::create(
+             b, currentCTASlot, states,
+             tti::createConstIntTensor(b, b.getLoc(), 0, type)));
+}
+
+Value hasAnyBitSet(ImplicitLocOpBuilder &b, Value word, Value bits) {
+  return arith::CmpIOp::create(
+      b, arith::CmpIPredicate::ne, arith::AndIOp::create(b, word, bits),
+      arith::ConstantOp::create(b, b.getZeroAttr(word.getType())));
+}
+
+Value getClusterBarrierScope(ImplicitLocOpBuilder &b, Value states) {
+  using namespace ClusterBarrierBits;
+  auto type = cast<RankedTensorType>(states.getType());
+  return arith::OrIOp::create(
+      b, extractClusterBarrierField(b, states, scopeLsb, baseThreadFieldMask),
+      tti::createConstIntTensor(b, b.getLoc(), 1, type));
+}
+
+Value isStatusClear(ImplicitLocOpBuilder &b, Value status, int bits) {
+  Value masked = arith::AndIOp::create(
+      b, status, arith::ConstantIntOp::create(b, bits, 32));
+  return arith::CmpIOp::create(b, arith::CmpIPredicate::eq, masked,
+                               arith::ConstantIntOp::create(b, 0, 32));
+}
+
+Value createStatusBit(ImplicitLocOpBuilder &b, Value flag, int mask) {
+  return arith::SelectOp::create(b, flag,
+                                 arith::ConstantIntOp::create(b, mask, 32),
+                                 arith::ConstantIntOp::create(b, 0, 32));
+}
+
+} // namespace
+
+void FunctionBuilder::createClusterBarrierArriveCall(ImplicitLocOpBuilder &b,
+                                                     int barrierIdx, int thread,
+                                                     Operation *insertPoint) {
+  assert(!auxData.barrierStates.empty() &&
+         "cluster barrier arrival requires barrier state");
+  Value lock = auxData.lock.at(insertPoint).value;
+  ValueType states = auxData.barrierStates.at(insertPoint);
+  auto statesType = cast<RankedTensorType>(states.type);
+  Value vTrue = arith::ConstantIntOp::create(b, 1, 1);
+  SmallVector<Value> args = {arith::ConstantIntOp::create(b, barrierIdx, 32),
+                             arith::ConstantIntOp::create(b, thread, 32),
+                             states.value};
   tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
-  Value currentPhase = getPhase();
-  Value phaseChanged = arith::CmpIOp::create(b, arith::CmpIPredicate::ne,
-                                             currentPhase, savedPhase);
-  updateWaiting(savedPhase, phaseChanged, /*markWaiting=*/false);
-  ok = createCheckAllActiveWaitingCall(b, vTrue, insertPoint);
+  Value status = createCallToCachedFunction(
+      b, "cluster_barrier_arrive", args, AssertInfo{"", b.getI32Type()},
+      {statesType},
+      [statesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        using namespace ClusterBarrierBits;
+        Value barrierIdx = entryBlock->getArgument(0);
+        Value thread = entryBlock->getArgument(1);
+        Value statesPtr = entryBlock->getArgument(2);
+        auto cst = [&](uint64_t value) {
+          return tti::createConstIntTensor(fb, fb.getLoc(), value, statesType);
+        };
+
+        Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
+                                                    statesType);
+        Value slot = createDimMask(fb, barrierIdx, statesType, /*dim=*/1);
+        Value current = createCurrentCTASlotMask(fb, barrierIdx, statesType);
+        Value currentState = readCurrentCTAState(fb, states, current);
+        Value duplicate = hasAnyBitSet(
+            fb, currentState,
+            arith::ConstantIntOp::create(fb, 1ull << arrivedBit, 64));
+        Value beforeConsume =
+            hasAnyBitSet(fb, currentState, getThreadPendingBit(fb, thread));
+
+        Value arrivedFlag = cst(1ull << arrivedBit);
+        Value afterArrive = arith::SelectOp::create(
+            fb, current, arith::OrIOp::create(fb, states, arrivedFlag), states);
+        auto maskType = cast<RankedTensorType>(slot.getType());
+        Value allTrue = tti::createConstIntTensor(fb, fb.getLoc(), 1, maskType);
+        Value completes = reduceAll<arith::AndIOp>(
+            fb,
+            arith::SelectOp::create(
+                fb, slot, hasAnyBitSet(fb, afterArrive, arrivedFlag), allTrue));
+
+        Value scope = getClusterBarrierScope(fb, states);
+        Value pending = extractClusterBarrierField(fb, states, pendingLsb,
+                                                   baseThreadFieldMask);
+        Value unconsumed = hasAnyBitSet(fb, pending, scope);
+        Value lostPhase = arith::AndIOp::create(
+            fb, completes,
+            reduceAll<arith::OrIOp>(
+                fb, arith::AndIOp::create(fb, slot, unconsumed)));
+
+        Value status = arith::OrIOp::create(
+            fb, createStatusBit(fb, duplicate, ArriveStatus::duplicate),
+            arith::OrIOp::create(
+                fb,
+                createStatusBit(fb, beforeConsume, ArriveStatus::beforeConsume),
+                createStatusBit(fb, lostPhase, ArriveStatus::lostPhase)));
+
+        Value afterCompletion = arith::OrIOp::create(
+            fb, arith::AndIOp::create(fb, states, cst(~(1ull << arrivedBit))),
+            arith::ShLIOp::create(fb, scope, cst(pendingLsb)));
+        afterCompletion = arith::SelectOp::create(
+            fb, createVirtualBarrierMask(fb, barrierIdx, statesType),
+            arith::XOrIOp::create(fb, afterCompletion, cst(1ull << phaseBit)),
+            afterCompletion);
+        Value updated = arith::SelectOp::create(
+            fb,
+            arith::AndIOp::create(
+                fb, slot, triton::SplatOp::create(fb, maskType, completes)),
+            afterCompletion, afterArrive);
+        // The assertions run after the lock is released, so other regions can
+        // read the barrier state before this one fails. An invalid arrival
+        // does not update it.
+        Value valid =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq, status,
+                                  arith::ConstantIntOp::create(fb, 0, 32));
+        tti::createStoreScratchMemory(
+            fb, fb.getLoc(), statesPtr, updated, statesType,
+            /*currentCTAOnly=*/false,
+            /*storeMask=*/
+            arith::AndIOp::create(
+                fb, slot, triton::SplatOp::create(fb, maskType, valid)));
+        triton::ReturnOp::create(fb, status);
+      },
+      /*emitAssert=*/false);
   tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
-  tti::createAssertInThread(b, ok, "Deadlock detected at a cluster barrier");
-  cf::CondBranchOp::create(b, phaseChanged, continueBlock, ValueRange{},
-                           phasePollBlock, ValueRange{});
-  b.setInsertionPointToStart(continueBlock);
+  using namespace ClusterBarrierBits;
+  tti::createAssertInThread(
+      b, isStatusClear(b, status, ArriveStatus::duplicate),
+      "CTA arrived at a cluster barrier twice in the same phase");
+  tti::createAssertInThread(
+      b, isStatusClear(b, status, ArriveStatus::beforeConsume),
+      "Cluster barrier arrival before waiting on the previous phase");
+  tti::createAssertInThread(
+      b, isStatusClear(b, status, ArriveStatus::lostPhase),
+      "Cluster barrier completion lost: a thread has not waited on the "
+      "previous phase");
+}
+
+void FunctionBuilder::createClusterBarrierWaitCall(ImplicitLocOpBuilder &b,
+                                                   int barrierIdx, int thread,
+                                                   Operation *insertPoint) {
+  assert(!auxData.waiting.empty() && !auxData.barrierStates.empty() &&
+         !auxData.activeMasks.empty() &&
+         "cluster barrier wait requires barrier deadlock state");
+  Value lock = auxData.lock.at(insertPoint).value;
+  ValueType states = auxData.barrierStates.at(insertPoint);
+  auto statesType = cast<RankedTensorType>(states.type);
+  ValueType waiting = auxData.waiting.at(insertPoint);
+  auto waitingType = cast<RankedTensorType>(waiting.type);
+  ValueType activeMasks = auxData.activeMasks.at(insertPoint);
+  auto activeMasksType = cast<RankedTensorType>(activeMasks.type);
+  uint32_t flagMask = WaitingBits::makeInterleavedMask(
+      WaitingBits::flagBit, auxData.threadLayout.numBaseThreads);
+  Value vTrue = arith::ConstantIntOp::create(b, 1, 1);
+  SmallVector<Value> args = {arith::ConstantIntOp::create(b, barrierIdx, 32),
+                             arith::ConstantIntOp::create(b, thread, 32),
+                             states.value, waiting.value, activeMasks.value};
+
+  createPollingLoop(b, [&]() {
+    tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
+    Value status = createCallToCachedFunction(
+        b, "cluster_barrier_wait", args, AssertInfo{"", b.getI32Type()},
+        {statesType, waitingType, activeMasksType},
+        [statesType, waitingType, activeMasksType,
+         flagMask](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+          using namespace ClusterBarrierBits;
+          Value barrierIdx = entryBlock->getArgument(0);
+          Value thread = entryBlock->getArgument(1);
+          Value statesPtr = entryBlock->getArgument(2);
+          Value waitingPtr = entryBlock->getArgument(3);
+          Value activeMasksPtr = entryBlock->getArgument(4);
+          Location loc = fb.getLoc();
+
+          Value states =
+              tti::createLoadScratchMemory(fb, loc, statesPtr, statesType);
+          Value current = createCurrentCTASlotMask(fb, barrierIdx, statesType);
+          Value currentState = readCurrentCTAState(fb, states, current);
+          Value threadPending = getThreadPendingBit(fb, thread);
+          Value consumed = hasAnyBitSet(fb, currentState, threadPending);
+          Value notConsumed = arith::XOrIOp::create(
+              fb, consumed, arith::ConstantIntOp::create(fb, 1, 1));
+          Value clearPending = triton::SplatOp::create(
+              fb, statesType,
+              arith::XOrIOp::create(fb, threadPending,
+                                    arith::ConstantIntOp::create(fb, -1, 64)));
+          auto maskType = cast<RankedTensorType>(current.getType());
+          Value consume = arith::AndIOp::create(
+              fb, current, triton::SplatOp::create(fb, maskType, consumed));
+          tti::createStoreScratchMemory(
+              fb, loc, statesPtr,
+              arith::AndIOp::create(fb, states, clearPending), statesType,
+              /*currentCTAOnly=*/false, /*storeMask=*/consume);
+
+          Value phase = readVirtualBarrierPhase(fb, states, barrierIdx);
+          Value waiting =
+              tti::createLoadScratchMemory(fb, loc, waitingPtr, waitingType);
+          waiting = updateVirtualBarrierWaiting(fb, waiting, barrierIdx, thread,
+                                                phase, consumed,
+                                                /*markWaiting=*/false);
+          waiting = updateVirtualBarrierWaiting(fb, waiting, barrierIdx, thread,
+                                                phase, notConsumed,
+                                                /*markWaiting=*/true);
+          tti::createStoreScratchMemory(fb, loc, waitingPtr, waiting,
+                                        waitingType);
+
+          // A CTA that has not arrived cannot arrive while all of its active
+          // base threads wait on this phase.
+          Value slotWaiting = arith::SelectOp::create(
+              fb, createVirtualBarrierMask(fb, barrierIdx, waitingType),
+              waiting, tti::createConstIntTensor(fb, loc, 0, waitingType));
+          Value waitingPerCTA =
+              reduce<arith::OrIOp>(fb, slotWaiting, /*axes=*/{0, 1});
+          auto perCTAType = cast<RankedTensorType>(waitingPerCTA.getType());
+          Value flags = arith::AndIOp::create(
+              fb, waitingPerCTA,
+              tti::createConstIntTensor(fb, loc, flagMask, perCTAType));
+          Value phases = arith::AndIOp::create(
+              fb,
+              arith::ShRUIOp::create(
+                  fb, waitingPerCTA,
+                  tti::createConstIntTensor(fb, loc, 1, perCTAType)),
+              tti::createConstIntTensor(fb, loc, flagMask, perCTAType));
+          Value phaseFlags = arith::SelectOp::create(
+              fb,
+              triton::SplatOp::create(fb, perCTAType.clone(fb.getI1Type()),
+                                      phase),
+              phases,
+              arith::XOrIOp::create(
+                  fb, phases,
+                  tti::createConstIntTensor(fb, loc, flagMask, perCTAType)));
+          Value waitingOnPhase = arith::AndIOp::create(fb, flags, phaseFlags);
+          Value activeMasks = tti::createLoadScratchMemory(
+              fb, loc, activeMasksPtr, activeMasksType);
+          activeMasks =
+              createConvertLayout(fb, activeMasks, perCTAType.getEncoding());
+          Value zeroPerCTA = tti::createConstIntTensor(fb, loc, 0, perCTAType);
+          Value allActiveWaiting = arith::AndIOp::create(
+              fb,
+              arith::CmpIOp::create(
+                  fb, arith::CmpIPredicate::eq,
+                  arith::AndIOp::create(fb, waitingOnPhase, activeMasks),
+                  activeMasks),
+              arith::CmpIOp::create(fb, arith::CmpIPredicate::ne, activeMasks,
+                                    zeroPerCTA));
+          Value arrived = reduceLastDim<arith::OrIOp>(
+              fb, arith::SelectOp::create(
+                      fb, createDimMask(fb, barrierIdx, statesType, /*dim=*/1),
+                      extractClusterBarrierField(fb, states, arrivedBit, 1),
+                      tti::createConstIntTensor(fb, loc, 0, statesType)));
+          arrived = arith::TruncIOp::create(
+              fb,
+              cast<RankedTensorType>(arrived.getType()).clone(fb.getI32Type()),
+              arrived);
+          arrived = createConvertLayout(fb, arrived, perCTAType.getEncoding());
+          Value notArrived = arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                                   arrived, zeroPerCTA);
+          Value missingArrival = arith::AndIOp::create(
+              fb, notConsumed,
+              reduceAll<arith::OrIOp>(
+                  fb, arith::AndIOp::create(fb, allActiveWaiting, notArrived)));
+
+          Value status = arith::OrIOp::create(
+              fb, createStatusBit(fb, consumed, WaitStatus::consumed),
+              createStatusBit(fb, missingArrival, WaitStatus::missingArrival));
+          triton::ReturnOp::create(fb, status);
+        },
+        /*emitAssert=*/false);
+    Value ok = createCheckAllActiveWaitingCall(b, vTrue, insertPoint);
+    tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
+    using namespace ClusterBarrierBits;
+    tti::createAssertInThread(
+        b, isStatusClear(b, status, WaitStatus::missingArrival),
+        "Deadlock detected at a cluster barrier: every active thread of a CTA "
+        "that has not arrived is waiting");
+    tti::createAssertInThread(b, ok, "Deadlock detected at a cluster barrier");
+    return hasAnyBitSet(
+        b, status, arith::ConstantIntOp::create(b, WaitStatus::consumed, 32));
+  });
+}
+
+void FunctionBuilder::createEnterClusterBarrierScopeCall(
+    ImplicitLocOpBuilder &b, int barrierIdx, int numThreads,
+    Operation *insertPoint) {
+  assert(!auxData.barrierStates.empty() &&
+         "cluster barrier scope requires barrier state");
+  assert(numThreads <= MAX_NUM_BASE_THREADS &&
+         "cluster barrier scope exceeds the base-thread fields");
+  ValueType states = auxData.barrierStates.at(insertPoint);
+  auto statesType = cast<RankedTensorType>(states.type);
+  SmallVector<Value> args = {
+      arith::ConstantIntOp::create(b, barrierIdx, 32),
+      arith::ConstantIntOp::create(b, (1ull << numThreads) - 1, 64),
+      states.value};
+  createCallToCachedFunction(
+      b, "enter_cluster_barrier_scope", args, /*assertInfo=*/std::nullopt,
+      {statesType}, [statesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        using namespace ClusterBarrierBits;
+        Value barrierIdx = entryBlock->getArgument(0);
+        Value scope =
+            triton::SplatOp::create(fb, statesType, entryBlock->getArgument(1));
+        Value statesPtr = entryBlock->getArgument(2);
+        auto cst = [&](uint64_t value) {
+          return tti::createConstIntTensor(fb, fb.getLoc(), value, statesType);
+        };
+
+        Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
+                                                    statesType);
+        Value pending = arith::MulIOp::create(
+            fb, extractClusterBarrierField(fb, states, pendingLsb, 1), scope);
+        Value entered = arith::OrIOp::create(
+            fb, arith::AndIOp::create(fb, states, cst(~scopeAndPendingMask)),
+            arith::OrIOp::create(
+                fb, arith::ShLIOp::create(fb, scope, cst(scopeLsb)),
+                arith::ShLIOp::create(fb, pending, cst(pendingLsb))));
+        tti::createStoreScratchMemory(
+            fb, fb.getLoc(), statesPtr, entered, statesType,
+            /*currentCTAOnly=*/false,
+            /*storeMask=*/createCurrentCTASlotMask(fb, barrierIdx, statesType));
+        triton::ReturnOp::create(fb);
+      });
+}
+
+void FunctionBuilder::createExitClusterBarrierScopeCall(
+    ImplicitLocOpBuilder &b, int barrierIdx, Operation *insertPoint) {
+  assert(!auxData.barrierStates.empty() &&
+         "cluster barrier scope requires barrier state");
+  Value lock = auxData.lock.at(insertPoint).value;
+  ValueType states = auxData.barrierStates.at(insertPoint);
+  auto statesType = cast<RankedTensorType>(states.type);
+  Value vTrue = arith::ConstantIntOp::create(b, 1, 1);
+  SmallVector<Value> args = {arith::ConstantIntOp::create(b, barrierIdx, 32),
+                             states.value};
+  tti::ExperimentalLockAcquireOp::create(b, lock, vTrue);
+  Value ok = createCallToCachedFunction(
+      b, "exit_cluster_barrier_scope", args, AssertInfo{"", b.getI1Type()},
+      {statesType},
+      [statesType](ImplicitLocOpBuilder &fb, Block *entryBlock) {
+        using namespace ClusterBarrierBits;
+        Value barrierIdx = entryBlock->getArgument(0);
+        Value statesPtr = entryBlock->getArgument(1);
+        auto cst = [&](uint64_t value) {
+          return tti::createConstIntTensor(fb, fb.getLoc(), value, statesType);
+        };
+
+        Value states = tti::createLoadScratchMemory(fb, fb.getLoc(), statesPtr,
+                                                    statesType);
+        Value current = createCurrentCTASlotMask(fb, barrierIdx, statesType);
+        Value scope = getClusterBarrierScope(fb, states);
+        Value pending = extractClusterBarrierField(fb, states, pendingLsb,
+                                                   baseThreadFieldMask);
+        Value pending0 = arith::AndIOp::create(fb, pending, cst(1));
+        Value agree =
+            arith::CmpIOp::create(fb, arith::CmpIPredicate::eq,
+                                  arith::AndIOp::create(fb, pending, scope),
+                                  arith::MulIOp::create(fb, pending0, scope));
+        auto maskType = cast<RankedTensorType>(agree.getType());
+        agree = arith::SelectOp::create(
+            fb, current, agree,
+            tti::createConstIntTensor(fb, fb.getLoc(), 1, maskType));
+        Value ok = reduceAll<arith::AndIOp>(fb, agree);
+        Value exited = arith::OrIOp::create(
+            fb, arith::AndIOp::create(fb, states, cst(~scopeAndPendingMask)),
+            arith::ShLIOp::create(fb, pending0, cst(pendingLsb)));
+        // The assertion runs after the lock is released, so other regions can
+        // read the barrier state before this one fails. A failed exit does not
+        // update it.
+        tti::createStoreScratchMemory(
+            fb, fb.getLoc(), statesPtr, exited, statesType,
+            /*currentCTAOnly=*/false,
+            /*storeMask=*/
+            arith::AndIOp::create(fb, current,
+                                  triton::SplatOp::create(fb, maskType, ok)));
+        triton::ReturnOp::create(fb, ok);
+      },
+      /*emitAssert=*/false);
+  tti::ExperimentalLockReleaseOp::create(b, lock, vTrue);
+  tti::createAssertInThread(
+      b, ok,
+      "Cluster barrier completion not consumed by every warp-specialized "
+      "thread");
 }
 
 void FunctionBuilder::createVerifyBarrierCanInitCall(ImplicitLocOpBuilder &b,

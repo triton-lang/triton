@@ -143,7 +143,19 @@ public:
     return barriers;
   }
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<ttag::TritonAMDGPUDialect, LLVM::LLVMDialect>();
+  }
+
   bool supportsCrossCTASharedMemory() const override { return false; }
+
+  bool isSplitClusterBarrierArrive(Operation *op) const override {
+    return isa<ttag::ClusterBarrierArriveOp>(op);
+  }
+
+  bool isSplitClusterBarrierWait(Operation *op) const override {
+    return isa<ttag::ClusterBarrierWaitOp>(op);
+  }
 
   bool hasUnsummarizableCalleeState(Operation *op) const override {
     return isa<ttag::ClusterBarrierArriveOp, ttag::ClusterBarrierWaitOp>(op);

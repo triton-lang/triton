@@ -1137,8 +1137,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
         {axis = 1 : i32} : (!ttg.memdesc<4x32xi32, #scatter_shared,
         #ttg.shared_memory, mutable>, tensor<4x32xi32, #scatter_blocked>,
         tensor<4x32xi32, #scatter_blocked>) -> tensor<4x32xi32, #scatter_blocked>
-    amdg.cluster_barrier_arrive
-    amdg.cluster_barrier_wait
     tt.return
   }
 }
@@ -1172,9 +1170,7 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
   // CHECK-NEXT: tt.call @__triton_consan_verify_local_scatter_destinations
   // CHECK-NEXT: ttg.warp_return
   // CHECK-NOT: amdg.cluster_barrier
-  // CHECK: amdg.cluster_barrier_arrive
-  // CHECK-NEXT: amdg.cluster_barrier_wait{{$}}
-  // CHECK-NEXT: tt.return
+  // CHECK: tt.return
   tt.func public @amd_multi_cta_ws_startup_and_scatter() {
     %dst = ttg.local_alloc {allocation.offset = 0 : i32}
         : () -> !ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>
@@ -1190,8 +1186,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
           tensor<4x32xi32, #scatter_blocked>, tensor<4x32xi32, #scatter_blocked>
       ttg.warp_return
     } : (!ttg.memdesc<4x32xi32, #scatter_shared, #ttg.shared_memory, mutable>) -> ()
-    amdg.cluster_barrier_arrive
-    amdg.cluster_barrier_wait
     tt.return
   }
 }
@@ -1236,8 +1230,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     partition2() num_warps(2) {
       ttg.warp_return
     } : () -> ()
-    amdg.cluster_barrier_arrive
-    amdg.cluster_barrier_wait
     tt.return
   }
 }
@@ -1268,8 +1260,128 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
           : () -> !ttg.memdesc<4x32xi32, #partition_shared, #ttg.shared_memory, mutable>
       ttg.warp_return
     } : () -> ()
+    tt.return
+  }
+}
+
+// -----
+
+// A split cluster barrier arrival records the CTA's arrival in ConSan's
+// barrier state without blocking. The wait polls that state until a completed
+// phase is available, then runs the hardware wait.
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 4 : i32} {
+  // CHECK-LABEL: @amd_cluster_barrier_split_phase
+  // CHECK: llvm.fence syncscope("cluster") acquire
+  // CHECK: tti.experimental_lock_acquire
+  // CHECK-NEXT: tt.call @__triton_consan_cluster_barrier_arrive{{.*}}(%c0_i32{{[_0-9]*}}, %c0_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NEXT: tti.experimental_lock_release
+  // CHECK-NOT: cf.
+  // CHECK: tti.experimental_assert_uniform %{{.*}}, "CTA arrived at a cluster barrier twice in the same phase"
+  // CHECK-NOT: cf.
+  // CHECK: tti.experimental_assert_uniform %{{.*}}, "Cluster barrier arrival before waiting on the previous phase"
+  // CHECK-NOT: cf.
+  // CHECK: tti.experimental_assert_uniform %{{.*}}, "Cluster barrier completion lost: a thread has not waited on the previous phase"
+  // CHECK-NEXT: amdg.cluster_barrier_arrive
+  // CHECK: cf.br ^[[POLL:bb[0-9]+]]
+  // CHECK-NEXT: ^[[POLL]]:
+  // CHECK-NEXT: tti.experimental_lock_acquire
+  // CHECK-NEXT: tt.call @__triton_consan_cluster_barrier_wait{{.*}}(%c0_i32{{[_0-9]*}}, %c0_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NEXT: ttg.barrier global_write
+  // CHECK-NEXT: %[[OK:.*]] = tt.call @__triton_consan_check_all_active_waiting
+  // CHECK-NEXT: tti.experimental_lock_release
+  // CHECK: tti.experimental_assert_uniform %{{.*}}, "Deadlock detected at a cluster barrier: every active thread of a CTA that has not arrived is waiting"
+  // CHECK-NEXT: tti.experimental_assert_uniform %[[OK]], "Deadlock detected at a cluster barrier"
+  // CHECK: cf.cond_br %{{.*}}, ^[[DONE:bb[0-9]+]], ^[[POLL]]
+  // CHECK-NEXT: ^[[DONE]]:
+  // CHECK-NEXT: amdg.cluster_barrier_wait
+  // CHECK: tti.experimental_lock_acquire
+  // CHECK: tt.call @__triton_consan_set_active_mask{{.*}}(%c0_i32{{[_0-9]*}},
+  // CHECK: tt.return
+  tt.func public @amd_cluster_barrier_split_phase() {
     amdg.cluster_barrier_arrive
     amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+
+// -----
+
+// A split cluster barrier used across warp_specialize. All regions use the
+// single split barrier slot (slot 0), with one base thread per region
+// (default = 0, partition0 = 1). Entering warp_specialize copies the parent's
+// pending completion to every region, since each region must wait for it.
+// After the join, ConSan checks that all regions consumed the same
+// completions. The barrier orders execution only, so neither the arrival nor
+// the wait publishes memory visibility.
+#ws_cluster_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
+#ws_cluster_blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 512 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32} {
+  // CHECK-LABEL: @amd_cluster_barrier_in_warp_specialize
+  // CHECK: tt.call @__triton_consan_cluster_barrier_arrive{{.*}}(%c0_i32{{[_0-9]*}}, %c0_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NOT: publish_cluster
+  // CHECK: amdg.cluster_barrier_arrive
+  // CHECK-NOT: publish_cluster
+  // CHECK: tti.experimental_lock_acquire
+  // CHECK-NEXT: arith.constant 5 : i32
+  // CHECK-NEXT: tt.call @__triton_consan_set_active_mask{{.*}}(%c5_i32
+  // CHECK-NEXT: arith.constant 0 : i32
+  // CHECK-NEXT: arith.constant 3 : i64
+  // CHECK-NEXT: tt.call @__triton_consan_enter_cluster_barrier_scope{{.*}}(%c0_i32{{[_0-9]*}}, %c3_i64{{[_0-9]*}}, %{{.*}})
+  // CHECK-NOT: publish_cluster
+  // CHECK: tti.experimental_lock_release
+  // CHECK-NEXT: ttg.warp_specialize({{.*}}consan.extra_capture_bytes = 48 : i32
+  // CHECK-NEXT: default {
+  // CHECK-NOT: publish_cluster
+  // CHECK: tt.call @__triton_consan_cluster_barrier_wait{{.*}}(%c0_i32{{[_0-9]*}}, %c0_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NOT: publish_cluster
+  // CHECK: amdg.cluster_barrier_wait
+  // CHECK-NOT: publish_cluster
+  // CHECK: tt.call @__triton_consan_cluster_barrier_arrive{{.*}}(%c0_i32{{[_0-9]*}}, %c0_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NOT: publish_cluster
+  // CHECK: amdg.cluster_barrier_arrive
+  // CHECK-NOT: publish_cluster
+  // CHECK: tt.call @__triton_consan_cluster_barrier_wait{{.*}}(%c0_i32{{[_0-9]*}}, %c0_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NOT: publish_cluster
+  // CHECK: amdg.cluster_barrier_wait
+  // CHECK-NOT: publish_cluster
+  // CHECK: partition0(
+  // CHECK-NOT: publish_cluster
+  // CHECK: tt.call @__triton_consan_cluster_barrier_wait{{.*}}(%c0_i32{{[_0-9]*}}, %c1_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NOT: publish_cluster
+  // CHECK: amdg.cluster_barrier_wait
+  // CHECK-NOT: publish_cluster
+  // CHECK: tt.call @__triton_consan_cluster_barrier_wait{{.*}}(%c0_i32{{[_0-9]*}}, %c1_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NOT: publish_cluster
+  // CHECK: amdg.cluster_barrier_wait
+  // CHECK-NOT: publish_cluster
+  // CHECK: ttg.warp_return
+  // CHECK-NEXT: } : (
+  // CHECK: tt.call @__triton_consan_publish_cta_visibility
+  // CHECK: tti.experimental_lock_acquire
+  // CHECK-NEXT: %[[AGREE:.*]] = tt.call @__triton_consan_exit_cluster_barrier_scope{{.*}}(%c0_i32{{[_0-9]*}}, %{{.*}})
+  // CHECK-NEXT: tti.experimental_lock_release
+  // CHECK-NEXT: tti.experimental_assert_uniform %[[AGREE]], "Cluster barrier completion not consumed by every warp-specialized thread"
+  tt.func public @amd_cluster_barrier_in_warp_specialize() {
+    %buffer = ttg.local_alloc {allocation.offset = 0 : i32}
+        : () -> !ttg.memdesc<128xi32, #ws_cluster_shared, #ttg.shared_memory, mutable>
+    amdg.cluster_barrier_arrive
+    ttg.warp_specialize(%buffer) attributes {actualRegisters = array<i32: 32, 32>, allocation.offset = 0 : i32, requestedRegisters = array<i32: 32>, warpGroupStartIds = array<i32: 4>}
+    default {
+      %value = ttg.local_load %buffer
+          : !ttg.memdesc<128xi32, #ws_cluster_shared, #ttg.shared_memory, mutable>
+          -> tensor<128xi32, #ws_cluster_blocked>
+      amdg.cluster_barrier_wait
+      ttg.barrier local
+      amdg.cluster_barrier_arrive
+      amdg.cluster_barrier_wait
+      ttg.warp_yield
+    }
+    partition0(%arg0: !ttg.memdesc<128xi32, #ws_cluster_shared, #ttg.shared_memory, mutable>) num_warps(4) {
+      amdg.cluster_barrier_wait
+      amdg.cluster_barrier_wait
+      ttg.warp_return
+    } : (!ttg.memdesc<128xi32, #ws_cluster_shared, #ttg.shared_memory, mutable>) -> ()
     tt.return
   }
 }
@@ -1740,8 +1852,6 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %callee = tt.call @amd_scalar_atomic_callee(%ptr)
         {allocation.offset = 0 : i32, allocation.size = 4 : i32}
         : (!tt.ptr<i32>) -> i32
-    amdg.cluster_barrier_arrive
-    amdg.cluster_barrier_wait
     tt.return
   }
 }

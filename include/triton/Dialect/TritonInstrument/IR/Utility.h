@@ -11,6 +11,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include <array>
+#include <optional>
 
 namespace mlir::triton::gpu {
 class GlobalScratchAllocOp;
@@ -209,8 +210,8 @@ struct AuxDataMap {
   //   Cbar, Cbuf, Cthr, Cmask = CTA dimensions qualifying barriers, buffers,
   //       threads, and thread masks respectively. Each has extent C.
   //   B = tracked buffers for one memory type, power-of-two padded.
-  //   K = tracked mbarriers and virtual cluster rendezvous slots,
-  //       power-of-two padded.
+  //   K = tracked mbarriers, virtual cluster rendezvous slots, and the
+  //       split cluster barrier slot, power-of-two padded.
   //   T = logical ConSan thread bit slots used by this module, power-of-two
   //       padded for the distributed layout.
   //   P = base-thread columns used by commit and proxy state, power-of-two
@@ -231,7 +232,10 @@ struct AuxDataMap {
   // scratch, <Cbar x K x i64>
   // Packed barrier lifecycle state. Zero means invalid/uninitialized. Bit 0 is
   // phase, bits [1..20] are the initial arrival count, bits [21..40] are the
-  // current arrival count, and bits [41..61] hold a signed tx-count.
+  // current arrival count, and bits [41..61] hold a signed tx-count. Virtual
+  // cluster barrier slots use other encodings: rendezvous slots hold
+  // 2 * arrivals + phase, and the split cluster barrier slot uses
+  // ClusterBarrierBits. Both keep the phase in bit 0 of the lead CTA's row.
   RegionToValueMap barrierStates;
 
   // scratch, <Cbuf x B x Cmask x iV>
@@ -306,6 +310,11 @@ struct AuxDataMap {
   // barriers outside warp specialization share the entry-region slot; each
   // warp-specialize region has its own slot.
   DenseMap<Region *, int> clusterBarrierSlots;
+
+  // Virtual slot shared by all split cluster barrier operations in the kernel,
+  // since they use the same hardware barrier across execution regions.
+  // Unset when the kernel has no split cluster barriers.
+  std::optional<int> splitClusterBarrierSlot;
 
   // scratch, <Cbar x K x Cthr x i32>
   // Deadlock-detection bitfield. Each base thread uses two bits: waiting flag
