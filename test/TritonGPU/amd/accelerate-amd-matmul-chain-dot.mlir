@@ -216,3 +216,87 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %result#0 : tensor<128x128xf32, #blocked>
   }
 }
+
+// -----
+
+// Second dot inside an scf.if: same layouts as mfma_chain_dot_BM64.
+// BLOCK_M = 64 because at 128 the generic layout is [4, 1] too.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+// MFMA16{LITERAL}: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>
+// MFMA32{LITERAL}: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], instrShape = [32, 32, 8], isTransposed = true}>
+// MFMA32{LITERAL}: #mma1 = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 2], instrShape = [32, 32, 8], isTransposed = true}>
+// CHECK-LABEL: chain_dot_scf_if_BM64
+// CHECK: tt.dot {{.*}} : {{.*}} -> tensor<64x16xf32, #mma>
+// MFMA16: tt.dot {{.*}} : {{.*}} -> tensor<64x128xf32, #mma>
+// MFMA32: tt.dot {{.*}} : {{.*}} -> tensor<64x128xf32, #mma1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @chain_dot_scf_if_BM64(
+      %q: tensor<64x128xf16, #dotOp0>,
+      %k: tensor<128x16xf16, #dotOp1>,
+      %v: tensor<16x128xf16, #dotOp1>,
+      %cond: i1,
+      %o_ptr: tensor<64x128x!tt.ptr<f32>, #blocked>) {
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf32, #blocked>
+    %cst1 = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked>
+    %qk = tt.dot %q, %k, %cst : tensor<64x128xf16, #dotOp0> * tensor<128x16xf16, #dotOp1> -> tensor<64x16xf32, #blocked>
+    %o = scf.if %cond -> (tensor<64x128xf32, #blocked>) {
+      %qk_f16 = arith.truncf %qk : tensor<64x16xf32, #blocked> to tensor<64x16xf16, #blocked>
+      %p = ttg.convert_layout %qk_f16 : tensor<64x16xf16, #blocked> -> tensor<64x16xf16, #dotOp0>
+      %d = tt.dot %p, %v, %cst1 : tensor<64x16xf16, #dotOp0> * tensor<16x128xf16, #dotOp1> -> tensor<64x128xf32, #blocked>
+      scf.yield %d : tensor<64x128xf32, #blocked>
+    } else {
+      scf.yield %cst1 : tensor<64x128xf32, #blocked>
+    }
+    tt.store %o_ptr, %o : tensor<64x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// First dot feeds only the scf.if condition, so this is not a chain. A false
+// match would give the first dot [4, 1]; only mfma32 tells, as [2, 2] otherwise.
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #blocked}>
+#dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #blocked}>
+// MFMA16{LITERAL}: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [4, 1], instrShape = [16, 16, 16], isTransposed = true}>
+// MFMA32{LITERAL}: #mma = #ttg.amd_mfma<{version = 3, warpsPerCTA = [2, 2], instrShape = [32, 32, 8], isTransposed = true}>
+// MFMA16{LITERAL}: #mma1 = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 4], instrShape = [16, 16, 16], isTransposed = true}>
+// MFMA32{LITERAL}: #mma1 = #ttg.amd_mfma<{version = 3, warpsPerCTA = [1, 4], instrShape = [32, 32, 8], isTransposed = true}>
+// CHECK-LABEL: chain_dot_cond_only_BM64
+// CHECK: tt.dot {{.*}} : {{.*}} -> tensor<64x16xf32, #mma>
+// CHECK: tt.dot {{.*}} : {{.*}} -> tensor<64x128xf32, #mma1>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @chain_dot_cond_only_BM64(
+      %q: tensor<64x128xf16, #dotOp0>,
+      %k: tensor<128x16xf16, #dotOp1>,
+      %a2: tensor<64x16xf16, #dotOp0>,
+      %v: tensor<16x128xf16, #dotOp1>,
+      %o_ptr: tensor<64x128x!tt.ptr<f32>, #blocked>) {
+    %c0 = arith.constant 0.000000e+00 : f32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x16xf32, #blocked>
+    %cst1 = arith.constant dense<0.000000e+00> : tensor<64x128xf32, #blocked>
+    %qk = tt.dot %q, %k, %cst : tensor<64x128xf16, #dotOp0> * tensor<128x16xf16, #dotOp1> -> tensor<64x16xf32, #blocked>
+    %r0 = "tt.reduce"(%qk) <{axis = 1 : i32}> ({
+    ^bb0(%arg0: f32, %arg1: f32):
+      %m = arith.maxnumf %arg0, %arg1 : f32
+      tt.reduce.return %m : f32
+    }) : (tensor<64x16xf32, #blocked>) -> tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %r1 = "tt.reduce"(%r0) <{axis = 0 : i32}> ({
+    ^bb0(%arg0: f32, %arg1: f32):
+      %m = arith.maxnumf %arg0, %arg1 : f32
+      tt.reduce.return %m : f32
+    }) : (tensor<64xf32, #ttg.slice<{dim = 1, parent = #blocked}>>) -> f32
+    %cond = arith.cmpf ogt, %r1, %c0 : f32
+    %o = scf.if %cond -> (tensor<64x128xf32, #blocked>) {
+      %d = tt.dot %a2, %v, %cst1 : tensor<64x16xf16, #dotOp0> * tensor<16x128xf16, #dotOp1> -> tensor<64x128xf32, #blocked>
+      scf.yield %d : tensor<64x128xf32, #blocked>
+    } else {
+      scf.yield %cst1 : tensor<64x128xf32, #blocked>
+    }
+    tt.store %o_ptr, %o : tensor<64x128x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
