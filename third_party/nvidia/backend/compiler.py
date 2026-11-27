@@ -238,6 +238,9 @@ class CUDABackend(BaseBackend):
             args["max_occupancy"] = 1
         capability = int(self._parse_arch(args["arch"]))
 
+        if is_enabled(args, "consan") and capability < 90:
+            raise ValueError(f"ConSan requires NVIDIA SM90+ (Hopper); current target is sm_{capability}")
+
         if args.get("clc", False) and capability < 100:
             raise ValueError(f"clc=True requires NVIDIA SM100+ (Blackwell); current target is sm_{capability}")
 
