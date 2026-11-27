@@ -254,6 +254,38 @@ tt.func @scan_in_partition(%arg0: i32, %arg1: !tt.tensordesc<128x128xf32, #share
   tt.return
 }
 
+// tt.reduce can carry several operands and results: tl.max with
+// return_indices=True and tl.argmax reduce values and indices together. Each
+// result gets a partition output. Scheduling used to assert on a single result.
+// CHECK-LABEL: @multi_result_reduce_in_partition
+tt.func @multi_result_reduce_in_partition(%arg0: i32, %arg1: !tt.tensordesc<128x128xf32, #shared_f32>) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  scf.for %i = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    %md = tt.descriptor_load %arg1[%c0_i32, %c0_i32] {ttg.partition = array<i32: 1>} : !tt.tensordesc<128x128xf32, #shared_f32> -> tensor<128x128xf32, #load_blocked>
+    %smem = ttg.local_alloc %md {ttg.partition = array<i32: 1>} : (tensor<128x128xf32, #load_blocked>) -> !ttg.memdesc<128x128xf32, #shared_f32, #smem>
+    %tmp = ttg.local_load %smem {ttg.partition = array<i32: 1>} : !ttg.memdesc<128x128xf32, #shared_f32, #smem> -> tensor<128x128xf32, #load_blocked>
+    "use_memdesc"(%tmp) {ttg.partition = array<i32: 1>} : (tensor<128x128xf32, #load_blocked>) -> ()
+    %x = "producer"() {ttg.partition = array<i32: 0>, data} : () -> tensor<128xf32>
+    %ids = "producer"() {ttg.partition = array<i32: 0>, data} : () -> tensor<128xi32>
+    // CHECK: "tt.reduce"
+    %r:2 = "tt.reduce"(%x, %ids) <{axis = 0 : i32}> ({
+    ^bb0(%a0: f32, %a1: i32, %b0: f32, %b1: i32):
+      // CHECK: arith.cmpf {{.*}}ttg.partition = array<i32: 0>
+      %gt = arith.cmpf ogt, %a0, %b0 : f32
+      // CHECK: arith.select {{.*}}ttg.partition = array<i32: 0>
+      %0 = arith.select %gt, %a0, %b0 : f32
+      // CHECK: arith.select {{.*}}ttg.partition = array<i32: 0>
+      %1 = arith.select %gt, %a1, %b1 : i32
+      // CHECK: tt.reduce.return {{.*}}ttg.partition = array<i32: 0>
+      tt.reduce.return %0, %1 : f32, i32
+    // CHECK-NEXT: }) {ttg.partition = array<i32: 0>, ttg.partition.outputs = [array<i32: 0>, array<i32: 0>]}
+    }) : (tensor<128xf32>, tensor<128xi32>) -> (f32, i32)
+    "use"(%r#0, %r#1) {ttg.partition = array<i32: 0>, data} : (f32, i32) -> ()
+  } {tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32], ttg.warp_specialize.tag = 0 : i32}
+  tt.return
+}
+
 // CHECK-LABEL: @no_partitions
 tt.func @no_partitions(%arg0: i32) {
   %c0_i32 = arith.constant 0 : i32
