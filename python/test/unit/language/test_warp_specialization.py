@@ -5,7 +5,7 @@ import re
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_compile_warmup, is_hip, is_hopper, is_blackwell
+from triton._internal_testing import is_compile_warmup, is_hip, is_hopper, is_blackwell, is_sm12x
 from triton.tools.tensor_descriptor import TensorDescriptor
 
 pytestmark = pytest.mark.enable_warmup(min_capability=9)
@@ -1007,3 +1007,113 @@ def test_grouped_gemm(M, N, K, group_size):
     tri_tma_out = group_gemm_tma_fn(group_A, group_B_T)
     for i in range(group_size):
         assert torch.allclose(ref_out[i], tri_tma_out[i], atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(not (is_blackwell() or is_sm12x()), reason="Requires Blackwell or newer")
+@pytest.mark.parametrize("num_stages", [2, 3])
+def test_warp_specialize_atomic_executes_once(num_stages, device):
+    # A side-effecting op must run once per loop iteration. Without a single
+    # partition, an unused-result atomic is cloned into every partition.
+    M = N = K = 128
+    BM = BN = BK = 64
+
+    @triton.jit
+    def kernel(a_desc, b_desc, c_desc, cnt_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, BM: tl.constexpr,
+               BN: tl.constexpr, BK: tl.constexpr, WS: tl.constexpr, NS: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        acc = tl.zeros((BM, BN), dtype=tl.float32)
+        for k in tl.range(0, K, BK, warp_specialize=WS, num_stages=NS):
+            a = a_desc.load([pid_m * BM, k])
+            b = b_desc.load([k, pid_n * BN])
+            acc = tl.dot(a, b, acc)
+            tl.atomic_add(cnt_ptr, 1)
+        c_desc.store([pid_m * BM, pid_n * BN], acc.to(tl.float16))
+
+    torch.manual_seed(0)
+    a = torch.randn((M, K), device=device, dtype=torch.float16)
+    b = torch.randn((K, N), device=device, dtype=torch.float16)
+    ref = (a.float() @ b.float()).to(torch.float16)
+    grid = (M // BM, N // BN)
+    expected = (K // BK) * grid[0] * grid[1]
+
+    for ws in (False, True):
+        c = torch.empty((M, N), device=device, dtype=torch.float16)
+        cnt = torch.zeros(1, dtype=torch.int32, device=device)
+        a_desc = TensorDescriptor(a, a.shape, a.stride(), [BM, BK])
+        b_desc = TensorDescriptor(b, b.shape, b.stride(), [BK, BN])
+        c_desc = TensorDescriptor(c, c.shape, c.stride(), [BM, BN])
+        compiled = kernel[grid](a_desc, b_desc, c_desc, cnt, M, N, K, BM, BN, BK, ws, num_stages, num_warps=4)
+        if is_compile_warmup():
+            # Warm both the non-WS and WS specializations; --require-complete
+            # treats a runtime compile as a miss.
+            continue
+        torch.cuda.synchronize()
+        if ws:
+            ttgir = compiled.asm["ttgir"]
+            assert "ttg.warp_specialize" in ttgir
+            assert ttgir.count("tt.atomic_rmw") == 1
+        assert cnt.item() == expected, (ws, cnt.item(), expected)
+        torch.testing.assert_close(c, ref, rtol=2e-2, atol=2e-2)
+
+
+@pytest.mark.skipif(is_hip(), reason="warp specialization is not supported on hip devices")
+@pytest.mark.skipif(not (is_blackwell() or is_sm12x()), reason="Requires Blackwell or newer")
+@pytest.mark.parametrize("num_stages", [2, 3])
+def test_warp_specialize_used_atomic_executes_once(num_stages, device):
+    # A used-result atomic whose value is consumed both inside the loop (by
+    # the TMA load partition) and after the loop (by the default partition).
+    # The atomic must execute once; its ticket is routed across partitions
+    # through an aref, not recomputed.
+    M, N, K = 128, 64, 128
+    BM = BN = BK = 64
+
+    @triton.jit
+    def kernel(a_desc, b_desc, c_desc, cnt_ptr, ticket_ptr, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+               BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr, WS: tl.constexpr, NS: tl.constexpr):
+        pid_m = tl.program_id(0)
+        pid_n = tl.program_id(1)
+        acc = tl.zeros((BM, BN), dtype=tl.float32)
+        ticket = 0
+        for k in tl.range(0, K, BK, warp_specialize=WS, num_stages=NS):
+            ticket = tl.atomic_add(cnt_ptr, 1, sem="acquire")
+            a = a_desc.load([pid_m * BM, k])
+            # Both halves of B are identical, so the numeric result does not
+            # depend on which half this iteration picks. The ticket is still a
+            # real cross-partition consumer of the atomic result.
+            b = b_desc.load([k, (ticket % 2) * BN])
+            acc = tl.dot(a, b, acc)
+        c_desc.store([pid_m * BM, pid_n * BN], acc.to(tl.float16))
+        tl.store(ticket_ptr + pid_m, ticket)
+
+    torch.manual_seed(0)
+    a = torch.randn((M, K), device=device, dtype=torch.float16)
+    b_half = torch.randn((K, BN), device=device, dtype=torch.float16)
+    b = torch.cat([b_half, b_half], dim=1)
+    ref = (a.float() @ b_half.float()).to(torch.float16)
+    grid = (M // BM, 1)
+    expected = (K // BK) * grid[0] * grid[1]
+
+    for ws in (False, True):
+        c = torch.empty((M, N), device=device, dtype=torch.float16)
+        cnt = torch.zeros(1, dtype=torch.int32, device=device)
+        tickets = torch.full((grid[0], ), -1, dtype=torch.int32, device=device)
+        a_desc = TensorDescriptor(a, a.shape, a.stride(), [BM, BK])
+        b_desc = TensorDescriptor(b, b.shape, b.stride(), [BK, BN])
+        c_desc = TensorDescriptor(c, c.shape, c.stride(), [BM, BN])
+        compiled = kernel[grid](a_desc, b_desc, c_desc, cnt, tickets, M, N, K, BM, BN, BK, ws, num_stages, num_warps=4)
+        if is_compile_warmup():
+            # Warm both the non-WS and WS specializations; --require-complete
+            # treats a runtime compile as a miss.
+            continue
+        torch.cuda.synchronize()
+        if ws:
+            ttgir = compiled.asm["ttgir"]
+            assert "ttg.warp_specialize" in ttgir
+            assert ttgir.count("tt.atomic_rmw") == 1
+        assert cnt.item() == expected, (ws, cnt.item(), expected)
+        ticket_values = tickets.tolist()
+        assert len(set(ticket_values)) == len(ticket_values)
+        assert all(0 <= t < expected for t in ticket_values)
+        torch.testing.assert_close(c, ref, rtol=2e-2, atol=2e-2)

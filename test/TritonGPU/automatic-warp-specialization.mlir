@@ -512,3 +512,545 @@ module attributes {"ttng.two-ctas" = true, "ttg.num-ctas" = 4 : i32, "ttg.num-wa
     tt.return
   }
 }
+
+
+// -----
+
+// A side-effecting op must execute once even when its result is unused.
+// The scheduler must not assign it the union of sibling partitions.
+// CHECK-LABEL: @atomic_once
+// CHECK: ttg.warp_specialize
+// CHECK: tt.atomic_rmw
+// CHECK-NOT: tt.atomic_rmw
+// CHECK: tt.return
+#acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+tt.func @atomic_once(
+  %a_base: !tt.ptr<f16>,
+  %b_base: !tt.ptr<f16>,
+  %cnt: !tt.ptr<i32>
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %false = arith.constant false
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %k_tiles = arith.constant 32 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %a_desc_undef = ub.poison : !tt.tensordesc<128x64xf16, #shared>
+  %b_desc_undef = ub.poison : !tt.tensordesc<64x128xf16, #shared>
+  scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) : i32 {
+    %do_prologue = arith.cmpi slt, %k, %c2_i32 : i32
+    %cur_a_desc, %cur_b_desc = scf.if %do_prologue -> (!tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) {
+      %c1_i64 = arith.constant 1 : i64
+      %next_a_desc = tt.make_tensor_descriptor %a_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<128x64xf16, #shared>
+      %next_b_desc = tt.make_tensor_descriptor %b_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x128xf16, #shared>
+      scf.yield %next_a_desc, %next_b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    } else {
+      scf.yield %a_desc, %b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    }
+
+    %off_m = arith.muli %k, %c128_i32 : i32
+    %off_n = arith.muli %k, %c64_i32 : i32
+    %off_k = arith.muli %k, %c1_i32 : i32
+    %a = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #oper_layout>
+    %b = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #oper_layout>
+    %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
+    %use_acc = arith.select %do_epilogue, %false, %true : i1
+    scf.if %do_epilogue {
+      %row_sum = "tt.reduce"(%c) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128x128xf32, #acc_layout>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>
+      %total = "tt.reduce"(%row_sum) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>) -> f32
+      %total_i32 = arith.fptosi %total : f32 to i32
+      tt.atomic_store release, gpu, %cnt, %total_i32 : !tt.ptr<i32>
+    }
+    %one_i32 = arith.constant 1 : i32
+    %old = tt.atomic_rmw add, acq_rel, gpu, %cnt, %one_i32, %true : (!tt.ptr<i32>, i32, i1) -> i32
+    scf.yield %c, %use_acc, %cur_a_desc, %cur_b_desc : tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+  } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
+
+  tt.return
+}
+
+}
+
+// -----
+
+// A used-result atomic consumed inside the loop (by the load partition) and
+// after the loop (by the default partition). It must execute once; its ticket
+// crosses the partition boundary through an aref instead of being recomputed
+// in the default partition.
+// BASE-LABEL: @atomic_used_once
+// BASE: ttg.warp_specialize
+// BASE-COUNT-1: tt.atomic_rmw
+// BASE: tt.store
+// BASE: tt.return
+#acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+tt.func @atomic_used_once(
+  %a_base: !tt.ptr<f16>,
+  %b_base: !tt.ptr<f16>,
+  %cnt: !tt.ptr<i32>
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %false = arith.constant false
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %k_tiles = arith.constant 32 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %a_desc_undef = ub.poison : !tt.tensordesc<128x64xf16, #shared>
+  %b_desc_undef = ub.poison : !tt.tensordesc<64x128xf16, #shared>
+  %loop:5 = scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef, %ticket = %c0_i32) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>, i32) : i32 {
+    %old = tt.atomic_rmw add, acq_rel, gpu, %cnt, %c1_i32, %true : (!tt.ptr<i32>, i32, i1) -> i32
+    %do_prologue = arith.cmpi slt, %k, %c2_i32 : i32
+    %cur_a_desc, %cur_b_desc = scf.if %do_prologue -> (!tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) {
+      %c1_i64 = arith.constant 1 : i64
+      %next_a_desc = tt.make_tensor_descriptor %a_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<128x64xf16, #shared>
+      %next_b_desc = tt.make_tensor_descriptor %b_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x128xf16, #shared>
+      scf.yield %next_a_desc, %next_b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    } else {
+      scf.yield %a_desc, %b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    }
+
+    %off_m = arith.muli %k, %c128_i32 : i32
+    %off_n = arith.muli %k, %c64_i32 : i32
+    %off_k = arith.muli %k, %c1_i32 : i32
+    // Consume the ticket in the load partition.
+    %off_n_ticket = arith.addi %off_n, %old : i32
+    %a = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #oper_layout>
+    %b = tt.descriptor_load %b_desc[%off_n_ticket, %off_k] : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #oper_layout>
+    %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
+    %use_acc = arith.select %do_epilogue, %false, %true : i1
+    scf.if %do_epilogue {
+      %row_sum = "tt.reduce"(%c) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128x128xf32, #acc_layout>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>
+      %total = "tt.reduce"(%row_sum) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>) -> f32
+      %total_i32 = arith.fptosi %total : f32 to i32
+      tt.atomic_store release, gpu, %cnt, %total_i32 : !tt.ptr<i32>
+    }
+    scf.yield %c, %use_acc, %cur_a_desc, %cur_b_desc, %old : tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>, i32
+  } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
+
+  tt.store %cnt, %loop#4 : !tt.ptr<i32>
+  tt.return
+}
+
+}
+
+// -----
+
+// A warp-specialized scf.while with a used-result atomic in the after region.
+// The atomic feeds the descriptor load (load partition) and is yielded to the
+// next iteration and used after the loop (default partition). It must execute
+// once and the ticket must cross partitions through an aref; the while must
+// stay warp-specialized.
+// BASE-LABEL: @while_atomic_used_once
+// BASE: ttg.warp_specialize
+// BASE-COUNT-1: tt.atomic_rmw
+// BASE: tt.store
+// BASE: tt.return
+#oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+tt.func @while_atomic_used_once(
+  %a_desc: !tt.tensordesc<128x64xf16, #shared>,
+  %cnt: !tt.ptr<i32>
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %loop:2 = scf.while (%state = %c0_i32, %cond = %true) : (i32, i1) -> (i32, i1) {
+    scf.condition(%cond) %state, %cond : i32, i1
+  } do {
+  ^bb0(%state: i32, %cond: i1):
+    %t = tt.atomic_rmw add, acq_rel, gpu, %cnt, %c1_i32, %true : (!tt.ptr<i32>, i32, i1) -> i32
+    %a = tt.descriptor_load %a_desc[%t, %c0_i32] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #oper_layout>
+    %a_s = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %a_t = ttg.local_load %a_s : !ttg.memdesc<128x64xf16, #shared, #smem> -> tensor<128x64xf16, #oper_layout>
+    %a_row = "tt.reduce"(%a_t) <{axis = 1 : i32}> ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %pair_sum = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %pair_sum : f16
+    }) : (tensor<128x64xf16, #oper_layout>) -> tensor<128xf16, #ttg.slice<{dim = 1, parent = #oper_layout}>>
+    %a_total = "tt.reduce"(%a_row) <{axis = 0 : i32}> ({
+    ^bb0(%lhs: f16, %rhs: f16):
+      %pair_sum = arith.addf %lhs, %rhs : f16
+      tt.reduce.return %pair_sum : f16
+    }) : (tensor<128xf16, #ttg.slice<{dim = 1, parent = #oper_layout}>>) -> f16
+    %a_total_f32 = arith.extf %a_total : f16 to f32
+    %a_total_i32 = arith.fptosi %a_total_f32 : f32 to i32
+    tt.atomic_store release, gpu, %cnt, %a_total_i32 : !tt.ptr<i32>
+    %next_cond = arith.andi %cond, %true : i1
+    scf.yield %t, %next_cond : i32, i1
+  } attributes {tt.warp_specialize}
+
+  tt.store %cnt, %loop#0 : !tt.ptr<i32>
+  tt.return
+}
+
+}
+
+// -----
+
+// An unused tt.store is a user-visible side effect: it must execute exactly
+// once, pinned to one partition.
+// BASE-LABEL: @store_once
+// BASE: ttg.warp_specialize
+// BASE-COUNT-1: tt.store
+// BASE-NOT: tt.store
+// BASE: tt.return
+#acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+tt.func @store_once(
+  %a_base: !tt.ptr<f16>,
+  %b_base: !tt.ptr<f16>,
+  %cnt: !tt.ptr<i32>
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %false = arith.constant false
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %k_tiles = arith.constant 32 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %a_desc_undef = ub.poison : !tt.tensordesc<128x64xf16, #shared>
+  %b_desc_undef = ub.poison : !tt.tensordesc<64x128xf16, #shared>
+  scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) : i32 {
+    %do_prologue = arith.cmpi slt, %k, %c2_i32 : i32
+    %cur_a_desc, %cur_b_desc = scf.if %do_prologue -> (!tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) {
+      %c1_i64 = arith.constant 1 : i64
+      %next_a_desc = tt.make_tensor_descriptor %a_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<128x64xf16, #shared>
+      %next_b_desc = tt.make_tensor_descriptor %b_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x128xf16, #shared>
+      scf.yield %next_a_desc, %next_b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    } else {
+      scf.yield %a_desc, %b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    }
+
+    %off_m = arith.muli %k, %c128_i32 : i32
+    %off_n = arith.muli %k, %c64_i32 : i32
+    %off_k = arith.muli %k, %c1_i32 : i32
+    %a = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #oper_layout>
+    %b = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #oper_layout>
+    %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
+    %use_acc = arith.select %do_epilogue, %false, %true : i1
+    scf.if %do_epilogue {
+      %row_sum = "tt.reduce"(%c) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128x128xf32, #acc_layout>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>
+      %total = "tt.reduce"(%row_sum) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>) -> f32
+      %total_i32 = arith.fptosi %total : f32 to i32
+      tt.atomic_store release, gpu, %cnt, %total_i32 : !tt.ptr<i32>
+    }
+    %one_i32 = arith.constant 1 : i32
+    tt.store %cnt, %one_i32 : !tt.ptr<i32>
+    scf.yield %c, %use_acc, %cur_a_desc, %cur_b_desc : tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+  } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
+
+  tt.return
+}
+
+}
+
+// -----
+
+// Like @store_once but for tt.assert: unused, must execute exactly once.
+// BASE-LABEL: @assert_once
+// BASE: ttg.warp_specialize
+// BASE-COUNT-1: tt.assert
+// BASE-NOT: tt.assert
+// BASE: tt.return
+#acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+tt.func @assert_once(
+  %a_base: !tt.ptr<f16>,
+  %b_base: !tt.ptr<f16>,
+  %cnt: !tt.ptr<i32>
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %false = arith.constant false
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %k_tiles = arith.constant 32 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %a_desc_undef = ub.poison : !tt.tensordesc<128x64xf16, #shared>
+  %b_desc_undef = ub.poison : !tt.tensordesc<64x128xf16, #shared>
+  scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) : i32 {
+    %do_prologue = arith.cmpi slt, %k, %c2_i32 : i32
+    %cur_a_desc, %cur_b_desc = scf.if %do_prologue -> (!tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) {
+      %c1_i64 = arith.constant 1 : i64
+      %next_a_desc = tt.make_tensor_descriptor %a_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<128x64xf16, #shared>
+      %next_b_desc = tt.make_tensor_descriptor %b_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x128xf16, #shared>
+      scf.yield %next_a_desc, %next_b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    } else {
+      scf.yield %a_desc, %b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    }
+
+    %off_m = arith.muli %k, %c128_i32 : i32
+    %off_n = arith.muli %k, %c64_i32 : i32
+    %off_k = arith.muli %k, %c1_i32 : i32
+    %a = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #oper_layout>
+    %b = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #oper_layout>
+    %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
+    %use_acc = arith.select %do_epilogue, %false, %true : i1
+    scf.if %do_epilogue {
+      %row_sum = "tt.reduce"(%c) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128x128xf32, #acc_layout>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>
+      %total = "tt.reduce"(%row_sum) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>) -> f32
+      %total_i32 = arith.fptosi %total : f32 to i32
+      tt.atomic_store release, gpu, %cnt, %total_i32 : !tt.ptr<i32>
+    }
+    tt.assert %true, "aws assert once" : i1
+    scf.yield %c, %use_acc, %cur_a_desc, %cur_b_desc : tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+  } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
+
+  tt.return
+}
+
+}
+
+// -----
+
+// tt.grid_dependency_launch_dependents releases dependent grids; replicating
+// it would release them more than once.
+// BASE-LABEL: @gdc_launch_once
+// BASE: ttg.warp_specialize
+// BASE-COUNT-1: tt.grid_dependency_launch_dependents
+// BASE-NOT: tt.grid_dependency_launch_dependents
+// BASE: tt.return
+#acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+tt.func @gdc_launch_once(
+  %a_base: !tt.ptr<f16>,
+  %b_base: !tt.ptr<f16>,
+  %cnt: !tt.ptr<i32>
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %false = arith.constant false
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %k_tiles = arith.constant 32 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %a_desc_undef = ub.poison : !tt.tensordesc<128x64xf16, #shared>
+  %b_desc_undef = ub.poison : !tt.tensordesc<64x128xf16, #shared>
+  scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) : i32 {
+    %do_prologue = arith.cmpi slt, %k, %c2_i32 : i32
+    %cur_a_desc, %cur_b_desc = scf.if %do_prologue -> (!tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) {
+      %c1_i64 = arith.constant 1 : i64
+      %next_a_desc = tt.make_tensor_descriptor %a_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<128x64xf16, #shared>
+      %next_b_desc = tt.make_tensor_descriptor %b_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x128xf16, #shared>
+      scf.yield %next_a_desc, %next_b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    } else {
+      scf.yield %a_desc, %b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    }
+
+    %off_m = arith.muli %k, %c128_i32 : i32
+    %off_n = arith.muli %k, %c64_i32 : i32
+    %off_k = arith.muli %k, %c1_i32 : i32
+    %a = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #oper_layout>
+    %b = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #oper_layout>
+    %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
+    %use_acc = arith.select %do_epilogue, %false, %true : i1
+    scf.if %do_epilogue {
+      %row_sum = "tt.reduce"(%c) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128x128xf32, #acc_layout>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>
+      %total = "tt.reduce"(%row_sum) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>) -> f32
+      %total_i32 = arith.fptosi %total : f32 to i32
+      tt.atomic_store release, gpu, %cnt, %total_i32 : !tt.ptr<i32>
+    }
+    tt.grid_dependency_launch_dependents
+    scf.yield %c, %use_acc, %cur_a_desc, %cur_b_desc : tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+  } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
+
+  tt.return
+}
+
+}
+
+// -----
+
+// tt.grid_dependency_wait is an idempotent acquire; it may be replicated
+// across partitions instead of being pinned to one.
+// BASE-LABEL: @gdc_wait_replicated
+// BASE: ttg.warp_specialize
+// BASE-COUNT-2: tt.grid_dependency_wait
+// BASE: tt.return
+#acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+#oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+#acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, colStride = 1>
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+tt.func @gdc_wait_replicated(
+  %a_base: !tt.ptr<f16>,
+  %b_base: !tt.ptr<f16>,
+  %cnt: !tt.ptr<i32>
+) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %true = arith.constant true
+  %false = arith.constant false
+  %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
+  %k_tiles = arith.constant 32 : i32
+  %c2_i32 = arith.constant 2 : i32
+  %c64_i32 = arith.constant 64 : i32
+  %c128_i32 = arith.constant 128 : i32
+  %a_desc_undef = ub.poison : !tt.tensordesc<128x64xf16, #shared>
+  %b_desc_undef = ub.poison : !tt.tensordesc<64x128xf16, #shared>
+  scf.for %k = %c0_i32 to %k_tiles step %c1_i32 iter_args(%acc = %zero, %flag = %true, %a_desc = %a_desc_undef, %b_desc = %b_desc_undef) -> (tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) : i32 {
+    %do_prologue = arith.cmpi slt, %k, %c2_i32 : i32
+    %cur_a_desc, %cur_b_desc = scf.if %do_prologue -> (!tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>) {
+      %c1_i64 = arith.constant 1 : i64
+      %next_a_desc = tt.make_tensor_descriptor %a_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<128x64xf16, #shared>
+      %next_b_desc = tt.make_tensor_descriptor %b_base, [%k, %k], [%c1_i64, %c1_i64] : !tt.ptr<f16>, !tt.tensordesc<64x128xf16, #shared>
+      scf.yield %next_a_desc, %next_b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    } else {
+      scf.yield %a_desc, %b_desc : !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+    }
+
+    tt.grid_dependency_wait
+    %off_m = arith.muli %k, %c128_i32 : i32
+    %off_n = arith.muli %k, %c64_i32 : i32
+    %off_k = arith.muli %k, %c1_i32 : i32
+    %a = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #oper_layout>
+    %b = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<64x128xf16, #shared> -> tensor<64x128xf16, #oper_layout>
+    %a_shared = ttg.local_alloc %a : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+    %b_shared = ttg.local_alloc %b : (tensor<64x128xf16, #oper_layout>) -> !ttg.memdesc<64x128xf16, #shared, #smem>
+    %c_tmem, %c_tok = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> (!ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, !ttg.async.token)
+    %mma_tok = ttng.tc_gen5_mma %a_shared, %b_shared, %c_tmem[%c_tok], %flag, %true : !ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
+    %c, %load_tok = ttng.tmem_load %c_tmem[%mma_tok] : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
+
+    %do_epilogue = arith.cmpi eq, %k, %c0_i32 : i32
+    %use_acc = arith.select %do_epilogue, %false, %true : i1
+    scf.if %do_epilogue {
+      %row_sum = "tt.reduce"(%c) <{axis = 1 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128x128xf32, #acc_layout>) -> tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>
+      %total = "tt.reduce"(%row_sum) <{axis = 0 : i32}> ({
+      ^bb0(%lhs: f32, %rhs: f32):
+        %pair_sum = arith.addf %lhs, %rhs : f32
+        tt.reduce.return %pair_sum : f32
+      }) : (tensor<128xf32, #ttg.slice<{dim = 1, parent = #acc_layout}>>) -> f32
+      %total_i32 = arith.fptosi %total : f32 to i32
+      tt.atomic_store release, gpu, %cnt, %total_i32 : !tt.ptr<i32>
+    }
+    scf.yield %c, %use_acc, %cur_a_desc, %cur_b_desc : tensor<128x128xf32, #acc_layout>, i1, !tt.tensordesc<128x64xf16, #shared>, !tt.tensordesc<64x128xf16, #shared>
+  } {tt.warp_specialize, tt.disallow_acc_multi_buffer, tt.num_stages = 2 : i32}
+
+  tt.return
+}
+
+}

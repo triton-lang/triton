@@ -164,7 +164,7 @@ SmallVector<AsyncOp> castAsyncOpAttrs(ArrayAttr opAttrs) {
 }
 
 BarrierCount getArrivalCount(ArefCreateOp op) {
-  SetVector<int> producerGroups, consumerGroups;
+  SetVector<int> producerGroups;
   BarrierCount count;
 
   for (auto user : op->getUsers()) {
@@ -192,21 +192,22 @@ BarrierCount getArrivalCount(ArefCreateOp op) {
         }
       }
     } else if (auto getExitOp = dyn_cast<ArefGetExitOp>(user)) {
-      for (int partitionId : partitionIds) {
-        if (!consumerGroups.insert(partitionId))
-          continue;
-        for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
-          switch (kind) {
-          case AsyncOp::TC5MMA:
-          case AsyncOp::WGMMA:
-          case AsyncOp::NONE:
-            count.consumerPendingCount += 1;
-            break;
-          default:
-            llvm_unreachable("unsupported consumer kind");
-          }
+      // get.exit is cloned once per partition, and each clone arrives on the
+      // empty barrier. Do not deduplicate by partition: two distinct get
+      // exits in the same partition release the buffer twice.
+      int perClone = 0;
+      for (auto kind : castAsyncOpAttrs(getExitOp.getAsyncOps())) {
+        switch (kind) {
+        case AsyncOp::TC5MMA:
+        case AsyncOp::WGMMA:
+        case AsyncOp::NONE:
+          perClone += 1;
+          break;
+        default:
+          llvm_unreachable("unsupported consumer kind");
         }
       }
+      count.consumerPendingCount += perClone * partitionIds.size();
     }
   }
   // If the aref is not used within a warp-specialized loop, the pending counts
@@ -830,7 +831,10 @@ void combineArefs(scf::ForOp loop) {
             getDominantConsumer(getEnterOp, *loop.getBody(), domInfo)) {
       assert(hasPartition(getEnterOp));
       auto partitionIds = getPartitionIds(getEnterOp);
-      assert(partitionIds.size() == 1);
+      // A get fetched into several partitions (merged overlapping consumer
+      // groups) has no single owner group; leave it uncombined.
+      if (partitionIds.size() != 1)
+        continue;
       liveBeforeGroups[{liveBeforeOp, partitionIds.front()}].push_back(
           getEnterOp);
     }

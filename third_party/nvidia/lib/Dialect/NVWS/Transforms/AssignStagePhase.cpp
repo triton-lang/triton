@@ -546,61 +546,6 @@ template <class T> struct AssignStagePhase {
   }
 };
 
-void updateOutputWithDefaultPartition(Operation *op, int pos) {
-  auto opIds = getPartitionIds(op);
-  opIds.insert(0);
-  setPartition(op, opIds);
-
-  auto opOutputsIds = getPartitionOutputs(op);
-  opOutputsIds[pos].insert(0);
-  setPartitionOutputs(op, opOutputsIds);
-}
-
-void visitBackwardSlice(scf::ForOp wsLoop, Value value,
-                        std::function<void(Operation *)> callback,
-                        DenseSet<Value> &visited) {
-  if (!visited.insert(value).second)
-    return;
-
-  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
-    if (auto forOp = dyn_cast<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
-      if (forOp->hasAttr(kWarpSpecializeAttrName))
-        return;
-      auto pos = findValuePosInRange(forOp.getRegionIterArgs(), value);
-      assert(pos);
-      visitBackwardSlice(wsLoop, forOp.getInitArgs()[*pos], callback, visited);
-    }
-  } else if (auto defOp = value.getDefiningOp();
-             isa<scf::IfOp, scf::ForOp>(defOp)) {
-    auto pos = findValuePosInRange(defOp->getResults(), value);
-    assert(pos);
-    updateOutputWithDefaultPartition(defOp, *pos);
-    if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-      visitBackwardSlice(wsLoop, ifOp.thenYield()->getOperand(*pos), callback,
-                         visited);
-      if (ifOp.elseBlock())
-        visitBackwardSlice(wsLoop, ifOp.elseYield()->getOperand(*pos), callback,
-                           visited);
-      visitBackwardSlice(wsLoop, ifOp.getCondition(), callback, visited);
-    } else {
-      auto forOp = cast<scf::ForOp>(defOp);
-      visitBackwardSlice(wsLoop,
-                         forOp.getBody()->getTerminator()->getOperand(*pos),
-                         callback, visited);
-      // visit control operands of for-op
-      for (int idx = 0; idx < forOp.getNumControlOperands(); ++idx) {
-        auto control = forOp.getOperand(idx);
-        visitBackwardSlice(wsLoop, control, callback, visited);
-      }
-    }
-  } else if (wsLoop.getBody()->findAncestorOpInBlock(*defOp)) {
-    callback(defOp);
-    for (auto operand : defOp->getOperands()) {
-      visitBackwardSlice(wsLoop, operand, callback, visited);
-    }
-  }
-}
-
 LogicalResult assignStagePhase(triton::FuncOp funcOp) {
   SmallVector<ArefCreateOp> arefOps;
   funcOp.walk([&](ArefCreateOp arefOp) { arefOps.push_back(arefOp); });
@@ -611,42 +556,13 @@ LogicalResult assignStagePhase(triton::FuncOp funcOp) {
       return failure();
   }
 
-  auto callback = [&](Operation *op) {
-    if (!isa<scf::YieldOp, scf::IfOp, scf::ForOp, triton::ReduceOp>(op)) {
-      assert(hasPartition(op));
-      auto partitionIds = getPartitionIds(op);
-      partitionIds.insert(0);
-      setPartition(op, partitionIds);
-    }
-  };
-
-  funcOp.walk([&](scf::ForOp forOp) {
-    DenseSet<Value> visited;
-    if (forOp->hasAttr(kWarpSpecializeAttrName)) {
-      for (auto result : forOp.getResults()) {
-        // if result is of scalar type and is used outside of for-op, visit
-        // all dependencies and assign default partition to them
-        if (isa<IntegerType, FloatType>(result.getType()) &&
-            !result.use_empty()) {
-          auto arg = forOp.getBody()->getTerminator()->getOperand(
-              result.getResultNumber());
-          // Check if any users of this scalar result lack ttg.partition, or if
-          // it is used in another warp-specialized loop. If so, the scalar is
-          // consumed by the root partition outside the warp-specialized loop,
-          // requiring us to assign the default partition to all operations that
-          // compute this result.
-          bool assignDefaultPartition =
-              llvm::any_of(result.getUsers(), [&](Operation *user) {
-                return !hasPartition(user) ||
-                       (isa<scf::ForOp>(user) && hasWarpSpecializeTag(user));
-              });
-          if (assignDefaultPartition) {
-            updateOutputWithDefaultPartition(forOp, result.getResultNumber());
-            visitBackwardSlice(forOp, arg, callback, visited);
-          }
-        }
-      }
-    }
+  // PartitionScheduling runs the same analysis before InsertAref to decide
+  // which loop results must be materialized in the default partition. Rerunning
+  // it here is idempotent: it stops at the arefs InsertAref created, so it
+  // never inserts partition 0 into an effect's backward slice.
+  funcOp.walk([&](LoopLikeOpInterface loop) {
+    if (loop->hasAttr(kWarpSpecializeAttrName))
+      triton::gpu::assignDefaultPartitionToEscapingValues(loop);
   });
   return success();
 }
