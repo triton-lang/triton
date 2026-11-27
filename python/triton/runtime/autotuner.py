@@ -206,6 +206,8 @@ class Autotuner(KernelInterface):
             fn.cache_key,
             str(sorted(env_vars.items())),
             str(tuning_key),
+            # Bump when the layout of the cached file changes.
+            "autotune-cache-v2",
         ] + [str(c) for c in configs]
         cache_key = hashlib.sha256("-".join(cache_key).encode("utf-8")).hexdigest()
         cache = get_cache_manager(cache_key)
@@ -214,7 +216,10 @@ class Autotuner(KernelInterface):
         if path:
             with open(path, "r") as cached_configs:
                 timings = json.load(cached_configs)["configs_timings"]
-                timings = {Config(**config): timing for config, timing in timings}
+                # Timings are stored by position in `configs`, which the cache key pins down, so the
+                # configs being tuned are reused as-is: rebuilding them from JSON would turn tuple
+                # meta-parameters into lists and cannot represent values such as `tl.float16`.
+                timings = {configs[index]: timing for index, timing in timings}
                 self.cache[tuning_key] = builtins.min(timings, key=timings.get)
                 self.configs_timings = timings
             return True
@@ -224,8 +229,7 @@ class Autotuner(KernelInterface):
             json.dumps({
                 "key":
                 tuning_key,
-                "configs_timings":
-                [(config.__dict__, timings) for config, timings in self.configs_timings.items() if not config.pre_hook],
+                "configs_timings": [(index, self.configs_timings[config]) for index, config in enumerate(configs)],
             }), file_name, binary=False)
         return False
 
