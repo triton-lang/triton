@@ -116,7 +116,9 @@ jobs:
           echo 'llvm_build_utils=OFF' >> "$GITHUB_ENV"
           echo 'llvm_include_tests=OFF' >> "$GITHUB_ENV"
           echo 'llvm_build_targets=install-distribution' >> "$GITHUB_ENV"
-          echo 'LLVM_DISTRIBUTION_COMPONENTS=llvm-headers;llvm-libraries;cmake-exports' >> "$GITHUB_ENV"
+          # llc is for the MIR scheduling-DAG cross-check, which needs one from
+          # this same revision; it ships as its own artifact, not in the package.
+          echo 'LLVM_DISTRIBUTION_COMPONENTS=llvm-headers;llvm-libraries;cmake-exports;llc' >> "$GITHUB_ENV"
         fi
         LLVM_COMMIT_HASH="$(jq -r '.llvm_hash' "$MANIFEST")"
         echo "Found LLVM commit hash: ${LLVM_COMMIT_HASH}"
@@ -291,6 +293,17 @@ jobs:
         print("Loaded standalone backend without importing Triton:", path)
         PY
 
+    - name: Package AMD llc
+      if: matrix.package == 'amd-codegen'
+      shell: bash
+      run: |
+        # Kept out of the code generator package so only CI pays for it.
+        LLC_DIR="amd-llc-${{ env.short_llvm_commit_hash }}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.llvm_build_number }}"
+        mkdir -p "${LLC_DIR}/bin"
+        cp "${{ env.llvm_sdk_dir }}"/bin/llc* "${LLC_DIR}/bin/"
+        tar czf "${LLC_DIR}.tar.gz" "${LLC_DIR}"
+        echo "llc_package=${LLC_DIR}" >> "$GITHUB_ENV"
+
     - name: Package Build Artifacts
       shell: bash
       run: tar czf "${{ env.llvm_install_dir }}.tar.gz" "${{ env.llvm_install_dir }}"
@@ -301,6 +314,14 @@ jobs:
         name: ${{ matrix.package }}-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
           ${{ github.workspace }}/${{ env.llvm_install_dir }}.tar.gz
+
+    - name: Upload AMD llc Artifact
+      if: matrix.package == 'amd-codegen'
+      uses: actions/upload-artifact@v7
+      with:
+        name: amd-llc-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
+        path: |
+          ${{ github.workspace }}/${{ env.llc_package }}.tar.gz
 
     - name: Azure login
       if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
@@ -320,6 +341,15 @@ jobs:
 
         URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name public --name "llvm-builds/${{ env.llvm_install_dir }}.tar.gz")
         echo "Blob URL: ${URL}"
+
+        if [[ "${{ matrix.package }}" == "amd-codegen" ]]; then
+          sha256sum "${{ env.llc_package }}.tar.gz"
+
+          az storage blob upload --account-name oaitriton --auth-mode login --container-name public --file "${{ env.llc_package }}.tar.gz" --name "llvm-builds/${{ env.llc_package }}.tar.gz"
+
+          URL=$(az storage blob url --account-name oaitriton --auth-mode login --container-name public --name "llvm-builds/${{ env.llc_package }}.tar.gz")
+          echo "Blob URL: ${URL}"
+        fi
 
     - name: Azure Logout
       if: ${{ (github.repository == 'triton-lang/triton') && github.ref_name == 'main' }}
