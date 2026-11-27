@@ -88,8 +88,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // With num_stages=3 the TDM path uses the LDS-prefetch schedule: ttg.local_load
 // is hoisted one stage ahead of the tt.dot so the dot consumes operands that
 // were prefetched into registers the previous iteration. The loop body leads
-// with the dot, followed by the async_wait, the next-tile TDM copies, and the
-// local_loads that feed the next iteration (carried as iter_args).
+// with the dot, followed by the next-tile TDM copies, the async_wait, and the
+// local_loads that feed the next iteration (carried as iter_args). The copies
+// are issued before the wait so they are already in flight across the stall.
 // LDS_PREFETCH-LABEL: tt.func @matmul_kernel_make_tensor_descriptor
 // Prologue: dot operands for the first iteration are pre-loaded from LDS.
 // LDS_PREFETCH: %[[PRO_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
@@ -98,9 +99,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // LDS_PREFETCH-SAME: %[[OP_A:[^ ]+]] = %[[PRO_A]]
 // LDS_PREFETCH-SAME: %[[OP_B:[^ ]+]] = %[[PRO_B]]
 // LDS_PREFETCH: tt.dot %[[OP_A]], %[[OP_B]]
-// LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<512x32xf16
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<32x64xf16
+// LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
 // LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<512x32xf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]]
@@ -189,9 +190,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // LDS_PREFETCH-SAME: %[[OP_A:[^ ]+]] = %[[PRO_A]]
 // LDS_PREFETCH-SAME: %[[OP_B:[^ ]+]] = %[[PRO_B]]
 // LDS_PREFETCH: tt.dot %[[OP_A]], %[[OP_B]]
-// LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<256x64xf8E5M2
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<64x64xf8E5M2
+// LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
 // LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<256x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<64x64xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
 // LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]]
@@ -642,7 +643,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // At num_stages=3 LDS prefetch takes over from the reorder schedule for
 // tt.dot_scaled too: the operand ttg.local_loads are hoisted one stage ahead
 // and carried as iter_args, so the body leads with the dot_scaled, then the
-// async_wait, the next-tile TDM copies, and the local_loads for the next
+// next-tile TDM copies, the async_wait, and the local_loads for the next
 // iteration. The scale operands are loop-invariant here and stay put.
 // LDS_PREFETCH-LABEL: tt.func @tdm_scaled_dot_reorder
 // Prologue: dot operands for the first iteration are pre-loaded from LDS.
@@ -652,9 +653,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // LDS_PREFETCH-SAME: %[[OP_A:[^ ]+]] = %[[PRO_A]]
 // LDS_PREFETCH-SAME: %[[OP_B:[^ ]+]] = %[[PRO_B]]
 // LDS_PREFETCH: tt.dot_scaled %[[OP_A]] scale %{{[^,]+}}, %[[OP_B]] scale
-// LDS_PREFETCH: amdg.async_tdm_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x64xi8
 // LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<64x128xi8
+// LDS_PREFETCH: amdg.async_tdm_wait %{{[^,]+}}, %{{[^,]+}} {num = 0 : i32}
 // LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<128x64xi8, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 16}>>
 // LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<64x128xi8, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 16}>>
 // LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]]
@@ -746,14 +747,187 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // LDS_PREFETCH-SAME: %[[OP_SB:[^ ]+]] = %[[PRO_SB]]
 // dot_scaled consumes the prefetched scales, not fresh local_loads.
 // LDS_PREFETCH: tt.dot_scaled %[[OP_A]] scale %[[OP_SA]], %[[OP_B]] scale %[[OP_SB]]
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x128xi8
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x128xi8
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x8xi8
+// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x8xi8
 // LDS_PREFETCH: amdg.async_tdm_wait {{.*}} {num = 0 : i32}
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x128xi8
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x128xi8
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x8xi8
-// LDS_PREFETCH: amdg.async_tdm_copy_global_to_local {{.*}} -> !ttg.memdesc<128x8xi8
 // Next iteration's operands, scales included.
 // LDS_PREFETCH: %[[NXT_A:.+]] = ttg.local_load {{.*}} -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 16}>>
 // LDS_PREFETCH: %[[NXT_B:.+]] = ttg.local_load {{.*}} -> tensor<128x128xi8, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 16}>>
 // LDS_PREFETCH: %[[NXT_SA:.+]] = ttg.local_load {{.*}} -> tensor<128x8xi8
 // LDS_PREFETCH: %[[NXT_SB:.+]] = ttg.local_load {{.*}} -> tensor<128x8xi8
 // LDS_PREFETCH: scf.yield {{.*}}, %[[NXT_A]], %[[NXT_B]], %[[NXT_SA]], %[[NXT_SB]]
+
+// -----
+
+// A 2x2 M/N-sliced GEMM with the dots in diagonal order: d0 = A0*B0,
+// d1 = A1*B1, d2 = A0*B1, d3 = A1*B0. The d0 operands are prefetched in the
+// last two groups and A1 is read in group 0, so B1, which d1 consumes, has no
+// free group before d1 and shares group 0 with A1: their wait and reads come
+// right after d0.
+// LDS_PREFETCH-LABEL: tt.func @sliced_diagonal_dots
+// LDS_PREFETCH: scf.for
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: %[[WAIT:.+]] = amdg.async_tdm_wait
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: %[[A1:.+]] = ttg.local_load %{{.+}} token %[[WAIT]]
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: %[[B1:.+]] = ttg.local_load %{{.+}} token %[[WAIT]]
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: tt.dot %[[A1]], %[[B1]]
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @sliced_diagonal_dots(%a_desc: !tt.tensordesc<64x64xf16>, %b_desc: !tt.tensordesc<64x64xf16>,
+      %m0: i32, %m1: i32, %n0: i32, %n1: i32, %K: i32)
+      -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %acc:4 = scf.for %k = %c0_i32 to %K step %c64_i32 iter_args(%acc00 = %cst, %acc11 = %cst, %acc01 = %cst, %acc10 = %cst)
+        -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) : i32 {
+      %a0 = tt.descriptor_load %a_desc[%m0, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a1 = tt.descriptor_load %a_desc[%m1, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b0 = tt.descriptor_load %b_desc[%k, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b1 = tt.descriptor_load %b_desc[%k, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a0_op = ttg.convert_layout %a0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a1_op = ttg.convert_layout %a1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %b0_op = ttg.convert_layout %b0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b1_op = ttg.convert_layout %b1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %d00 = tt.dot %a0_op, %b0_op, %acc00 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d11 = tt.dot %a1_op, %b1_op, %acc11 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d01 = tt.dot %a0_op, %b1_op, %acc01 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d10 = tt.dot %a1_op, %b0_op, %acc10 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      scf.yield %d00, %d11, %d01, %d10 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
+    }
+    tt.return %acc#0, %acc#1, %acc#2, %acc#3 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
+  }
+}
+
+// -----
+
+// A 2x2 M/N-sliced GEMM whose K offset is carried across iterations, as in
+// `offs_k += BK`: d0 = A0*B0, d1 = A0*B1, d2 = A1*B0, d3 = A1*B1. The reads of
+// A0, A1, B0 and B1 land in groups 3, 1, 2 and 0, and each copy goes half the
+// groups after the read that frees its slot: groups 1, 3, 0 and 2. Every copy
+// reads the offset, so its update has to run before the earliest copy, B0's
+// right after d0, not before the A0 copy that comes first in program order;
+// otherwise the loop cannot be pipelined.
+// LDS_PREFETCH-LABEL: tt.func @sliced_carried_k_offset
+// LDS_PREFETCH-COUNT-8: amdg.async_tdm_copy_global_to_local
+// LDS_PREFETCH: scf.for
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: arith.addi %{{.+}}, %c64_i32
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg1 add_offsets = [%{{.+}}, %arg4]
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg0 add_offsets = [%arg2,
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg1 add_offsets = [%{{.+}}, %arg5]
+// LDS_PREFETCH: tt.dot
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: amdg.update_tensor_descriptor %arg0 add_offsets = [%arg3,
+// LDS_PREFETCH: scf.yield
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @sliced_carried_k_offset(%a_desc: !tt.tensordesc<64x64xf16>, %b_desc: !tt.tensordesc<64x64xf16>,
+      %m0: i32, %m1: i32, %n0: i32, %n1: i32, %K: i32)
+      -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %acc:5 = scf.for %iv = %c0_i32 to %K step %c64_i32 iter_args(%k = %c0_i32, %acc00 = %cst, %acc01 = %cst, %acc10 = %cst, %acc11 = %cst)
+        -> (i32, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) : i32 {
+      %a0 = tt.descriptor_load %a_desc[%m0, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a1 = tt.descriptor_load %a_desc[%m1, %k] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b0 = tt.descriptor_load %b_desc[%k, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b1 = tt.descriptor_load %b_desc[%k, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a0_op = ttg.convert_layout %a0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a1_op = ttg.convert_layout %a1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %b0_op = ttg.convert_layout %b0 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b1_op = ttg.convert_layout %b1 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %d00 = tt.dot %a0_op, %b0_op, %acc00 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d01 = tt.dot %a0_op, %b1_op, %acc01 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d10 = tt.dot %a1_op, %b0_op, %acc10 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d11 = tt.dot %a1_op, %b1_op, %acc11 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %k_next = arith.addi %k, %c64_i32 : i32
+      scf.yield %k_next, %d00, %d01, %d10, %d11 : i32, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
+    }
+    tt.return %acc#1, %acc#2, %acc#3, %acc#4 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
+  }
+}
+
+// -----
+
+// A 2x2 M/N-sliced GEMM with K split in two: four A and four B quarter loads
+// feed eight dots, two per output quadrant chained through the accumulator.
+// Those chains do not block interleaving, so each quarter is read from LDS
+// next to the dot that first uses it. Every dot keeps its program-order place,
+// including d3, whose operands were both first read by earlier dots.
+// LDS_PREFETCH-LABEL: tt.func @sliced_mn_split_k
+// LDS_PREFETCH-COUNT-8: ttg.local_alloc : () -> !ttg.memdesc<2x64x64xf16
+// LDS_PREFETCH: scf.for
+// LDS_PREFETCH: %[[A10:.+]] = ttg.local_load
+// LDS_PREFETCH: tt.dot %[[A10]]
+// LDS_PREFETCH: %[[B01:.+]] = ttg.local_load
+// LDS_PREFETCH: tt.dot %{{.+}}, %[[B01]]
+// LDS_PREFETCH-NOT: tt.dot
+// LDS_PREFETCH: tt.dot %[[A10]], %[[B01]]
+// LDS_PREFETCH: scf.yield
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_wmma<{version = 3, isTranspose = true, ctaLayout = {warp = [[0, 1], [1, 0]]}, instrShape = [16, 16, 32]}>
+#dot_op_a = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dot_op_b = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx1250", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func @sliced_mn_split_k(%a_desc: !tt.tensordesc<64x64xf16>, %b_desc: !tt.tensordesc<64x64xf16>,
+      %m0: i32, %m1: i32, %n0: i32, %n1: i32, %K: i32)
+      -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) {
+    %c0_i32 = arith.constant 0 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c128_i32 = arith.constant 128 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+    %acc:4 = scf.for %k0 = %c0_i32 to %K step %c128_i32 iter_args(%acc00 = %cst, %acc10 = %cst, %acc01 = %cst, %acc11 = %cst)
+        -> (tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>) : i32 {
+      %k1 = arith.addi %k0, %c64_i32 : i32
+      %a00 = tt.descriptor_load %a_desc[%m0, %k0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a01 = tt.descriptor_load %a_desc[%m0, %k1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a10 = tt.descriptor_load %a_desc[%m1, %k0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a11 = tt.descriptor_load %a_desc[%m1, %k1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b00 = tt.descriptor_load %b_desc[%k0, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b01 = tt.descriptor_load %b_desc[%k0, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b10 = tt.descriptor_load %b_desc[%k1, %n0] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %b11 = tt.descriptor_load %b_desc[%k1, %n1] : !tt.tensordesc<64x64xf16> -> tensor<64x64xf16, #blocked>
+      %a00_op = ttg.convert_layout %a00 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a01_op = ttg.convert_layout %a01 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a10_op = ttg.convert_layout %a10 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %a11_op = ttg.convert_layout %a11 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_a>
+      %b00_op = ttg.convert_layout %b00 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b01_op = ttg.convert_layout %b01 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b10_op = ttg.convert_layout %b10 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %b11_op = ttg.convert_layout %b11 : tensor<64x64xf16, #blocked> -> tensor<64x64xf16, #dot_op_b>
+      %d0 = tt.dot %a00_op, %b00_op, %acc00 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d1 = tt.dot %a10_op, %b00_op, %acc10 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d2 = tt.dot %a00_op, %b01_op, %acc01 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d3 = tt.dot %a10_op, %b01_op, %acc11 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d4 = tt.dot %a01_op, %b10_op, %d0 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d5 = tt.dot %a11_op, %b10_op, %d1 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d6 = tt.dot %a01_op, %b11_op, %d2 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      %d7 = tt.dot %a11_op, %b11_op, %d3 : tensor<64x64xf16, #dot_op_a> * tensor<64x64xf16, #dot_op_b> -> tensor<64x64xf32, #mma>
+      scf.yield %d4, %d5, %d6, %d7 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
+    }
+    tt.return %acc#0, %acc#1, %acc#2, %acc#3 : tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>, tensor<64x64xf32, #mma>
+  }
+}
