@@ -107,33 +107,6 @@ void expandLoops(ModuleOp moduleOp) {
     options.supportDynamicLoops = true;
     options.peelEpilogue = true;
     options.predicateFn = streamPredication;
-    // Annotate loadOp in prologue for further moving up
-    options.annotateFn = [](Operation *op,
-                            tt::PipeliningOption::PipelinerPart part,
-                            unsigned stage) {
-      if (part != tt::PipeliningOption::PipelinerPart::Prologue)
-        return;
-
-      auto annotateLoad = [](Operation *loadOp) {
-        loadOp->setAttr("amd.pipeliner_part",
-                        StringAttr::get(loadOp->getContext(), "prologue"));
-      };
-
-      if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-        annotateLoad(loadOp);
-        return;
-      }
-      // loadOp may be wrapped by a MaskOp as predicateFn execution
-      // precedes annotation
-      if (auto maskOp = dyn_cast<ttg::MaskOp>(op)) {
-        for (auto &innerOp : maskOp.getBody()->without_terminator()) {
-          if (auto loadOp = dyn_cast<tt::LoadOp>(&innerOp)) {
-            annotateLoad(loadOp);
-            return;
-          }
-        }
-      }
-    };
     // Set the final schedule as our scheduling function
     options.getScheduleFn =
         [coarseSchedule](scf::ForOp,
