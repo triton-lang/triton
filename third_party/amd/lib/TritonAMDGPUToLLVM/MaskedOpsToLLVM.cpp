@@ -34,11 +34,12 @@ public:
     auto falseVal = loadOp.getFalseVal();
     auto multicastMask = loadOp.getMulticastMask();
     auto cacheMod = loadOp.getCache();
+    auto evictPolicy = loadOp.getEvict();
 
     bool volatileFlag, nonTmpFlag;
     std::tie(volatileFlag, nonTmpFlag) =
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
-            cacheMod, mlir::LLVM::AMD::MemoryOp::Load);
+            cacheMod, mlir::LLVM::AMD::MemoryOp::Load, evictPolicy);
     volatileFlag |= loadOp.getIsVolatile();
 
     auto createLoadWithAttrs = [&](Location loadLoc) -> Value {
@@ -57,7 +58,7 @@ public:
         std::string intrinsic =
             "llvm.amdgcn.cluster.load.b" + std::to_string(vecBits);
         auto cacheModBits = LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            cacheMod, true, targetInfo);
+            cacheMod, true, targetInfo, evictPolicy);
         // The intrinsics only works with int32 or vec of int32 for >32bit
         Type resTy = i32_ty;
         if (vecBits > 32) {
@@ -133,7 +134,8 @@ public:
     bool volatileFlag, nonTmpFlag;
     std::tie(volatileFlag, nonTmpFlag) =
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
-            storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store);
+            storeOp.getCache(), mlir::LLVM::AMD::MemoryOp::Store,
+            storeOp.getEvict());
 
     int alignment = 0;
     if (auto vecTy = dyn_cast<VectorType>(elemTy)) {
