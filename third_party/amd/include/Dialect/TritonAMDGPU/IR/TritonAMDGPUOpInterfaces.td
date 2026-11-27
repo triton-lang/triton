@@ -20,11 +20,11 @@ def TDMOpInterface : OpInterface<"TDMOpInterface"> {
 
 def BufferOpInterface : OpInterface<"BufferOpInterface"> {
   let description = [{
-    This interface is implemented by buffer load/store operations.
+    This interface is implemented by buffer memory operations.
     It provides methods to access common properties such base pointer, offset,
     mask and others.
 
-    `ptr` is a scalar global pointer or, for loads and stores, a buffer
+    `ptr` is a scalar global pointer or a buffer
     descriptor (`amdg.make_buffer_desc`). A pointer gets a default descriptor
     with a 2^31 - 2 byte bound. `offsets` and `soffset` count elements of the
     accessed type. Element `i` accesses `base + soffset + offsets[i]`.

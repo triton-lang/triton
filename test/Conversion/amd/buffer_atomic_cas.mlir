@@ -39,3 +39,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// CAS has no source mask, but duplicated layout lanes are masked off.
+// A zero-bound descriptor is legal and must be preserved.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_descriptor_cas
+  tt.func @buffer_descriptor_cas(%base: !tt.ptr<i64>, %offset: tensor<32xi32, #blocked>, %value: tensor<32xi64, #blocked>, %cmp: tensor<32xi64, #blocked>, %soffset: i32) {
+    %bound = arith.constant 0 : i32
+    // CHECK: %[[DESC:.*]] = rocdl.make.buffer.rsrc
+    %desc = amdg.make_buffer_desc %base, %bound : !tt.ptr<i64> -> !amdg.buffer_desc<i64>
+    // CHECK: llvm.mul
+    // CHECK: llvm.select
+    // CHECK-NOT: rocdl.make.buffer.rsrc
+    // CHECK: rocdl.raw.ptr.buffer.atomic.cmpswap {{.*}}%[[DESC]]
+    %old = amdg.buffer_atomic_cas relaxed, gpu, %cmp, %value, %desc[%offset] soffset = %soffset : i32 : !amdg.buffer_desc<i64> -> tensor<32xi64, #blocked>
+    tt.return
+  }
+}
