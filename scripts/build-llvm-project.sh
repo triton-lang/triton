@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 
+set -e
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 LLVM_TARGETS=${LLVM_TARGETS:-Native;NVPTX;AMDGPU}
 LLVM_PROJECTS=${LLVM_PROJECTS:-mlir;llvm;lld;clang}
 LLVM_DISTRIBUTION_COMPONENTS=${LLVM_DISTRIBUTION_COMPONENTS:-"llvm-headers;llvm-libraries;cmake-exports;mlir-headers;mlir-libraries;mlir-cmake-exports;lld-headers;lld-libraries;lld-cmake-exports;clang;clang-resource-headers;FileCheck;not;split-file;llc;opt;llvm-config;mlir-tblgen;mlir-translate"}
 LLVM_BUILD_TYPE=${LLVM_BUILD_TYPE:-RelWithDebInfo}
-LLVM_COMMIT_HASH=${LLVM_COMMIT_HASH:-$(jq -r '.llvm_hash' "$REPO_ROOT/cmake/llvm-info.json")}
+if [ -z "${LLVM_COMMIT_HASH:-}" ]; then
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "error: jq is required to read the pinned LLVM revision" >&2
+        exit 1
+    fi
+    LLVM_COMMIT_HASH=$(jq -er '.llvm_hash | strings' "$REPO_ROOT/cmake/llvm-info.json")
+fi
 LLVM_PROJECT_PATH=${LLVM_PROJECT_PATH:-"$REPO_ROOT/llvm-project"}
 LLVM_BUILD_PATH=${LLVM_BUILD_PATH:-"$LLVM_PROJECT_PATH/build"}
 LLVM_INSTALL_PATH=${LLVM_INSTALL_PATH:-"$LLVM_PROJECT_PATH/install"}
