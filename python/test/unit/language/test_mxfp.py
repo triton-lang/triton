@@ -129,6 +129,19 @@ class TestMXScaleTensor(MXBaseTest):
         assert ((data >= 0) & (data <= 254)).all(), "Generated data should be between 0 and 254"
         assert (data != 255).all(), "Generated data should not include NaN encoding (255)"
 
+    @pytest.mark.parametrize(("low", "high"), [(3.0, 4.0), (0.125, 0.75)])
+    def test_random_generation_respects_bounds(self, low, high, device):
+        torch.manual_seed(0)
+        values = MXScaleTensor(size=(4096, ), device=device).random(low=low, high=high).to(torch.float32)
+        assert (values >= low).all(), "Generated values should not be below low"
+        assert (values <= high).all(), "Generated values should not be above high"
+        if (low, high) == (3.0, 4.0):
+            assert (values == 4.0).all()
+
+    def test_random_generation_rejects_unrepresentable_range(self, device):
+        with pytest.raises(ValueError, match="No E8M0 values"):
+            MXScaleTensor(size=(1, ), device=device).random(low=3.0, high=3.5)
+
     @pytest.mark.parametrize("K, N", [(64, 128), (128, 256)])
     def test_roundtrip(self, K, N, device):
         tensor = MXScaleTensor(size=(K, N), device=device).random()

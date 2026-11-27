@@ -6,6 +6,8 @@ align with the opencompute (OCP) microscaling (MX) specification.
 Reference: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 """
 
+import math
+
 import torch
 
 
@@ -249,9 +251,32 @@ class MXScaleTensor:
         """
         bias = 127
 
-        min_exponent = 0 if low is None else max(0, int(torch.log2(torch.tensor(low))) + bias)
-        max_exponent = 254 if high is None else min(254, max(0, int(torch.log2(torch.tensor(high))) + bias))
-        assert min_exponent <= max_exponent, "Low must be less than or equal to high"
+        if low is None:
+            min_exponent = 0
+        else:
+            low = float(low)
+            if math.isnan(low) or math.isinf(low):
+                raise ValueError("Low must be finite")
+            if low <= 0:
+                min_exponent = 0
+            else:
+                mantissa, exponent = math.frexp(low)
+                min_exponent = max(0, exponent - 1 + bias + (mantissa != 0.5))
+
+        if high is None:
+            max_exponent = 254
+        else:
+            high = float(high)
+            if math.isnan(high) or high <= 0:
+                raise ValueError("High must be positive")
+            if math.isinf(high):
+                max_exponent = 254
+            else:
+                _, exponent = math.frexp(high)
+                max_exponent = min(254, exponent - 1 + bias)
+
+        if min_exponent > max_exponent:
+            raise ValueError("No E8M0 values fall within the requested range")
 
         E = torch.randint(min_exponent, max_exponent + 1, size=self.size, dtype=torch.uint8, device=self.device)
         self.data = E
