@@ -476,6 +476,44 @@ struct FDivOpConversion
   }
 };
 
+struct FmaOpConversion
+    : ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion> {
+  using Base = ElementwiseOpConversionBase<math::FmaOp, FmaOpConversion>;
+  using Base::Base;
+  using Adaptor = typename Base::OpAdaptor;
+
+  SmallVector<Value> createDestOps(math::FmaOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    std::optional<arith::RoundingMode> rounding = op.getRoundingmode();
+    if (!rounding.has_value() ||
+        rounding.value() == arith::RoundingMode::to_nearest_even) {
+      return {LLVM::FMAOp::create(rewriter, loc, elemTy, operands[0][0],
+                                  operands[0][1], operands[0][2])};
+    }
+    // The NVPTX backend ignores the rounding mode of the constrained FMA
+    // intrinsic (it always emits fma.rn), so use the NVVM operation, which
+    // carries the rounding mode into PTX (fma.rz/fma.rm/fma.rp).
+    NVVM::FPRoundingMode nvvmRounding;
+    switch (rounding.value()) {
+    case arith::RoundingMode::toward_zero:
+      nvvmRounding = NVVM::FPRoundingMode::RZ;
+      break;
+    case arith::RoundingMode::downward:
+      nvvmRounding = NVVM::FPRoundingMode::RM;
+      break;
+    case arith::RoundingMode::upward:
+      nvvmRounding = NVVM::FPRoundingMode::RP;
+      break;
+    default:
+      return {};
+    }
+    return {NVVM::FmaOp::create(rewriter, loc, elemTy, operands[0][0],
+                                operands[0][1], operands[0][2], nvvmRounding)};
+  }
+};
+
 template <typename SourceOp>
 struct IntToFPOpConversion
     : ElementwiseOpConversionBase<SourceOp, IntToFPOpConversion<SourceOp>> {
@@ -871,6 +909,8 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
 #undef POPULATE_OP
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<FmaOpConversion>(typeConverter, axisInfoAnalysis,
+                                benefit.getBenefit() + 1);
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis,
                                  computeCapability, benefit);
   patterns.add<IntToFPOpConversion<arith::SIToFPOp>,
