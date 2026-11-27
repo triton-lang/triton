@@ -205,21 +205,28 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
         // op for the mfma layout to deduce operand index and other information.
         unsigned opIdx;
         unsigned vecSize;
+        // The chain to the dot may transpose the loaded value (e.g. k loaded
+        // [N, K] and fed to tl.dot(q, tl.trans(k))). Shape and order below
+        // are the loaded value's, so the layout must know about the transpose.
+        bool mfmaNeedTrans = false;
+        bool wmmaNeedTrans = false;
         if (auto mfmaEnc = getDotEncoding<ttg::AMDMfmaEncodingAttr>(
-                userResult, &opIdx, &vecSize)) {
-          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
+                userResult, &opIdx, &vecSize, &mfmaNeedTrans)) {
+          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize
+                                 << "; needTrans: " << mfmaNeedTrans);
           tempAttr = mfmaEnc.composeSharedLayoutForOperand(
               cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
-              /*needTrans=*/false);
+              mfmaNeedTrans);
           LDBG("Deduced shared encoding candidate from mfma layout: "
                << tempAttr);
           sharedEncs.push_back(tempAttr);
         } else if (auto dotEnc = getDotEncoding<ttg::AMDWmmaEncodingAttr>(
-                       userResult, &opIdx, &vecSize)) {
-          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
+                       userResult, &opIdx, &vecSize, &wmmaNeedTrans)) {
+          LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize
+                                 << "; needTrans: " << wmmaNeedTrans);
           tempAttr = dotEnc.composeSharedLayoutForOperand(
               cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
-              /*needTrans=*/false);
+              wmmaNeedTrans);
           LDBG("Deduced shared encoding candidate from wmma layout: "
                << tempAttr);
           sharedEncs.push_back(tempAttr);

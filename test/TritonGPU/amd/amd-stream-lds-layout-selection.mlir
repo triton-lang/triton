@@ -114,3 +114,47 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// WMMA: an operand loaded [N, K] (K contiguous) and fed to the dot through tt.trans is K-contiguous,
+// so its LDS buffer is swizzled (it was unswizzled when the transpose was not taken into account).
+// CHECK{LITERAL}: #shared = #ttg.swizzled_shared<{vec = 8, perPhase = 1, maxPhase = 16, order = [1, 0]}>
+// CHECK-NOT: #ttg.swizzled_shared
+// CHECK{LITERAL}: #smem = #ttg.shared_memory
+// CHECK-LABEL: test_lds_layout_selection_wmma_trans
+
+// CHECK: %[[ALLOC:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1x64x128xbf16, #shared, #smem, mutable>
+// CHECK: scf.for
+//  CHECK: %[[LOCAL_LOAD:.+]] = ttg.local_load {{.+}} -> tensor<64x128xbf16, #linear>
+//  CHECK: %[[TRANS:.+]] = tt.trans %[[LOCAL_LOAD]] {{.+}} -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+//  CHECK: tt.dot {{.+}}, %[[TRANS]], {{.+}}
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 16], [0, 32], [0, 64], [16, 0], [32, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [0, 8]], warp = [[0, 0], [0, 0], [0, 0]], block = []}>
+#mma = #ttg.amd_wmma<{version = 2, isTranspose = true, ctaLayout = {warp = [[1, 0], [2, 0], [4, 0]]}}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx1201", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @test_lds_layout_selection_wmma_trans(
+    %arg0: tensor<64x128x!tt.ptr<bf16>, #blocked>,
+    %out0 : tensor<128x64x!tt.ptr<f32>, #blocked>
+  ) {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<128x64xf32, #mma>
+    %cst_1 = arith.constant dense<0.581374812> : tensor<128x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c8_i32 = arith.constant 8 : i32
+
+    %0 = scf.for %arg1 = %c0_i32 to %c8_i32 step %c1_i32 iter_args(%arg2 = %cst_0) -> (tensor<128x64xf32, #mma>)  : i32 {
+      %1 = tt.load %arg0 : tensor<64x128x!tt.ptr<bf16>, #blocked>
+      %2 = ttg.convert_layout %1 : tensor<64x128xbf16, #blocked> -> tensor<64x128xbf16, #linear>
+      %3 = tt.trans %2 {order = array<i32: 1, 0>} : tensor<64x128xbf16, #linear> -> tensor<128x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+      %4 = tt.dot %cst_1, %3, %arg2 : tensor<128x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<128x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x64xf32, #mma>
+      scf.yield %4 : tensor<128x64xf32, #mma>
+    }
+
+    %5 = ttg.convert_layout %0 : tensor<128x64xf32, #mma> -> tensor<128x64xf32, #blocked>
+    tt.store %out0, %5 : tensor<128x64x!tt.ptr<f32>, #blocked>
+    tt.return
+  }
+}
