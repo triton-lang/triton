@@ -659,7 +659,4 @@ def unsqueeze(x, dim: core.constexpr):
     :param dim: the index at which the new dimension is inserted
     :type dim: int
     """
-    ndim: core.constexpr = len(x.shape) + 1
-    core.static_assert(-ndim <= dim and dim < ndim)
-    _dim: core.constexpr = dim + ndim if dim < 0 else dim
-    return x.reshape(x.shape[:_dim] + (1, ) + x.shape[_dim:])
+    return core.expand_dims(x, dim)

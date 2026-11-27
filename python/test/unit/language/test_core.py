@@ -963,6 +963,13 @@ def test_squeeze_unsqueeze_negative_dim(device):
         t = tl.squeeze(tl.expand_dims(offset1, 0), -2)
         tl.static_assert(t.shape == [N])
 
+        # Test unsqueeze on rank-0 scalar
+        scalar = tl.load(dummy)
+        t_scalar0 = tl.unsqueeze(scalar, 0)
+        tl.static_assert(t_scalar0.shape == [1])
+        t_scalar_neg1 = tl.unsqueeze(scalar, -1)
+        tl.static_assert(t_scalar_neg1.shape == [1])
+
     N = 32
     dummy_tensor = torch.empty((), device=device)
     kernel[(1, )](dummy_tensor, N)
