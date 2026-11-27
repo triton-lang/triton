@@ -106,6 +106,7 @@ def test_sort(M, N, k, descending, dtype_str, device):
             z = tl.sort(x, descending=descending)
         else:
             z = tl.topk(x, k, descending=descending)
+        tl.static_assert(z.dtype == x.dtype, "sort/topk must return the input dtype")
         offs_z = offs_m[:, None] * stride_zm + offs_z_n[None, :]
         tl.store(Z + offs_z, z)
 
@@ -119,6 +120,42 @@ def test_sort(M, N, k, descending, dtype_str, device):
         y = torch.topk(x, k=k, largest=descending).values
     sort_kernel[(1, )](x, x.stride(0), z, z.stride(0), M, N, k, descending, num_warps=8)
     assert (y == z).all(), (y, z)
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("N, k", [[1, None], [16, None], [16, 1], [16, 4], [16, 16]])
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("dtype_str", ["int8", "uint8", "int16", "float16", "bfloat16"])
+def test_sort_topk_narrow_dtype(N, k, descending, dtype_str, device):
+    # The k == 1, k < N and size-1 paths select with max/min, which compute in 32
+    # bits for narrower types; the result must still have the input dtype.
+    check_type_supported(dtype_str, device)
+
+    @triton.jit
+    def kernel(X, Z, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr, IS_SORT: tl.constexpr,
+               descending: tl.constexpr):
+        offs_m = tl.arange(0, M)[:, None]
+        x = tl.load(X + offs_m * N + tl.arange(0, N)[None, :])
+        if IS_SORT:
+            z = tl.sort(x, descending=descending)
+        else:
+            z = tl.topk(x, K, descending=descending)
+        tl.static_assert(z.dtype == x.dtype, "sort/topk must return the input dtype")
+        tl.store(Z + offs_m * K + tl.arange(0, K)[None, :], z)
+
+    M = 4
+    dtype = getattr(torch, dtype_str)
+    if dtype.is_floating_point:
+        x = torch.randn((M, N)).to(dtype)
+    else:
+        info = torch.iinfo(dtype)
+        x = torch.randint(info.min, info.max + 1, (M, N), dtype=torch.int64).to(dtype)
+    x = x.to(device)
+    K = N if k is None else k
+    z = torch.empty((M, K), dtype=dtype, device=device)
+    kernel[(1, )](x, z, M, N, K, k is None, descending)
+    ref = torch.sort(x.cpu().double(), descending=descending)[0][:, :K]
+    torch.testing.assert_close(z.cpu().double(), ref, atol=0, rtol=0)
 
 
 @pytest.mark.interpreter

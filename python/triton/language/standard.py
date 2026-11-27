@@ -503,6 +503,10 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
 
     log_n: core.constexpr = _log2(x.shape[_dim])
     log_k: core.constexpr = log_n if k is None else _log2(k)
+    # `max`/`min` below compute in 32 bits for narrower types. The selected values
+    # are elements of `x`, so narrowing the result back is exact (and a no-op for
+    # 32/64-bit types).
+    in_dtype: core.constexpr = x.dtype
 
     if log_k == 0:
         # k == 1 (or a length-1 dim): the general path below would reduce the
@@ -526,7 +530,7 @@ def sort_impl(x, k: core.constexpr = None, dim: core.constexpr = None, descendin
 
         # reshape back:
         x = core.reshape(h, x.shape[:-1] + [2**log_k])
-    return x
+    return x.to(in_dtype)
 
 
 @jit
