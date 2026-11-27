@@ -45,6 +45,7 @@ public:
   explicit TargetFeatures(StringRef arch);
 
   static TargetFeatures fromModuleOp(ModuleOp moduleOp);
+  static std::optional<TargetFeatures> tryFromModuleOp(ModuleOp moduleOp);
 
   StringRef getArch() const;
   StringRef getBaseArch() const;
@@ -87,12 +88,14 @@ public:
   bool supportMaximumMinimum() const;
   bool supportDppBroadcast() const;
   bool supportsPermlaneSwap() const;
+  bool supportsCvtPkScalePk2() const;
   bool supportsCvtPkScalePk8() const;
   bool supportsCvtPkScalePk8Upcast() const;
   bool supportsCvtPkScalePk8Block16() const;
   ArrayRef<StringRef> getUnsupportedWmmaFeatures() const;
   bool supportsHwScaledUpcast() const;
   bool supportsHwScaledDowncast() const;
+  std::optional<int64_t> getScaledDowncastGroupSize(int64_t packFactor) const;
 
   bool supportBitwidth16Elementwise() const;
   bool supportBitwidth32Elementwise() const;
