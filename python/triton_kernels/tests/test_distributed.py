@@ -19,7 +19,7 @@ from triton_kernels.distributed import (
 )
 from triton_kernels.distributed_details.mesh import Mesh
 from triton_kernels.reduce import reduce
-from triton_kernels.topk import topk
+from triton_kernels.topk import topk, topk_torch
 from triton_kernels.matmul import matmul
 from triton_kernels.tensor import make_ragged_tensor_metadata, remap_ragged_tensor_metadata
 import pytest
@@ -198,6 +198,41 @@ def test_make_expt_assignment(n_expts_shard, n_expts_tot, affinity_mode):
 # ------------------------------------------------------------
 # expert sharding
 # ------------------------------------------------------------
+
+
+def _run_topk_all_gather(rank, world_size):
+    device = torch.device("cuda", rank)
+    capacity, n_experts, k = 8, 67, 3
+    pool = SymmetricMemoryPool(Mesh(dist.group.WORLD))
+    pool.initialize_matmul(capacity * world_size, 1, 1, k, n_experts, torch.float32, device)
+
+    torch.manual_seed(rank)
+    logits = torch.randn(capacity, n_experts, device=device)
+    for active in (capacity, 3):
+        all_logits = logits.new_empty(active * world_size, n_experts)
+        dist.all_gather_into_tensor(all_logits, logits[:active])
+        indices = torch.zeros((capacity * world_size, k), dtype=torch.int16, device=device)
+        indices[:all_logits.size(0)] = torch.argsort(all_logits)[:, :k]
+        for provided in (None, indices):
+            expected = topk_torch(all_logits, k, apply_softmax=False,
+                                  y_indx=None if provided is None else provided[:all_logits.size(0)])
+            histogram = torch.bincount(expected.indx.long().flatten(), minlength=n_experts).int()
+            for count in (active, torch.tensor(active, device=device)):
+                result = topk(logits, k, apply_softmax=False, n_rows=count, y_indx=provided, all_gather=True,
+                              symm_mem_pool=pool)
+                n = all_logits.size(0)
+                torch.testing.assert_close(result.vals[:n], expected.vals)
+                torch.testing.assert_close(result.indx[:n].int(), expected.indx)
+                assert result.mask.data.shape == (capacity * world_size, triton.cdiv(n_experts, 32))
+                torch.testing.assert_close(result.mask.data[:n], expected.mask.data)
+                torch.testing.assert_close(result.mask_metadata.col_sum, histogram)
+                # The next invocation reuses the same symmetric buffers on both ranks.
+                pool.hdl.barrier(channel=0)
+
+
+@pytest.mark.parametrize("distributed_launcher", [2], indirect=True)
+def test_topk_all_gather_active_rows(distributed_launcher):
+    distributed_launcher(_run_topk_all_gather)
 
 
 def routing(logits, n_expts_act, all_gather=False, y_indx=None):

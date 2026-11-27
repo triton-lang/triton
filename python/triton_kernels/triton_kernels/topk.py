@@ -57,7 +57,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
     bitmatrix_bufs, bitmatrix_data, offset = make_empty(offset, (n_cols_words, cdiv(n_rows_out_max, 32) * 32),
                                                         torch.uint32, dev, all_gather=all_gather,
                                                         symm_mem_pool=symm_mem_pool)
-    bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_max]
+    bitmatrix_data = torch.transpose(bitmatrix_data, 0, 1)[:n_rows_out_max]
     pids = cdiv(n_rows_max, BLOCK_M)
     _topk_forward[(pids, )](
         x.storage.data,
@@ -71,7 +71,7 @@ def topk_forward(x, k, apply_softmax=True, dim=1, y_indx=None, n_rows=None, all_
         bitmatrix_data.stride(1),  # output [bitmatrix]
         n_rows,
         n_cols,  # shapes
-        symm_mem_pool.mesh.local_rank * n_rows_max if all_gather else 0,
+        symm_mem_pool.mesh.local_rank if all_gather else 0,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,  # tunable parameter
         APPLY_SOFTMAX=apply_softmax,
@@ -148,6 +148,8 @@ def topk(
         If provided, we skip the computation of top-k indices and use this tensor instead.
     n_rows : int, optional
         Number of rows to apply top-k on. If None, we consider all rows in `x`.
+        All-gather expects the same active row count on every rank. Active rows
+        are packed in rank order, including when passing precomputed indices.
     disable_lsr : bool, optional
         Override loop strength reduction for the CUDA forward kernel. If None,
         use the compiler default without passing a backend-specific option.
