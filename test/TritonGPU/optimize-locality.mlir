@@ -957,3 +957,111 @@ module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-
     tt.return
   }
 }
+
+// -----
+
+// The update is subtraction while the reduction combines with addition:
+// reusing the update to merge per-thread partials would add them instead of
+// subtracting (#12348). The pass must leave the loop unrewritten.
+
+// CHECK-LABEL: @subtract_loop_update
+// CHECK: %[[LOOP_RESULT:.*]] = scf.for
+// CHECK: %[[LOAD:.*]] = tt.load
+// CHECK-NEXT: %[[REDUCED:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+// CHECK: %[[SUBTRACTED:.*]] = arith.subf %{{.*}}, %[[REDUCED]]
+// CHECK-NEXT: scf.yield %[[SUBTRACTED]]
+// CHECK: tt.store {{.*}}, %[[LOOP_RESULT]]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:89", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @subtract_loop_update(%input: tensor<16x256x!tt.ptr<f32>, #blocked>, %output: tensor<16x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<16xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<16xf32, #slice>) : i32 {
+      %values = tt.load %input : tensor<16x256x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%values) <{axis = 1 : i32}> ({
+      ^bb0(%left: f32, %right: f32):
+        %sum = arith.addf %left, %right : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<16x256xf32, #blocked>) -> tensor<16xf32, #slice>
+      %subtracted = arith.subf %accumulator, %reduced : tensor<16xf32, #slice>
+      scf.yield %subtracted : tensor<16xf32, #slice>
+    }
+    tt.store %output, %result : tensor<16x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// The update is nominally the combiner (addf) but its other operand is a
+// computed value, not the bare accumulator: the rewrite's accumulator lookup
+// asserts on a block argument and used to crash on this shape (#12348).
+
+// CHECK-LABEL: @scaled_accumulator_update
+// CHECK: %[[LOOP_RESULT:.*]] = scf.for
+// CHECK: %[[LOAD:.*]] = tt.load
+// CHECK: %[[REDUCED:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+// CHECK: %[[SCALED:.*]] = arith.mulf
+// CHECK-NEXT: %[[ADDED:.*]] = arith.addf %[[SCALED]], %[[REDUCED]]
+// CHECK-NEXT: scf.yield %[[ADDED]]
+// CHECK: tt.store {{.*}}, %[[LOOP_RESULT]]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:89", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @scaled_accumulator_update(%input: tensor<16x256x!tt.ptr<f32>, #blocked>, %output: tensor<16x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<16xf32, #slice>
+    %half = arith.constant dense<5.000000e-01> : tensor<16xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<16xf32, #slice>) : i32 {
+      %values = tt.load %input : tensor<16x256x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%values) <{axis = 1 : i32}> ({
+      ^bb0(%left: f32, %right: f32):
+        %sum = arith.addf %left, %right : f32
+        tt.reduce.return %sum : f32
+      }) : (tensor<16x256xf32, #blocked>) -> tensor<16xf32, #slice>
+      %scaled = arith.mulf %accumulator, %half : tensor<16xf32, #slice>
+      %added = arith.addf %scaled, %reduced : tensor<16xf32, #slice>
+      scf.yield %added : tensor<16xf32, #slice>
+    }
+    tt.store %output, %result : tensor<16x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
+
+// -----
+
+// A NaN-propagating update (maximumf) over a default max reduction (maxnumf):
+// the two are different ops with different NaN semantics, so the partial-merge
+// reuse would be wrong; the pass must skip it (#12348's NaN sibling case).
+
+// CHECK-LABEL: @maxnum_update_maximum_reduce
+// CHECK: %[[LOOP_RESULT:.*]] = scf.for
+// CHECK: %[[LOAD:.*]] = tt.load
+// CHECK-NEXT: %[[REDUCED:.*]] = "tt.reduce"(%[[LOAD]]) <{axis = 1 : i32}>
+// CHECK: %[[UPDATED:.*]] = arith.maxnumf %{{.*}}, %[[REDUCED]]
+// CHECK-NEXT: scf.yield %[[UPDATED]]
+// CHECK: tt.store {{.*}}, %[[LOOP_RESULT]]
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#slice = #ttg.slice<{dim = 1, parent = #blocked}>
+module attributes {"ttg.target" = "cuda:89", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @maxnum_update_maximum_reduce(%input: tensor<16x256x!tt.ptr<f32>, #blocked>, %output: tensor<16x!tt.ptr<f32>, #slice>, %count: i32) {
+    %zero = arith.constant dense<0.000000e+00> : tensor<16xf32, #slice>
+    %start = arith.constant 0 : i32
+    %step = arith.constant 1 : i32
+    %result = scf.for %index = %start to %count step %step iter_args(%accumulator = %zero) -> (tensor<16xf32, #slice>) : i32 {
+      %values = tt.load %input : tensor<16x256x!tt.ptr<f32>, #blocked>
+      %reduced = "tt.reduce"(%values) <{axis = 1 : i32}> ({
+      ^bb0(%left: f32, %right: f32):
+        %max = arith.maximumf %left, %right : f32
+        tt.reduce.return %max : f32
+      }) : (tensor<16x256xf32, #blocked>) -> tensor<16xf32, #slice>
+      %updated = arith.maxnumf %accumulator, %reduced : tensor<16xf32, #slice>
+      scf.yield %updated : tensor<16xf32, #slice>
+    }
+    tt.store %output, %result : tensor<16x!tt.ptr<f32>, #slice>
+    tt.return
+  }
+}
