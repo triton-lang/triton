@@ -152,10 +152,20 @@ def create_mem_pool(*, shadow_granularity: int | None = None, write_once: bool =
 
 
 def gsan_malloc(size: int, device: int, stream: int = 0, *, shadow_granularity: int | None = None,
-                write_once: bool = False) -> int:
+                write_once: bool = False, accessed_ranges: list[tuple[int, int]] | None = None) -> int:
+    """Allocate tracked memory, optionally backing only observed shadow ranges.
+
+    ``accessed_ranges`` contains sorted, disjoint (byte offset, byte length)
+    ranges covering the full backing-allocation lifetime across every peer.
+    Real storage, shadow addresses, clocks and granularity are unchanged.
+    CUDA-page rounding and coalescing gaps of up to two CUDA allocation pages
+    may back additional tracked shadow cells. Other shadow pages stay
+    inaccessible: an access outside coverage fails rather than running without
+    tracking. A failed run must never be counted as sanitized.
+    """
     shadow_granularity = _resolve_shadow_granularity(shadow_granularity, write_once)
     module = _load_gsan_module()
-    return module.malloc(size, device, stream, write_once, shadow_granularity)
+    return module.malloc(size, device, stream, write_once, shadow_granularity, accessed_ranges)
 
 
 def gsan_free(ptr: int, device: int, size: int = 0, stream: int = 0) -> None:
@@ -196,6 +206,7 @@ def export_allocation_handles(
     *,
     write_once: bool = False,
     include_granularity: Literal[False] = False,
+    include_layout: Literal[False] = False,
 ) -> tuple[int, int, int]:
     ...
 
@@ -207,6 +218,7 @@ def export_allocation_handles(
     *,
     write_once: bool = False,
     include_granularity: Literal[False] = False,
+    include_layout: Literal[False] = False,
 ) -> tuple[bytes, bytes, int]:
     ...
 
@@ -218,6 +230,7 @@ def export_allocation_handles(
     *,
     write_once: bool = False,
     include_granularity: Literal[True],
+    include_layout: Literal[False] = False,
 ) -> tuple[int, int, int, int]:
     ...
 
@@ -229,11 +242,25 @@ def export_allocation_handles(
     *,
     write_once: bool = False,
     include_granularity: Literal[True],
+    include_layout: Literal[False] = False,
 ) -> tuple[bytes, bytes, int, int]:
     ...
 
 
-def export_allocation_handles(ptr, handle_type, *, write_once: bool = False, include_granularity: bool = False):
+@overload
+def export_allocation_handles(
+    ptr: int,
+    handle_type: ShareableHandleType,
+    *,
+    write_once: bool = False,
+    include_granularity: Literal[True],
+    include_layout: Literal[True],
+) -> tuple[int | bytes, int | bytes | list[int] | list[bytes], int, int, list[tuple[int, int]] | None]:
+    ...
+
+
+def export_allocation_handles(ptr, handle_type, *, write_once: bool = False, include_granularity: bool = False,
+                              include_layout: bool = False):
     """Returns real/shadow handles and allocation size.
 
     Set ``include_granularity=True`` to append the shadow granularity, which
@@ -242,9 +269,16 @@ def export_allocation_handles(ptr, handle_type, *, write_once: bool = False, inc
     shadow layout. Pass the allocation's ``write_once`` mode to both export and
     import; it is checked here. The three-field API is available for the default
     granularity of each mode: four bytes normally, one byte for write-once.
+
+    Sparse allocations require ``include_layout=True`` together with
+    ``include_granularity=True``. This appends the physical shadow layout (or
+    None for dense allocations). For sparse allocations the shadow handle is
+    a list with one handle per range. Pass both the handles and ``shadow_layout``
+    unchanged when importing. Export without the descriptor is rejected for
+    sparse storage.
     """
     module = _load_gsan_module()
-    return module.export_allocation_handles(ptr, handle_type, write_once, include_granularity)
+    return module.export_allocation_handles(ptr, handle_type, write_once, include_granularity, include_layout)
 
 
 def export_allocation_memhandle_regions(ptr: int) -> tuple[int, int, int, int]:
@@ -255,13 +289,14 @@ def export_allocation_memhandle_regions(ptr: int) -> tuple[int, int, int, int]:
 @overload
 def import_allocation_handles(
     real_handle: int,
-    shadow_handle: int,
+    shadow_handle: int | list[int],
     alloc_size: int,
     device: int,
     handle_type: Literal[ShareableHandleType.POSIX_FILE_DESCRIPTOR],
     *,
     shadow_granularity: int | None = None,
     write_once: bool = False,
+    shadow_layout: list[tuple[int, int]] | None = None,
 ) -> int:
     ...
 
@@ -269,13 +304,14 @@ def import_allocation_handles(
 @overload
 def import_allocation_handles(
     real_handle: bytes,
-    shadow_handle: bytes,
+    shadow_handle: bytes | list[bytes],
     alloc_size: int,
     device: int,
     handle_type: Literal[ShareableHandleType.FABRIC],
     *,
     shadow_granularity: int | None = None,
     write_once: bool = False,
+    shadow_layout: list[tuple[int, int]] | None = None,
 ) -> int:
     ...
 
@@ -289,6 +325,7 @@ def import_allocation_handles(
     *,
     shadow_granularity: int | None = None,
     write_once: bool = False,
+    shadow_layout: list[tuple[int, int]] | None = None,
 ):
     shadow_granularity = _resolve_shadow_granularity(shadow_granularity, write_once)
     module = _load_gsan_module()
@@ -300,6 +337,7 @@ def import_allocation_handles(
         handle_type,
         write_once,
         shadow_granularity,
+        shadow_layout,
     )
 
 
