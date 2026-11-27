@@ -359,7 +359,7 @@ public:
     SmallVector<LoopLikeOpInterface> loops;
     m.walk([&](LoopLikeOpInterface loop) {
       if (isa<scf::ForOp, scf::WhileOp>(loop.getOperation()) &&
-          loop->hasAttr(kWarpSpecializeAttrName))
+          loop->hasAttr(kWarpSpecializeAttrName) && hasPartition(loop))
         loops.push_back(loop);
     });
 
