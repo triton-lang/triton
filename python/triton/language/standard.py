@@ -350,12 +350,12 @@ def _pick_sum_dtype(in_dtype, dtype):
 
 @core._tensor_member_fn
 @jit
-@core._add_reduction_docstr("sum", dtype_arg="dtype")
-def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
+@core._add_reduction_docstr("sum", dtype_arg="dtype", in_thread_reduction_arg="in_thread_reduction")
+def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None, in_thread_reduction: core.constexpr = "tree"):
     # Pick a default dtype for the reduction if one was not specified.
     out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
     input = input.to(out_dtype)
-    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
+    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, in_thread_reduction=in_thread_reduction)
 
 
 @jit

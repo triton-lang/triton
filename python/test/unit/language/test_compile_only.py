@@ -708,3 +708,26 @@ def test_ir_module_released_at_shutdown(tmp_path):
     script.write_text(code)
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True)
     assert "nanobind: leaked" not in result.stderr, result.stderr
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("policy", ["tree", "sequential"])
+@pytest.mark.parametrize("arch", [90, 107])
+def test_reduction_in_thread_policy_compile_only(frontend, policy, arch):
+    from triton.experimental import gluon
+    from triton.experimental.gluon import language as gl
+
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+
+    @jit
+    def kernel(X, Y, POLICY: lang.constexpr):
+        x = lang.load(X + lang.arange(0, 2048))
+        lang.store(Y, lang.sum(x, 0, dtype=lang.float32, in_thread_reduction=POLICY))
+
+    source_cls = ASTSource if frontend == "triton" else gluon.GluonASTSource
+    source = source_cls(kernel, {"X": "*fp16", "Y": "*fp32", "POLICY": "constexpr"}, {"POLICY": policy})
+    compiled = triton.compile(source, target=GPUTarget("cuda", arch, 32))
+    if policy == "tree":
+        assert "in_thread_reduction" not in compiled.asm["ttgir"]
+    else:
+        assert "in_thread_reduction = 1 : i32" in compiled.asm["ttgir"]

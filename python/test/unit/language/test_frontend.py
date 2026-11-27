@@ -2346,3 +2346,41 @@ def test_cache_policy_ir_attrs():
         tl.store(Out + offsets, value, cache_modifier=".wt", eviction_policy="evict_last")
 
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), MockTensor(tl.float32), 128))
+
+
+@pytest.mark.parametrize("frontend", ["triton", "gluon"])
+@pytest.mark.parametrize("policy", ["tree", "sequential", "invalid"])
+@pytest.mark.parametrize("op", ["reduce", "sum"])
+@pytest.mark.parametrize("axis,keep_dims", [(1, True), (None, False)])
+def test_reduction_in_thread_policy(frontend, policy, op, axis, keep_dims):
+    jit, lang = (triton.jit, tl) if frontend == "triton" else (gluon.jit, gl)
+    reduction = getattr(lang, op)
+
+    @jit
+    def combine(a, b, c, d):
+        return a + c, b + d
+
+    @jit
+    def kernel(X, POLICY: lang.constexpr, AXIS: lang.constexpr, KEEP: lang.constexpr, TUPLE: lang.constexpr):
+        x = lang.load(X + lang.arange(0, 128)).reshape((4, 32))
+        if TUPLE:
+            lang.reduce((x, x), AXIS, combine, keep_dims=KEEP, in_thread_reduction=POLICY)
+        else:
+            reduction(x, AXIS, keep_dims=KEEP, in_thread_reduction=POLICY)
+
+    args = (MockTensor(tl.int32), policy, axis, keep_dims, op == "reduce")
+    if policy == "invalid":
+        with pytest.raises(CompilationError) as exc:
+            run_parser(kernel, args=args)
+        cause = exc.value
+        while cause.__cause__ is not None:
+            cause = cause.__cause__
+        assert "in_thread_reduction must be 'tree' or 'sequential'" in str(cause)
+    else:
+        module = run_parser(kernel, args=args)
+        assert module.verify()
+        ir = module.str_nodebug()
+        if policy == "tree":
+            assert "in_thread_reduction" not in ir
+        else:
+            assert "in_thread_reduction = 1 : i32" in ir

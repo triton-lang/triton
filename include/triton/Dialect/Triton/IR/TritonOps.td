@@ -932,10 +932,22 @@ def TT_ReduceOp: TT_Op<"reduce",
       The combiner and its callees may contain memory-effect-free operations,
       `llvm.intr.assume`, `tt.assert`, and `tt.print`.
       These operations must lower without shared-memory scratch.
+
+      `in_thread_reduction` selects how register-resident values are combined
+      for each independent result during lowering. `tree` (the default)
+      preserves the target's existing tree-based lowering; `sequential` uses
+      one accumulator chain.
     }];
-    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis);
+    let arguments = (ins Variadic<TT_Tensor>:$srcs, I32Attr:$axis,
+                        OptionalAttr<TT_InThreadReductionAttr>:$in_thread_reduction);
     let results = (outs Variadic<TT_Type>:$result);
     let regions = (region SizedRegion<1>:$combineOp);
+    let builders = [
+      OpBuilder<(ins "ValueRange":$srcs, "int":$axis), [{
+        build($_builder, $_state, srcs, $_builder.getI32IntegerAttr(axis),
+              ::mlir::triton::InThreadReductionAttr{});
+      }]>,
+    ];
     let hasVerifier = 1;
     let hasRegionVerifier = 1;
     let extraClassDeclaration = [{

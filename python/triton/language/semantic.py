@@ -1802,7 +1802,8 @@ class TritonSemantic(Generic[TensorTy]):
             res_ty = scalar_ty
         return self.make_tensor(x, res_ty)
 
-    def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn) -> Tuple[TensorTy, ...]:
+    def reduction(self, inputs: Sequence[TensorTy], axis: int, region_builder_fn,
+                  in_thread_reduction: str = "tree") -> Tuple[TensorTy, ...]:
         if axis is None:
             inputs = tuple(self.reshape(t, [t.numel.value]) for t in inputs)
             axis = 0
@@ -1813,7 +1814,7 @@ class TritonSemantic(Generic[TensorTy]):
         ret_shape = [s for i, s in enumerate(shape) if i != axis]
         assert all(t.type.shape == shape for t in inputs), "all reduction inputs must have the same shape"
 
-        reduce_op = self.builder.create_reduce([t.handle for t in inputs], axis)
+        reduce_op = self.builder.create_reduce([t.handle for t in inputs], axis, in_thread_reduction)
         region_builder_fn(reduce_op)
         assert reduce_op.verify()
 

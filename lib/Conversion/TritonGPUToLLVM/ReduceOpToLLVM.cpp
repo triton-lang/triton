@@ -319,10 +319,17 @@ private:
                         arith::MaxUIOp>(combinerOp) &&
         combinerOp->getResult(0).getType().isInteger(1) &&
         llvm::hasSingleElement(combineRegion.front().without_terminator());
-    bool usePredicateChains =
-        isPureBooleanCombiner && targetInfo.preferThreePredicateChains();
+    bool sequential =
+        op.getInThreadReduction() == InThreadReduction::SEQUENTIAL;
+    bool usePredicateChains = !sequential && isPureBooleanCombiner &&
+                              targetInfo.preferThreePredicateChains();
+    // Keep the narrow-origin operand on the left for mixed-precision op
+    // folding when possible. When lower-precision values are cast to higher
+    // precision and then reduced, an LLVM backend may optimize cast -> binary
+    // op into an optimized instruction.
+    bool swapSequentialOperands = sequential && op.isCommutative();
 
-    // Perform a tree reduction
+    // Reduce register-resident values for each independent result.
     unsigned numOperands = accs.size();
     SmallVector<SmallVector<Value>> reduced(numOperands);
     unsigned regs = accs.front().size();
@@ -339,8 +346,20 @@ private:
         else
           vals.push_back(std::move(cur));
       }
-      auto acc =
-          treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
+      SmallVector<Value> acc;
+      if (sequential) {
+        acc = std::move(vals.front());
+        for (unsigned i = 1; i < vals.size(); ++i) {
+          if (swapSequentialOperands) {
+            accumulate(loc, rewriter, combineRegion, vals[i], acc);
+            acc = std::move(vals[i]);
+          } else {
+            accumulate(loc, rewriter, combineRegion, acc, vals[i]);
+          }
+        }
+      } else {
+        acc = treeReduce(loc, rewriter, combineRegion, std::move(vals), arity);
+      }
       for (unsigned opIdx = 0; opIdx < numOperands; ++opIdx) {
         reduced[opIdx].push_back(acc[opIdx]);
       }
