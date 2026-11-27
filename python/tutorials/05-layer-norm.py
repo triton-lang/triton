@@ -109,12 +109,16 @@ def _layer_norm_fwd_fused(
 # where :math:`\odot` denotes the element-wise multiplication, :math:`\cdot` denotes the dot product, and :math:`\sigma` is the standard deviation.
 # :math:`c_1` and :math:`c_2` are intermediate constants that improve the readability of the following implementation.
 #
-# For the weights :math:`w` and biases :math:`b`, the VJPs :math:`\nabla_{w}` and :math:`\nabla_{b}` are more straightforward:
+# For the weights :math:`w` and biases :math:`b`, the VJPs :math:`\nabla_{w}` and :math:`\nabla_{b}` are more straightforward. For each row :math:`m`:
 #
 # .. math::
-#    \nabla_{w} = \nabla_{y} \odot \hat{x} \quad \text{and} \quad \nabla_{b} = \nabla_{y}
+#    \nabla_{w}^{(m)} = \nabla_{y}^{(m)} \odot \hat{x}^{(m)} \quad \text{and} \quad \nabla_{b}^{(m)} = \nabla_{y}^{(m)}
 #
-# Since the same weights :math:`w` and biases :math:`b` are used for all rows in the same batch, their gradients need to sum up.
+# Since the same weights :math:`w` and biases :math:`b` are used for all rows in the same batch, their gradients need to sum up across all :math:`M` rows:
+#
+# .. math::
+#    \nabla_{w} = \sum_{m=1}^{M} \nabla_{w}^{(m)} \quad \text{and} \quad \nabla_{b} = \sum_{m=1}^{M} \nabla_{b}^{(m)}
+#
 # To perform this step efficiently, we use a parallel reduction strategy: each kernel instance accumulates
 # partial :math:`\nabla_{w}` and :math:`\nabla_{b}` across certain rows into one of :math:`\text{GROUP\_SIZE\_M}` independent buffers.
 # These buffers stay in the L2 cache and then are further reduced by another function to compute the actual :math:`\nabla_{w}` and :math:`\nabla_{b}`.
