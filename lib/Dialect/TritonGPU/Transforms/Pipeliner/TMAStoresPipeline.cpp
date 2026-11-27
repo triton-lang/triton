@@ -4,6 +4,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "llvm/ADT/MapVector.h"
+#include <tuple>
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -44,11 +46,10 @@ static bool hasAcquireOrReleaseOp(LoopLikeOpInterface loop) {
   return result.wasInterrupted();
 }
 
-static Value createAlloc(LoopLikeOpInterface loop, const TMAStore &store) {
+static Value createAlloc(LoopLikeOpInterface loop, const TMAStore &store,
+                         Attribute encoding) {
   OpBuilder builder(loop);
   RankedTensorType ty = store.src.getType();
-  auto encoding =
-      triton::nvidia_gpu::getEncodingFromDescriptor(store.op, ty, store.desc);
   Attribute sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(ty.getContext());
   Type memdescType =
@@ -99,17 +100,19 @@ bool mlir::triton::pipelineTMAStores(LoopLikeOpInterface loop) {
     return false;
 
   DenseMap<Operation *, Value> storeToAlloc;
-  DenseMap<std::pair<ArrayRef<int64_t>, Type>, Value> allocs;
+  llvm::MapVector<std::tuple<ArrayRef<int64_t>, Type, Attribute>, Value> allocs;
   for (const TMAStore &store : tmaStores) {
     // Reuse allocations for stores of the same shape and types. This allows
     // saving shared memory usage. It is valid since we have a wait 0 before
     // every local_store. We could pipeline more aggressively if we didn't
     // reuse but there is a tradeoff with shared memory usage.
     RankedTensorType srcTy = store.src.getType();
-    auto key = std::make_pair(srcTy.getShape(), srcTy.getElementType());
+    Attribute encoding =
+        ttng::getEncodingFromDescriptor(store.op, srcTy, store.desc);
+    auto key = std::tuple(srcTy.getShape(), srcTy.getElementType(), encoding);
     Value &alloc = allocs[key];
     if (!alloc) {
-      alloc = createAlloc(loop, store);
+      alloc = createAlloc(loop, store, encoding);
     }
     storeToAlloc[store.op] = alloc;
   }
@@ -126,7 +129,7 @@ bool mlir::triton::pipelineTMAStores(LoopLikeOpInterface loop) {
   builder.setInsertionPointAfter(loop);
   ttng::TMAStoreWaitOp::create(builder, loop->getLoc(), 0,
                                /*read_only=*/false);
-  for (auto it : storeToAlloc) {
+  for (auto it : allocs) {
     ttg::LocalDeallocOp::create(builder, loop->getLoc(), it.second);
   }
 
