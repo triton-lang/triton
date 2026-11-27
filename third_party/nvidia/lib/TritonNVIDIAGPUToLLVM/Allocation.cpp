@@ -4,6 +4,7 @@
 #include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/AllocateSharedMemoryUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -71,6 +72,13 @@ static unsigned getNumScratchElemsSwizzledCvt(RankedTensorType srcTy,
 std::function<unsigned(Operation *)>
 getNvidiaAllocationAnalysisScratchSizeFn(TargetInfoBase &targetInfo) {
   auto allocation = [&targetInfo](Operation *op) -> unsigned {
+    // Cluster synchronization can introduce more WS sites after allocation.
+    if (isa<FunctionOpInterface>(op) && gpu::lookupNumCTAs(op) == 1) {
+      SmallVector<gpu::WarpSpecializeOp> sites;
+      op->walk([&](gpu::WarpSpecializeOp ws) { sites.push_back(ws); });
+      if (canDirectDispatch(sites))
+        return 0;
+    }
     if (auto cvtOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op)) {
       auto srcTy = cvtOp.getSrc().getType();
       auto dstTy = cvtOp.getType();

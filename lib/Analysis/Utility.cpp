@@ -6,6 +6,7 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/Allocation.h"
@@ -23,6 +24,19 @@ namespace mlir {
 
 using namespace triton;
 using namespace triton::gpu;
+
+bool triton::canDirectDispatch(ArrayRef<WarpSpecializeOp> sites) {
+  if (sites.size() != 1)
+    return false;
+  Block *site = sites.front()->getBlock();
+  if (!isa<FunctionOpInterface>(site->getParentOp()) || site->isReachable(site))
+    return false;
+  DominanceInfo dom;
+  return llvm::all_of(*site->getParent(), [&](Block &block) {
+    return !block.getTerminator()->hasTrait<OpTrait::ReturnLike>() ||
+           dom.dominates(site, &block);
+  });
+}
 
 bool isZeroFillConst(Value v) {
   if (auto splat = v.getDefiningOp<triton::SplatOp>())
