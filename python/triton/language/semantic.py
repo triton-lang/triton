@@ -479,21 +479,21 @@ class TritonSemantic(Generic[TensorTy]):
 
     def logical_and(self, input: TensorTy, other: TensorTy) -> TensorTy:
         if not input.type.is_int1():
-            input = self.bitcast(input, tl.int1)
+            input = self.cast(input, tl.int1)
         if not other.type.is_int1():
-            other = self.bitcast(other, tl.int1)
+            other = self.cast(other, tl.int1)
         return self.and_(input, other)
 
     def logical_or(self, input: TensorTy, other: TensorTy) -> TensorTy:
         if not input.type.is_int1():
-            input = self.bitcast(input, tl.int1)
+            input = self.cast(input, tl.int1)
         if not other.type.is_int1():
-            other = self.bitcast(other, tl.int1)
+            other = self.cast(other, tl.int1)
         return self.or_(input, other)
 
     def not_(self, input: TensorTy):
         if not input.type.is_int1():
-            input = self.bitcast(input, tl.int1)
+            input = self.cast(input, tl.int1)
         return self.invert(input)
 
     def lshr(self, input: TensorTy, other: TensorTy) -> TensorTy:

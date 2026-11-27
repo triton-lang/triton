@@ -8590,6 +8590,41 @@ def test_short_circuiting(device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", ["int8", "int32", "uint32", "int64", "float32"])
+def test_logical_ops_on_non_bool_scalars(dtype, device):
+
+    @triton.jit
+    def kernel(X, Y):
+        a = tl.load(X)
+        b = tl.load(X + 1)
+        tl.store(Y, not a)
+        tl.store(Y + 1, not b)
+        tl.store(Y + 2, a and b)
+        tl.store(Y + 3, a or b)
+        tl.store(Y + 4, a and a)
+        tl.store(Y + 5, b or b)
+
+    x = torch.tensor([3, 0], device=device, dtype=getattr(torch, dtype))
+    y = torch.empty((6, ), device=device, dtype=torch.bool)
+    kernel[(1, )](x, y)
+    assert y.tolist() == [False, True, False, True, True, False]
+
+    @triton.jit
+    def arg_kernel(Y, n, m):
+        tl.store(Y, not n)
+        tl.store(Y + 1, n and m)
+        tl.store(Y + 2, n or m)
+        r = 0
+        if not m:
+            r = 1
+        tl.store(Y + 3, r)
+
+    y = torch.empty((4, ), device=device, dtype=torch.bool)
+    arg_kernel[(1, )](y, 5, 0)
+    assert y.tolist() == [False, False, True, True]
+
+
+@pytest.mark.interpreter
 @pytest.mark.filterwarnings("ignore:If conditional called with multidimensional Tensor*")
 def test_unsplat(device):
 
