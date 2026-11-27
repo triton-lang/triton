@@ -113,7 +113,6 @@ class MXFP4Tensor:
         candidate_M = torch.tensor(candidate_M, dtype=torch.uint8, device=self.device)
 
         abs_values_flat = abs_values.view(-1)
-        N = abs_values_flat.shape[0]
         abs_values_expanded = abs_values_flat.unsqueeze(1)
 
         # Clamp invalid values to the max e2m1 representable value
@@ -123,19 +122,12 @@ class MXFP4Tensor:
         # Compute distance between all abs_values and candidate e2m1 values
         errors = torch.abs(abs_values_expanded - candidates.unsqueeze(0))
 
-        # To implement roundTiesToEven, we need to break ties by preferring
-        # even mantissas (M == 0). We do so by adding an epsilon bias to shift
-        # the closest candidate with an even mantissa closer to the float value
+        # Choose only among nearest candidates, preferring an even mantissa
+        # (M == 0) when their distances are exactly equal.
         min_errors, _ = torch.min(errors, dim=1, keepdim=True)
-        is_tie = (errors == min_errors)
-        # More than one candidate has the min error for some float value
-        if is_tie.sum() > 1:
-            M_bits_expanded = candidate_M.unsqueeze(0).expand(N, -1)
-            tie_breaker = (M_bits_expanded == 0).type(torch.int32)
-
-            errors = errors - (tie_breaker * 1e-6)
-
-        best_indices = torch.argmin(errors, dim=1)
+        is_nearest = (errors == min_errors)
+        tie_breaker = torch.where(is_nearest, candidate_M.unsqueeze(0), 2)
+        best_indices = torch.argmin(tie_breaker, dim=1)
 
         E_selected = candidate_E[best_indices]
         M_selected = candidate_M[best_indices]
