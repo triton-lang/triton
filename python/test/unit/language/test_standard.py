@@ -369,6 +369,23 @@ def test_unsqueeze(dim, device):
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("dim", [0, -1])
+def test_unsqueeze_scalar(dim, device):
+
+    @triton.jit
+    def triton_unsqueeze_scalar(in_ptr, out_ptr, dim: tl.constexpr):
+        a = tl.load(in_ptr)
+        a = tl.unsqueeze(a, dim)
+        tl.static_assert(a.shape == [1])
+        tl.store(out_ptr + tl.arange(0, 1), a)
+
+    x = torch.tensor([42], device=device, dtype=torch.int32)
+    out = torch.empty_like(x)
+    triton_unsqueeze_scalar[(1, )](x, out, dim)
+    assert (out == x).all()
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("propagate_nan", [tl.PropagateNan.NONE, tl.PropagateNan.ALL])
 def test_max_propagate_nan(propagate_nan, device):
 
