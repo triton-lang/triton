@@ -304,6 +304,25 @@ SmallVector<mlir::Value> castUnsignedToI64(OpBuilder &builder,
   });
 }
 
+// Build a descriptor view from a MakeTensorDescOp without replacing it.  This
+// is used by the gather/scatter-only mode, where load/store/reduce ops must
+// keep using the original descriptor for hardware TMA lowering.  `shapeStorage`
+// must outlive the returned Descriptor because Descriptor holds ValueRanges.
+static void unpackDescriptorFromMake(OpBuilder &builder,
+                                     triton::MakeTensorDescOp op,
+                                     SmallVector<Value> &shapeStorage,
+                                     Descriptor &desc) {
+  desc.base = op.getBase();
+  shapeStorage = castUnsignedToI64(builder, op.getShape());
+  desc.shape = shapeStorage;
+  desc.strides = op.getStrides();
+  desc.paddingOption = arith::ConstantOp::create(
+      builder, op.getLoc(), builder.getI1Type(),
+      builder.getBoolAttr(op.getPadding() == triton::PaddingOption::PAD_NAN));
+  desc.roundF32ToTF32 = arith::ConstantOp::create(
+      builder, op.getLoc(), builder.getI1Type(), builder.getBoolAttr(false));
+}
+
 struct RewriteMakeTensorDesc : OpConversionPattern<triton::MakeTensorDescOp> {
   using OpConversionPattern<triton::MakeTensorDescOp>::OpConversionPattern;
 
@@ -470,6 +489,77 @@ struct RewriteScatterPattern
   }
 };
 
+// Gather/scatter need sm_100+ hardware support.  On Hopper we lower only these
+// two ops to ordinary pointer accesses and leave the descriptor itself (and
+// load/store/reduce ops using it) intact for TMA lowering.
+struct RewriteGatherOnlyPattern
+    : OpRewritePattern<triton::DescriptorGatherOp> {
+  using OpRewritePattern<triton::DescriptorGatherOp>::OpRewritePattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::DescriptorGatherOp op,
+                  PatternRewriter &rewriter) const override {
+    auto make = op.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
+    if (!make)
+      return llvm::failure();
+
+    auto loc = op.getLoc();
+    auto descTy = op.getDesc().getType();
+    const auto blockShape = op.getResult().getType().getShape();
+    SmallVector<Value> shapeStorage;
+    Descriptor desc;
+    unpackDescriptorFromMake(rewriter, make, shapeStorage, desc);
+
+    auto [ptr, mask] = generateGatherScatterPtrMask(
+        rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
+    auto other = generateOther(rewriter, loc,
+                               descTy.getSignlessBlockType().getElementType(),
+                               blockShape, desc.paddingOption);
+    auto newLoad = triton::LoadOp::create(rewriter, loc, ptr, mask, other);
+    newLoad->setAttrs(filterSegmentSizes(op->getAttrs()));
+
+    Value result = newLoad.getResult();
+    if (descTy.getSignlessBlockType().getElementType().isF32()) {
+      auto rounded = roundF32ToTF32(rewriter, loc, result);
+      result = arith::SelectOp::create(rewriter, loc, desc.roundF32ToTF32,
+                                       rounded, result);
+    }
+
+    rewriter.replaceOp(op, result);
+    return llvm::success();
+  }
+};
+
+struct RewriteScatterOnlyPattern
+    : OpRewritePattern<triton::DescriptorScatterOp> {
+  using OpRewritePattern<triton::DescriptorScatterOp>::OpRewritePattern;
+
+  llvm::LogicalResult
+  matchAndRewrite(triton::DescriptorScatterOp op,
+                  PatternRewriter &rewriter) const override {
+    auto make = op.getDesc().getDefiningOp<triton::MakeTensorDescOp>();
+    if (!make)
+      return llvm::failure();
+
+    auto loc = op.getLoc();
+    const auto blockShape = op.getSrc().getType().getShape();
+    SmallVector<Value> shapeStorage;
+    Descriptor desc;
+    unpackDescriptorFromMake(rewriter, make, shapeStorage, desc);
+
+    auto [ptr, mask] = generateGatherScatterPtrMask(
+        rewriter, loc, blockShape, desc, op.getXOffsets(), op.getYOffset());
+
+    // Save attrs before replaceOpWithNewOp, which may erase op immediately.
+    auto attrs = filterSegmentSizes(op->getAttrs());
+    auto newStore = rewriter.replaceOpWithNewOp<triton::StoreOp>(
+        op, ptr, op.getSrc(), mask);
+    newStore->setAttrs(attrs);
+
+    return llvm::success();
+  }
+};
+
 std::optional<RMWOp> translateReduceKind(DescriptorReduceKind kind,
                                          TensorDescType ty) {
   auto scalarTy = ty.getElementType();
@@ -559,6 +649,25 @@ class TritonRewriteTensorDescriptorToPointerPass
           TritonRewriteTensorDescriptorToPointerPass> {
   void runOnOperation() override {
     auto op = getOperation();
+
+    if (rewriteOnlyGatherScatter) {
+      mlir::ConversionTarget target(getContext());
+      target.addIllegalOp<triton::DescriptorGatherOp,
+                          triton::DescriptorScatterOp>();
+
+      mlir::RewritePatternSet patterns(op->getContext());
+      patterns.add<RewriteGatherOnlyPattern, RewriteScatterOnlyPattern>(
+          op->getContext());
+
+      mlir::ConversionConfig config;
+      config.buildMaterializations = false;
+      config.allowPatternRollback = false;
+      if (mlir::failed(
+              mlir::applyPartialConversion(op, target, std::move(patterns), config))) {
+        signalPassFailure();
+      }
+      return;
+    }
 
     mlir::ConversionTarget target(getContext());
     target.addDynamicallyLegalDialect<mlir::arith::ArithDialect,
