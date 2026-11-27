@@ -7833,6 +7833,46 @@ def test_tl_range_num_stages(device):
                 assert 'cp.async.wait_group \t6' in ptx
 
 
+@pytest.mark.interpreter
+@pytest.mark.parametrize("num_stages", [1, 3, 4])
+@pytest.mark.parametrize(
+    "dtype, lb, ub, step",
+    [
+        ("int32", 0, 100_000_000, 1_200_000_000),
+        ("int32", 0, 1_000_000_000, 800_000_000),
+        ("int32", -2_000_000_000, -1_900_000_000, 1_500_000_000),
+        ("int32", 2_000_000_000, 1_000_000_000, 500_000_000),
+        ("int64", 0, 10**17, 7 * 10**18),
+    ],
+)
+def test_tl_range_large_step_overflow(dtype, lb, ub, step, num_stages, device):
+
+    @triton.jit
+    def kernel(a_ptr, out_ptr, lb_ptr, ub_ptr, step_ptr, NUM_STAGES: tl.constexpr):
+        lb_val = tl.load(lb_ptr)
+        ub_val = tl.load(ub_ptr)
+        step_val = tl.load(step_ptr)
+        rk = tl.arange(0, 512)
+        acc = tl.zeros((512, ), dtype=tl.float32)
+        for k in tl.range(lb_val, ub_val, step_val, num_stages=NUM_STAGES):
+            idx = (k - lb_val) // step_val
+            acc += tl.load(a_ptr + idx * 512 + rk, mask=idx < 4, other=0.0)
+        tl.store(out_ptr + rk, acc)
+
+    torch_dtype = getattr(torch, dtype)
+    buf = torch.full((12, 512), -1000.0, device=device, dtype=torch.float32)
+    buf[4:8] = torch.arange(1, 5, device=device, dtype=torch.float32)[:, None].expand(4, 512)
+    a_ptr = buf[4:]
+    out = torch.empty((512, ), device=device, dtype=torch.float32)
+    lb_t = torch.tensor([lb], dtype=torch_dtype, device=device)
+    ub_t = torch.tensor([ub], dtype=torch_dtype, device=device)
+    step_t = torch.tensor([step], dtype=torch_dtype, device=device)
+    kernel[(1, )](a_ptr, out, lb_t, ub_t, step_t, num_stages)
+    trips = max(0, (ub - lb + step - 1) // step)
+    expected = torch.full((512, ), float(sum(range(1, min(trips, 4) + 1))), device=device, dtype=torch.float32)
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+
+
 def test_tl_range_fuse(device):
 
     @triton.jit
