@@ -1453,3 +1453,28 @@ def test_k_ragged_tiled_values(tile_a, tile_b, out_dtype, accumulate, device):
     matmul(a, b, None, c=actual, c_acc_in=actual if accumulate else None,
            precision_config=precision, a_ragged_metadata=metadata, b_ragged_metadata=metadata)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+def test_ragged_k_unpadded_persistent_rejected():
+    """
+    Regression test for #12368:
+    Verify that unpadded ragged-K matrix multiplication correctly rejects
+    the persistent kernel via InapplicableConstraint instead of silently
+    accumulating corrupted unpadded tail memory.
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device != "cuda":
+        pytest.skip("CUDA device required for triton_kernels matmul tests")
+    slice_lengths = torch.tensor([50, 75, 110], dtype=torch.int32, device=device)
+    total_k = int(slice_lengths.sum().item())
+    m, n = 128, 128
+    a = torch.randn(m, total_k, device=device, dtype=torch.float16)
+    b = torch.randn(total_k, n, device=device, dtype=torch.float16)
+    a_meta = make_ragged_tensor_metadata(slice_lengths, slice_sizes_divisibility=None)
+    b_meta = make_ragged_tensor_metadata(slice_lengths, slice_sizes_divisibility=None)
+    # 1. Negative test: Forcing persistent on unpadded tensors
+    with scoped_opt_flags_constraints(is_persistent=True):
+        with pytest.raises(InapplicableConstraint, match="Persistent kernel for ragged-K requires at least one input to be padded"):
+            matmul(a, b, bias=None, a_ragged_metadata=a_meta, b_ragged_metadata=b_meta)
+    # 2. Positive test: Without forcing persistent
+    out = matmul(a, b, bias=None, a_ragged_metadata=a_meta, b_ragged_metadata=b_meta)
+    assert out is not None and not torch.isnan(out).any()

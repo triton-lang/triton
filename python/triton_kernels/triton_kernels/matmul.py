@@ -490,6 +490,14 @@ def matmul(a, b, bias,
         raise InapplicableConstraint("CLC requires a host-known grid and does not support ragged-M matmul")
     if opt_flags.clc and opt_flags.idle_sms:
         raise InapplicableConstraint("CLC does not support leaving SMs idle")
+    if ragged_dimension == "K" and opt_flags.is_persistent:
+        is_a_padded = a_ragged_metadata.slice_sizes_divisibility is not None
+        is_b_padded = b_ragged_metadata.slice_sizes_divisibility is not None
+        if not (is_a_padded or is_b_padded):
+            raise InapplicableConstraint(
+                "Ragged-K persistent matmul requires at least one input to be padded. "
+                "Use padded inputs or fall back to the non-persistent kernel."
+                )
     if b_is_shuffled:
         if b.dtype.bitwidth != 4:
             raise ValueError("Shuffled weights are only supported for mxfp4 values")
