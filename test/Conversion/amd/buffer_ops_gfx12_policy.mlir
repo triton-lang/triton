@@ -44,3 +44,34 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: buffer_pointer_mask
+  tt.func @buffer_pointer_mask(%base: !tt.ptr<f32>, %offsets: tensor<32xi32, #blocked>, %mask: tensor<32xi1, #blocked>) {
+    // CHECK: %[[POOB:.*]] = llvm.mlir.constant(-2147483648 : i32) : i32
+    // CHECK: %[[POFF:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[POOB]] : i1, i32
+    // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %[[POFF]], %{{.*}}, 0 : f32
+    %x = amdg.buffer_load %base[%offsets], %mask : !tt.ptr<f32> -> tensor<32xf32, #blocked>
+    amdg.buffer_store %x, %base[%offsets], %mask : !tt.ptr<f32> -> tensor<32xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// Explicit descriptors retain -1 to support the full 32-bit byte bound.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: buffer_descriptor_mask
+  tt.func @buffer_descriptor_mask(%desc: !amdg.buffer_desc<f32>, %offsets: tensor<32xi32, #blocked>, %mask: tensor<32xi1, #blocked>) {
+    // CHECK: %[[DOOB:.*]] = llvm.mlir.constant(-1 : i32) : i32
+    // CHECK: %[[DOFF:.*]] = llvm.select %{{.*}}, %{{.*}}, %[[DOOB]] : i1, i32
+    // CHECK: rocdl.raw.ptr.buffer.load %{{.*}}, %[[DOFF]], %{{.*}}, 0 : f32
+    %x = amdg.buffer_load %desc[%offsets], %mask : !amdg.buffer_desc<f32> -> tensor<32xf32, #blocked>
+    amdg.buffer_store %x, %desc[%offsets], %mask : !amdg.buffer_desc<f32> -> tensor<32xf32, #blocked>
+    tt.return
+  }
+}
