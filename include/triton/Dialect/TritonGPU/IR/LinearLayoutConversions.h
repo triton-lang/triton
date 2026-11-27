@@ -15,6 +15,7 @@ enum class ScaleDotElemType : uint32_t;
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
+class PartitionedSharedEncodingAttr;
 class TensorOrMemDesc;
 class MemDescType;
 class CGAEncodingAttr;
@@ -68,6 +69,13 @@ LinearLayout paddedLinearLayout(ArrayRef<int64_t> shape, Attribute encoding);
 LinearLayout toLinearLayoutIgnoringPadding(MemDescType type);
 LinearLayout toLinearLayoutIgnoringPadding(ArrayRef<int64_t> shape,
                                            Attribute encoding);
+
+// Inverse of toLinearLayout for a single-CTA partitioned_shared encoding:
+// rebuilds the encoding of `ll` ((offset, block, partition) -> dims) on `shape`
+// with a shared_linear piece layout. Returns null if `ll` has no such form.
+PartitionedSharedEncodingAttr
+linearLayoutToPartitionedShared(MLIRContext *ctx, const LinearLayout &ll,
+                                ArrayRef<int64_t> shape, int32_t alignment);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
