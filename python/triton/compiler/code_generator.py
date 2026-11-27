@@ -1280,7 +1280,8 @@ class CodeGenerator(ast.NodeVisitor):
         flatten = False
         warp_specialize = False
         disable_licm = False
-        if IteratorClass is language.range:
+        nounroll = False
+        if isinstance(IteratorClass, type) and issubclass(IteratorClass, language.range):
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -1294,6 +1295,7 @@ class CodeGenerator(ast.NodeVisitor):
             flatten = iterator.flatten
             warp_specialize = iterator.warp_specialize
             disable_licm = iterator.disable_licm
+            nounroll = getattr(iterator, "nounroll", False)
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -1357,6 +1359,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for_op.set_attr("tt.warp_specialize", self.builder.get_unit_attr())
             if disable_licm:
                 for_op.set_attr("llvm.loop_annotation", self.builder.get_disable_loop_licm_attr())
+            if nounroll:
+                for_op.set_attr("llvm.loop_annotation", self.builder.get_nounroll_loop_attr())
 
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)

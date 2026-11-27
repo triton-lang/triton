@@ -7,6 +7,52 @@ from triton.backends.compiler import GPUTarget
 from triton.compiler import ASTSource
 from triton.compiler.errors import CompileTimeAssertionFailure
 from triton.runtime.driver import driver
+from triton.experimental import gluon
+from triton.experimental.gluon import language as gl
+
+
+@pytest.mark.parametrize("trivia", ["$L__tmp1:\n", "\t.loc 1 20 3\n$L__tmp1: // debug alias\n\t.loc 1 21 3\n"])
+def test_nounroll_debug_label_placement(trivia):
+    from triton.backends.nvidia.compiler import _fixup_nounroll_placement
+
+    header = "$L__BB0_1:\n"
+    pragma = '\t.pragma "nounroll";\n'
+    body = "\tmov.u32 %r1, 0;\n$L__next:\n\tadd.u32 %r1, %r1, 1;\n"
+    before = header + pragma + trivia + body
+    expected = header + trivia + pragma + body
+    assert _fixup_nounroll_placement(before) == expected
+    assert _fixup_nounroll_placement(expected) == expected
+    assert _fixup_nounroll_placement(header + body) == header + body
+
+
+@pytest.mark.parametrize("nounroll", [False, True])
+def test_gluon_nounroll_ptx_placement(nounroll):
+
+    @gluon.jit
+    def kernel(X, Y, n, NOUNROLL: gl.constexpr):
+        offsets = gl.arange(0, 128, layout=gl.BlockedLayout([1], [32], [4], [0]))
+        acc = gl.full((128,), 0, gl.int32, gl.BlockedLayout([1], [32], [4], [0]))
+        for i in gl.range(n, nounroll=NOUNROLL):
+            acc += gl.load(X + i * 128 + offsets)
+        gl.store(Y + offsets, acc)
+
+    source = gluon.GluonASTSource(
+        kernel, {"X": "*i32", "Y": "*i32", "n": "i32", "NOUNROLL": "constexpr"},
+        constexprs={"NOUNROLL": nounroll})
+    compiled = triton.compile(source, target=GPUTarget("cuda", 100, 32))
+    assert ('!"llvm.loop.unroll.disable"' in compiled.asm["llir"]) == nounroll
+    ptx = compiled.asm["ptx"]
+    assert ptx.count('.pragma "nounroll";') == int(nounroll)
+    if nounroll:
+        # Debug aliases between the directive and the first instruction cause
+        # ptxas to silently ignore the directive.
+        tail = ptx.split('.pragma "nounroll";', 1)[1]
+        for line in tail.splitlines():
+            line = line.split("//", 1)[0].strip()
+            if not line or line.startswith(".loc"):
+                continue
+            assert not line.endswith(":"), line
+            break
 
 
 @triton.jit
