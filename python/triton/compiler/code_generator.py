@@ -282,7 +282,22 @@ class ASTFunction:
             set_iterable_path(vals, path, val)
 
         apply_with_path(self.arg_types, build_value)
-        return vals
+
+        def build_aggregates(val):
+            # a host-built @triton.aggregate argument arrives as the tuple (class, *fields)
+            if not isinstance(val, language.tuple):
+                return val
+            val = _apply_to_tuple_values(val, build_aggregates)
+            head, *members = val.values or [None]
+            cls = head.value if isinstance(head, constexpr) else None
+            if getattr(cls, "__triton_aggregate__", False) and len(members) == len(cls.__aggregate_fields__):
+                instance = cls._get_instance()
+                for name, member in zip(cls.__aggregate_fields__, members):
+                    setattr(instance, name, member)
+                return instance
+            return val
+
+        return [build_aggregates(val) for val in vals]
 
 
 @dataclass(frozen=True)

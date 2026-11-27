@@ -71,7 +71,17 @@ class ASTSource:
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
+
+        def get_key(x):
+            # A constant may be a tuple, e.g. a `tl.constexpr` parameter given a tuple or a
+            # host-built aggregate (which specializes as the tuple (class, *fields)). Key its
+            # elements one by one so that classes and functions contribute their cache_key
+            # rather than a repr that does not change with their source.
+            if isinstance(x, tuple):
+                name = type(x).__name__ if hasattr(x, "_fields") else ""
+                return name + "(" + ",".join(get_key(v) for v in x) + ")"
+            return x.cache_key if hasattr(x, 'cache_key') else str(x)
+
         constants_key = '-'.join([get_key(v) for k, v in sorted(self.constants.items())])
         key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
