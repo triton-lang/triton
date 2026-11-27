@@ -6842,6 +6842,40 @@ def test_for_iv(lo, hi, iv, device):
     assert out[0] == sum(range(lo, hi, iv))
 
 
+@pytest.mark.interpreter
+def test_for_loop_variable_type_follows_bounds(device):
+
+    @triton.jit
+    def kernel(Lower, Upper, Out):
+        lower = tl.load(Lower)
+        upper = tl.load(Upper)
+        total = tl.full((), 0, tl.int64)
+        for i in range(lower, upper):
+            total += i * 1000000
+        tl.store(Out, total)
+
+    @triton.jit
+    def kernel_unsigned(Lower, Upper, Out):
+        lower = tl.load(Lower)
+        upper = tl.load(Upper)
+        total = tl.full((), 0, tl.int64)
+        for i in range(lower, upper):
+            total += (i - 1).to(tl.int64)
+        tl.store(Out, total)
+
+    out = torch.zeros(1, dtype=torch.int64, device=device)
+    lower = to_triton(np.array([3000], dtype=np.int32), device=device)
+    upper = to_triton(np.array([3001], dtype=np.int64), device=device)
+    kernel[(1, )](lower, upper, out)
+    assert out.item() == 3000 * 1000000
+
+    lower = to_triton(np.array([0], dtype=np.uint32), device=device)
+    upper = to_triton(np.array([1], dtype=np.uint32), device=device)
+    kernel_unsigned[(1, )](lower, upper, out)
+    assert out.item() == 2**32 - 1
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("use_tl_range", [False, True], ids=["range", "tl_range"])
 @pytest.mark.parametrize("lower, upper, step", [
     pytest.param(("int32", 0), ("uint8", 127), ("int32", 1), id="uint8_upper_control"),
