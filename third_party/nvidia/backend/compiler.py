@@ -129,7 +129,7 @@ class CUDAOptions:
     # Other resource limits can reduce occupancy further. None adds no limit.
     max_occupancy: Optional[int] = None
     ptx_version: int = None
-    ptx_options: Optional[str] = knobs.nvidia.ptxas_options
+    ptx_options: Optional[str] = None
     ir_override: Optional[str] = None  # filename of a user-defined IR (*.{ttir|ttgir|llir|ptx})
     enable_fp_fusion: bool = False
     sched4reg: bool = False
@@ -257,6 +257,9 @@ class CUDABackend(BaseBackend):
                 args["deprecated_fp8_dot_operand_dtypes"] = ("fp8e4b15", )
 
         args["enable_fp_fusion"] = knobs.language.fp_fusion_enabled(args.get("enable_fp_fusion"))
+
+        if "ptx_options" not in args:
+            args["ptx_options"] = knobs.nvidia.ptxas_options
 
         args["max_num_imprecise_acc_default"] = 2**30 if capability in (89, 90) else 0
 
