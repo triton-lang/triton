@@ -125,15 +125,16 @@ class MXFP4Tensor:
 
         # To implement roundTiesToEven, we need to break ties by preferring
         # even mantissas (M == 0). We do so by adding an epsilon bias to shift
-        # the closest candidate with an even mantissa closer to the float value
+        # the closest candidate with an even mantissa closer to the float value,
+        # but only for elements that actually have multiple minimum-error candidates.
         min_errors, _ = torch.min(errors, dim=1, keepdim=True)
         is_tie = (errors == min_errors)
-        # More than one candidate has the min error for some float value
-        if is_tie.sum() > 1:
+        has_tie = is_tie.sum(dim=1, keepdim=True) > 1
+        if has_tie.any():
             M_bits_expanded = candidate_M.unsqueeze(0).expand(N, -1)
-            tie_breaker = (M_bits_expanded == 0).type(torch.int32)
+            tie_breaker = (M_bits_expanded == 0) & is_tie & has_tie
 
-            errors = errors - (tie_breaker * 1e-6)
+            errors = errors - (tie_breaker.to(errors.dtype) * 1e-6)
 
         best_indices = torch.argmin(errors, dim=1)
 
