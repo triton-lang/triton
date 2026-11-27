@@ -7,6 +7,8 @@
 // RUN: not triton-opt %t/private-amd-cluster-arrive.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-arrive.mlir --check-prefix=AMD-ARRIVE
 // RUN: not triton-opt %t/private-amd-cluster-wait.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-amd-cluster-wait.mlir --check-prefix=AMD-WAIT
 // RUN: not triton-opt %t/private-cross-cta-scratch.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/private-cross-cta-scratch.mlir --check-prefix=CROSS-CTA
+// RUN: not triton-opt %t/amd-cluster-wait-with-worker-warps.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/amd-cluster-wait-with-worker-warps.mlir --check-prefix=AMD-WORKERS
+// RUN: not triton-opt %t/amd-cluster-wait-with-empty-partition.mlir -allow-unregistered-dialect -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/amd-cluster-wait-with-empty-partition.mlir --check-prefix=AMD-EMPTY-PARTITION
 // RUN: not triton-opt %t/missing-target.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/missing-target.mlir --check-prefix=MISSING-TARGET
 // RUN: not triton-opt %t/unsupported-target.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/unsupported-target.mlir --check-prefix=UNSUPPORTED-TARGET
 // RUN: not triton-opt %t/thread-capacity.mlir -tritoninstrument-concurrency-sanitizer 2>&1 | FileCheck %t/thread-capacity.mlir --check-prefix=THREAD-CAPACITY
@@ -121,6 +123,48 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 
   tt.func public @entry() {
     tt.call @private_cluster_wait() : () -> ()
+    tt.return
+  }
+}
+
+//--- amd-cluster-wait-with-worker-warps.mlir
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 8 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx1250"} {
+  tt.func public @wait_with_worker_warps() {
+    ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+    default {
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      amdg.cluster_barrier_arrive
+      ttg.warp_return
+    } : () -> ()
+    // AMD-WORKERS: ConSan does not support amdg.cluster_barrier_wait outside warp specialization in a warp-specialized kernel
+    // AMD-WORKERS-SAME: because only the default warps execute the wait and the worker warps leave the barrier completion unconsumed
+    amdg.cluster_barrier_wait
+    tt.return
+  }
+}
+
+//--- amd-cluster-wait-with-empty-partition.mlir
+
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32, "ttg.total-num-warps" = 12 : i32, ttg.shared = 0 : i32, ttg.target = "hip:gfx1250"} {
+  tt.func public @wait_with_empty_partition() {
+    ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4, 8>}
+    default {
+      amdg.cluster_barrier_arrive
+      // AMD-EMPTY-PARTITION: ConSan does not support amdg.cluster_barrier_wait in a warp_specialize op with empty partitions, including those added by the compiler for padding
+      // AMD-EMPTY-PARTITION-SAME: their warps receive the barrier completion but do not execute a wait
+      amdg.cluster_barrier_wait
+      ttg.warp_yield
+    }
+    partition0() num_warps(4) {
+      amdg.cluster_barrier_wait
+      ttg.warp_return
+    }
+    partition1() num_warps(4) {
+      ttg.warp_return
+    } : () -> ()
     tt.return
   }
 }

@@ -118,6 +118,32 @@ public:
                                           bool partitionScoped,
                                           bool publishVisibility,
                                           Operation *insertPoint);
+  // clusterBarrierArrive: record the current CTA's arrival at a split cluster
+  // barrier. The last arrival completes the phase and records a pending
+  // completion for base thread 0 of every CTA. For CTAs executing a
+  // warp_specialize op, it also records one for each worker partition's base
+  // thread.
+  void createClusterBarrierArriveCall(ImplicitLocOpBuilder &b, int barrierIdx,
+                                      int thread, Operation *insertPoint);
+  // clusterBarrierWait: poll until the base thread consumes a pending
+  // completion of a split cluster barrier or a deadlock is reported.
+  void createClusterBarrierWaitCall(ImplicitLocOpBuilder &b, int barrierIdx,
+                                    int thread, Operation *insertPoint);
+  // enterClusterBarrierScope: before warp_specialize, copy base thread 0's
+  // pending completion state to the `numThreads` base threads representing the
+  // current CTA's default region and worker partitions. Track subsequent
+  // completions separately for these threads.
+  // Must be called while holding the ConSan lock.
+  void createEnterClusterBarrierScopeCall(ImplicitLocOpBuilder &b,
+                                          int barrierIdx, int numThreads,
+                                          Operation *insertPoint);
+  // exitClusterBarrierScope: after warp_specialize, verify that the current
+  // CTA's default region and worker partitions agree on whether a completion is
+  // pending. Preserve that state in base thread 0 and resume tracking
+  // completions only in that thread.
+  void createExitClusterBarrierScopeCall(ImplicitLocOpBuilder &b,
+                                         int barrierIdx,
+                                         Operation *insertPoint);
   // checkAllActiveWaiting: return whether unfinished threads across the
   // cluster are not all waiting on matching barrier phases.
   Value createCheckAllActiveWaitingCall(ImplicitLocOpBuilder &b, Value pred,

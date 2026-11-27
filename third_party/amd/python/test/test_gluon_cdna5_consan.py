@@ -556,6 +556,42 @@ def test_multi_cta_startup(shape):
 
 
 @pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("num_ctas", [2, 4])
+@pytest.mark.parametrize(
+    ("mode", "messages", "swap"),
+    [
+        ("pairs", None, False),
+        ("async_wait", None, False),
+        ("duplicate_arrival", ("CTA arrived at a cluster barrier twice in the same phase",
+                               "Cluster barrier arrival before waiting on the previous phase"), False),
+        ("repeated_wait", ("every active thread of a CTA that has not arrived is waiting", ), False),
+        ("no_live_arrival", ("Deadlock detected", ), False),
+        ("async_pending",
+         ("Accessing buffer with pending access. Pending access type: async_copy_global_to_shared", ), False),
+        ("retained_completion", None, False),
+        ("retained_unconsumed", ("Cluster barrier completion not consumed by every warp-specialized thread", ), False),
+    ] + [(mode, messages, swap) for swap in (False, True) for mode, messages in [
+        ("region_arrive", None),
+        ("mbarrier_handoff", None),
+        ("partition_return", None),
+        ("mbarrier_cycle", ("Deadlock detected", )),
+        ("partition_return_deadlock", ("Deadlock detected", )),
+        ("lost_phase", ("Cluster barrier completion lost", )),
+        ("unconsumed_at_exit", ("Cluster barrier completion not consumed by every warp-specialized thread", )),
+    ]],
+)
+def test_cluster_barrier(mode, messages, swap, num_ctas):
+    """
+    Exercise the split cluster arrive/wait protocol.
+    """
+    stderr = _run_consan_subprocess("cluster_barrier", mode, num_ctas, messages is None, swap)
+    if messages is None:
+        assert not stderr, stderr
+    else:
+        assert any(message in stderr for message in messages), stderr
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
 @pytest.mark.parametrize("FAILURE", [True, False])
 def test_consan_tdm_store(FAILURE):
     """

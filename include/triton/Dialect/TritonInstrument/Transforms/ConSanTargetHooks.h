@@ -2,6 +2,7 @@
 #define TRITONINSTRUMENT_CONSAN_TARGET_HOOKS_H
 
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "triton/Analysis/BufferRegion.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -165,12 +166,21 @@ public:
   virtual SmallVector<Operation *>
   createInitClusterBarrier(ImplicitLocOpBuilder &b) const = 0;
 
+  // Declare the dialects required by these hooks so the pass manager loads
+  // them before instrumentation begins.
+  virtual void getDependentDialects(DialectRegistry &registry) const {}
+
   // Whether shared-memory accesses may target another CTA of the cluster.
   virtual bool supportsCrossCTASharedMemory() const { return true; }
 
   virtual BarrierStages getClusterBarrierStages(Operation *op) const {
     return {};
   }
+
+  virtual bool isSplitClusterBarrierArrive(Operation *op) const {
+    return false;
+  }
+  virtual bool isSplitClusterBarrierWait(Operation *op) const { return false; }
 
   // A call-frame summary cannot represent target-specific synchronization or
   // compiler scratch that crosses CTA boundaries.

@@ -571,9 +571,12 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   Region *entryRegion = &entryPoint.getBody();
 
   int numMBarriers = barrierRegions.size();
+  bool hasSplitClusterBarriers = false;
   entryPoint.walk([&](Operation *op) {
     BarrierStages stages = hooks.getClusterBarrierStages(op);
     operations.emplace_back(op, stages);
+    hasSplitClusterBarriers |= hooks.isSplitClusterBarrierArrive(op) ||
+                               hooks.isSplitClusterBarrierWait(op);
     if (!stages.hasBarrier() && !isa<ClusterBarrierOp>(op))
       return;
     Region *group = getClusterBarrierGroupRegion(op);
@@ -581,6 +584,8 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
                                     numMBarriers + clusterBarrierSlots.size());
   });
   int numTrackedBarriers = numMBarriers + clusterBarrierSlots.size();
+  if (hasSplitClusterBarriers)
+    splitClusterBarrierSlot = numTrackedBarriers++;
   if (numTrackedBarriers > 0)
     barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1));
 
@@ -744,7 +749,7 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
     for (int i = 0; i < CommitKind::NumCommitKinds; ++i)
       numCommitKinds += !commits[i].empty();
     int expected = estimateConSanCaptureCount(
-        numActiveMemTypes, numMBarriers > 0, !clusterBarrierSlots.empty(),
+        numActiveMemTypes, numMBarriers > 0, numTrackedBarriers > numMBarriers,
         numCommitKinds, hasAsyncProxyFenceTracking);
     assert(captureCounter == expected &&
            "capture count changed -- update estimateConSanCaptureCount if this "

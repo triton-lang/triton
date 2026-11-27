@@ -258,3 +258,27 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#cta_replicated = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CGALayout = [[0]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // COMMON-LABEL: @store_cta_replicated
+  // COMMON: rocdl.cluster.workgroup.id.x
+  // COMMON: llvm.store
+  tt.func private @store_cta_replicated(%ptrs: tensor<32x!tt.ptr<i32>, #cta_replicated>, %vals: tensor<32xi32, #cta_replicated>) {
+    tt.store %ptrs, %vals : tensor<32x!tt.ptr<i32>, #cta_replicated>
+    tt.return
+  }
+
+  // A store that ignores the CTA dimension is performed by every CTA.
+  // COMMON-LABEL: @store_cta_replicated_ignore_cta
+  // COMMON-NOT: rocdl.cluster.workgroup.id.x
+  // COMMON: llvm.store
+  // COMMON-NOT: rocdl.cluster.workgroup.id.x
+  // COMMON: llvm.return
+  tt.func private @store_cta_replicated_ignore_cta(%ptrs: tensor<32x!tt.ptr<i32>, #cta_replicated>, %vals: tensor<32xi32, #cta_replicated>) {
+    tt.store %ptrs, %vals {ignore_cta} : tensor<32x!tt.ptr<i32>, #cta_replicated>
+    tt.return
+  }
+}

@@ -1169,6 +1169,142 @@ def multi_cta_startup():
             torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=0)
 
 
+def cluster_barrier():
+    mode, num_ctas, native_control, swap = sys.argv[2], int(sys.argv[3]), sys.argv[4] == "True", sys.argv[5] == "True"
+    num_cta_bases = num_ctas.bit_length() - 1
+    rows, cols = 8 * num_ctas, 32
+
+    @gluon.constexpr_function
+    def blocked_layout(num_warps, cga_layout):
+        return ttgl.BlockedLayout([1, 1], [1, 32], [num_warps, 1], [1, 0], cga_layout=[list(b) for b in cga_layout])
+
+    @gluon.constexpr_function
+    def shared_layout(cga_layout):
+        return ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], cga_layout=[list(b) for b in cga_layout])
+
+    @gluon.constexpr_function
+    def barrier_layout(cga_layout):
+        return ttgl.amd.cdna5.mbarrier.MBarrierLayout([list(b) for b in cga_layout])
+
+    @gluon.jit
+    def default_region(bar, MODE: ttgl.constexpr):
+        if MODE == "region_arrive":
+            for i in ttgl.static_range(2):
+                if i > 0:
+                    ttgl.barrier()
+                    ttgl.amd.cdna5.mbarrier.wait(bar, phase=0)
+                ttgl.amd.cdna5.cluster.arrive()
+                ttgl.amd.cdna5.cluster.wait()
+        elif MODE == "mbarrier_handoff" or MODE == "mbarrier_cycle":
+            ttgl.amd.cdna5.mbarrier.wait(bar, phase=0)
+            ttgl.amd.cdna5.cluster.arrive()
+            ttgl.amd.cdna5.cluster.wait()
+        elif MODE == "lost_phase":
+            for i in ttgl.static_range(2):
+                if i > 0:
+                    ttgl.barrier()
+                ttgl.amd.cdna5.cluster.arrive()
+                ttgl.amd.cdna5.cluster.wait()
+            ttgl.amd.cdna5.mbarrier.arrive(bar, count=1)
+        elif MODE == "unconsumed_at_exit":
+            ttgl.amd.cdna5.cluster.arrive()
+            ttgl.amd.cdna5.cluster.wait()
+        elif MODE == "partition_return" or MODE == "partition_return_deadlock":
+            ttgl.amd.cdna5.cluster.arrive()
+            ttgl.amd.cdna5.cluster.wait()
+            if MODE == "partition_return":
+                ttgl.amd.cdna5.mbarrier.arrive(bar, count=1)
+        elif MODE == "retained_completion" or MODE == "retained_unconsumed":
+            ttgl.amd.cdna5.mbarrier.wait(bar, phase=0)
+
+    @gluon.jit
+    def worker_region(bar, MODE: ttgl.constexpr):
+        if MODE == "region_arrive":
+            for _ in ttgl.static_range(2):
+                ttgl.amd.cdna5.cluster.wait()
+                ttgl.amd.cdna5.mbarrier.arrive(bar, count=1)
+        elif MODE == "mbarrier_handoff":
+            ttgl.amd.cdna5.mbarrier.arrive(bar, count=1)
+            ttgl.amd.cdna5.cluster.wait()
+        elif MODE == "mbarrier_cycle":
+            ttgl.amd.cdna5.cluster.wait()
+            ttgl.amd.cdna5.mbarrier.arrive(bar, count=1)
+        elif MODE == "lost_phase" or MODE == "partition_return" or MODE == "partition_return_deadlock":
+            ttgl.amd.cdna5.mbarrier.wait(bar, phase=0)
+            ttgl.amd.cdna5.cluster.wait()
+        elif MODE == "unconsumed_at_exit" or MODE == "retained_completion" or MODE == "retained_unconsumed":
+            ttgl.amd.cdna5.mbarrier.arrive(bar, count=1)
+        elif MODE == "no_live_arrival":
+            ttgl.amd.cdna5.cluster.wait()
+
+    @gluon.jit
+    def cluster_wait_region(bar, WAIT: ttgl.constexpr):
+        if WAIT:
+            ttgl.amd.cdna5.cluster.wait()
+        else:
+            ttgl.amd.cdna5.mbarrier.arrive(bar, count=1)
+
+    @gluon.jit
+    def run_ws(bar, MODE: ttgl.constexpr, SWAP: ttgl.constexpr):
+        if SWAP:
+            ttgl.warp_specialize([(worker_region, (bar, MODE)), (default_region, (bar, MODE))], [4])
+        else:
+            ttgl.warp_specialize([(default_region, (bar, MODE)), (worker_region, (bar, MODE))], [4])
+
+    @gluon.jit
+    def kernel(input_ptr, output_ptr, MODE: ttgl.constexpr, SWAP: ttgl.constexpr, M: ttgl.constexpr, N: ttgl.constexpr,
+               CGA_LAYOUT: ttgl.constexpr, BARRIER_CGA_LAYOUT: ttgl.constexpr):
+        if MODE == "pairs":
+            for _ in ttgl.static_range(3):
+                ttgl.amd.cdna5.cluster.arrive()
+                ttgl.amd.cdna5.cluster.wait()
+                ttgl.barrier()
+        elif MODE == "duplicate_arrival":
+            ttgl.amd.cdna5.cluster.arrive()
+            ttgl.amd.cdna5.cluster.arrive()
+            ttgl.amd.cdna5.cluster.wait()
+        elif MODE == "repeated_wait":
+            ttgl.amd.cdna5.cluster.arrive()
+            ttgl.amd.cdna5.cluster.wait()
+            ttgl.amd.cdna5.cluster.wait()
+        elif MODE == "async_wait" or MODE == "async_pending":
+            layout: ttgl.constexpr = blocked_layout(ttgl.num_warps(), CGA_LAYOUT)
+            row = ttgl.arange(0, M, ttgl.SliceLayout(1, layout))
+            col = ttgl.arange(0, N, ttgl.SliceLayout(0, layout))
+            offsets = row[:, None] * N + col[None, :]
+            smem = ttgl.allocate_shared_memory(ttgl.int32, [M, N], shared_layout(CGA_LAYOUT))
+            ttgl.amd.cdna5.async_copy.global_to_shared(smem, input_ptr + offsets)
+            ttgl.amd.cdna5.async_copy.commit_group()
+            ttgl.amd.cdna5.cluster.arrive()
+            ttgl.amd.cdna5.cluster.wait()
+            if MODE == "async_wait":
+                ttgl.amd.cdna5.async_copy.wait_group(0)
+            ttgl.store(output_ptr + offsets, smem.load(layout))
+        else:
+            bar = ttgl.allocate_shared_memory(ttgl.int64, [1], barrier_layout(BARRIER_CGA_LAYOUT))
+            ttgl.amd.cdna5.mbarrier.init(bar, count=128)
+            if MODE == "retained_completion" or MODE == "retained_unconsumed":
+                ttgl.amd.cdna5.cluster.arrive()
+            run_ws(bar, MODE, SWAP)
+            if MODE == "region_arrive":
+                run_ws(bar, MODE, SWAP)
+            elif MODE == "retained_completion" or MODE == "retained_unconsumed":
+                ttgl.warp_specialize([(cluster_wait_region, (bar, True)), (cluster_wait_region, (bar, True)),
+                                      (cluster_wait_region, (bar, MODE == "retained_completion"))], [2, 2])
+
+    source = torch.arange(rows * cols, dtype=torch.int32, device="cuda").view(rows, cols)
+    cga_layout = tuple((1 << i, 0) for i in range(num_cta_bases))
+    barrier_cga_layout = ((0, ), ) * num_cta_bases
+    for instrumentation_mode in ("", "consan") if native_control else ("consan", ):
+        knobs.compilation.instrumentation_mode = instrumentation_mode
+        output = torch.full_like(source, -1)
+        kernel[(1, )](source, output, MODE=mode, SWAP=swap, M=rows, N=cols, CGA_LAYOUT=cga_layout,
+                      BARRIER_CGA_LAYOUT=barrier_cga_layout, num_warps=4, num_ctas=num_ctas)
+        torch.cuda.synchronize()
+        if mode == "async_wait":
+            torch.testing.assert_close(output, source, rtol=0, atol=0)
+
+
 def tdm_store_kernel():
     FAILURE = sys.argv[2] == "True"
     XBLOCK_C: ttgl.constexpr = ttgl.constexpr(XBLOCK)
@@ -1493,6 +1629,7 @@ if __name__ == "__main__":
     tests["async_copy_mbarrier_storage"] = async_copy_mbarrier_storage
     tests["async_copy_mbarrier_pipeline_drain"] = async_copy_mbarrier_pipeline_drain
     tests["multi_cta_startup"] = multi_cta_startup
+    tests["cluster_barrier"] = cluster_barrier
     tests[sys.argv[1]]()
     torch.cuda.synchronize()
     print("ConSan helper completed", flush=True)

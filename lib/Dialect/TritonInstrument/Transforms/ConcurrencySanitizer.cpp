@@ -1,5 +1,4 @@
 #include "mlir/Analysis/SliceAnalysis.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/SymbolTable.h"
@@ -815,7 +814,8 @@ public:
       entryPoint.emitError("ConSan entrypoint must have a function body");
       return failure();
     }
-    if (failed(validateNonEntryFunctions()))
+    if (failed(validateNonEntryFunctions()) ||
+        failed(validateSplitClusterBarrierWaits()))
       return failure();
 
     // Snapshot and modify the input program before ConSan creates helper
@@ -965,6 +965,37 @@ private:
     return success();
   }
 
+  LogicalResult validateSplitClusterBarrierWaits() {
+    auto totalNumWarps =
+        module->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
+    bool hasWorkerWarps = totalNumWarps && totalNumWarps.getInt() >
+                                               ttg::lookupNumWarps(entryPoint);
+    WalkResult result = entryPoint.walk([&](Operation *op) {
+      if (!hooks.isSplitClusterBarrierWait(op))
+        return WalkResult::advance();
+      auto wsOp = op->getParentOfType<ttg::WarpSpecializeOp>();
+      if (!wsOp && hasWorkerWarps) {
+        op->emitError("ConSan does not support ")
+            << op->getName()
+            << " outside warp specialization in a warp-specialized kernel, "
+               "because only the default warps execute the wait and the "
+               "worker warps leave the barrier completion unconsumed";
+        return WalkResult::interrupt();
+      }
+      if (wsOp && wsOp.getNonEmptyPartitionRegions().size() !=
+                      wsOp.getPartitionRegions().size()) {
+        op->emitError("ConSan does not support ")
+            << op->getName()
+            << " in a warp_specialize op with empty partitions, including "
+               "those added by the compiler for padding; their warps receive "
+               "the barrier completion but do not execute a wait";
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    return failure(result.wasInterrupted());
+  }
+
   void initializeAllocations() {
     if (!shouldInitializeAllocations())
       return;
@@ -1009,6 +1040,12 @@ private:
       // A relaxed cluster barrier participates in deadlock detection only.
       if (stages.beforeMemoryEffects || isa<ttng::ClusterBarrierOp>(op))
         rendezvous();
+      if (hooks.isSplitClusterBarrierArrive(op))
+        funcBuilder.createClusterBarrierArriveCall(
+            b, *auxData.splitClusterBarrierSlot, baseThread, op);
+      if (hooks.isSplitClusterBarrierWait(op))
+        funcBuilder.createClusterBarrierWaitCall(
+            b, *auxData.splitClusterBarrierSlot, baseThread, op);
 
       CriticalSectionListener listener;
       b.setListener(&listener);
@@ -1044,6 +1081,15 @@ private:
         // PTXAS-generated dynamic register allocation deadlock.
         wsOp->setAttr("tti.disable_setmaxregister", b.getUnitAttr());
         funcBuilder.createSetActiveMaskCall(b, getActiveMask(wsOp), op);
+        if (std::optional<int> slot = auxData.splitClusterBarrierSlot) {
+          funcBuilder.createEnterClusterBarrierScopeCall(
+              b, *slot, wsOp.getPartitionRegions().size() + 1, op);
+          b.setListener(nullptr);
+          b.setInsertionPointAfter(wsOp);
+          funcBuilder.createExitClusterBarrierScopeCall(b, *slot, op);
+          b.setInsertionPoint(wsOp);
+          b.setListener(&listener);
+        }
         auto partitionRegions = wsOp.getNonEmptyPartitionRegions();
         if (!partitionRegions.empty()) {
           uint64_t destMask = 0;
@@ -1719,6 +1765,12 @@ class ConcurrencySanitizerPass
     : public impl::TritonInstrumentConcurrencySanitizerBase<
           ConcurrencySanitizerPass> {
 public:
+  void getDependentDialects(DialectRegistry &registry) const override {
+    Base::getDependentDialects(registry);
+    for (const auto &entry : getHooksRegistry())
+      entry.second()->getDependentDialects(registry);
+  }
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
     auto targetAttr = module->getAttrOfType<StringAttr>(ttg::AttrTargetName);

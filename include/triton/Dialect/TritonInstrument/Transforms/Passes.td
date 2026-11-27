@@ -8,8 +8,7 @@ def TritonInstrumentConcurrencySanitizer: Pass<"tritoninstrument-concurrency-san
 
   let description = "Instrument the program with runtime verification of asynchronous operations.";
 
-  let dependentDialects = ["mlir::LLVM::LLVMDialect",
-                           "mlir::triton::gpu::TritonGPUDialect",
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect",
                            "mlir::triton::instrument::TritonInstrumentDialect"];
 }
