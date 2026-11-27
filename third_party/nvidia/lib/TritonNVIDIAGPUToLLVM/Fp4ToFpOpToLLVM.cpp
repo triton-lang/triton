@@ -68,6 +68,30 @@ static constexpr const char *FP4ToFP16Ptx =
     "cvt.rn.f16x2.e4m3x2 $3, t3;\n"
     "}";
 
+// Same as FP4ToFP16Ptx but with bit operations only, for targets below sm_89
+// where cvt.rn.f16x2.e4m3x2 is not available. Every e2m1 value has a zero low
+// byte in fp16, so we look up the high byte, OR in the sign, and interleave
+// with zero bytes.
+static constexpr const char *FP4ToFP16BitsPtx =
+    "{\n"
+    ".reg .b32           a<11>;\n"
+    "and.b32             a0, $4, 0x77777777;\n\t"
+    "and.b32             a1, $4, 0x88888888;\n\t"
+    "shr.u32             a2, a1, 3;\n\t"
+    "shr.u32             a3, a0, 16;\n\t"
+    "shr.u32             a4, a2, 16;\n\t"
+    "prmt.b32            a5, 0x3E3C3800, 0x46444240, a0;\n\t"
+    "prmt.b32            a6, 0x3E3C3800, 0x46444240, a3;\n\t"
+    "prmt.b32            a7, 0x00008000, 0x0, a2;\n\t"
+    "prmt.b32            a8, 0x00008000, 0x0, a4;\n\t"
+    "or.b32              a9, a5, a7;\n\t"
+    "or.b32              a10, a6, a8;\n\t"
+    "prmt.b32            $0, a9, 0, 0x1404;\n\t"
+    "prmt.b32            $1, a9, 0, 0x3424;\n\t"
+    "prmt.b32            $2, a10, 0, 0x1404;\n\t"
+    "prmt.b32            $3, a10, 0, 0x3424;\n\t"
+    "}";
+
 static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
                                    const std::string &ptx, Type retType,
                                    Value packedVec) {
@@ -115,6 +139,8 @@ protected:
       return results;
     }
     std::string ptx = toFp16 ? FP4ToFP16Ptx : FP4ToBP16Ptx;
+    if (toFp16 && targetInfo.getComputeCapability() < 89)
+      ptx = FP4ToFP16BitsPtx;
     if (!toFp16 && targetInfo.getComputeCapability() >= 100 &&
         targetInfo.getPtxVersion() >= 92)
       ptx = FP4ToBf16NativePtx;
