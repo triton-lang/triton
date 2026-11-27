@@ -230,6 +230,30 @@ def test_compute_block_n_blackwell_scale_aligns_to_128(n, expected):
     assert block_n == block_n_tma == expected
 
 
+def test_nvfp4_routed_scatter_four_subtiles(device):
+    if device != "cuda" or not opt_flags.target_info.cuda_capability_geq(10, 3):
+        pytest.skip("requires SM103 or newer")
+    m, n, k = 256, 256, 128
+    a = torch.full((m, k // 2), 0x22, dtype=torch.uint8, device=device)
+    b = torch.full((2, n, k // 2), 0x22, dtype=torch.uint8, device=device).mT
+    x_scales = torch.ones((m, k // 16), dtype=torch.float8_e4m3fn, device=device)
+    w_scales = torch.ones((2, k // 16, n), dtype=torch.float8_e4m3fn, device=device)
+    y_scales = torch.empty((m, n // 16), dtype=torch.float8_e4m3fn, device=device)
+    unit = torch.ones((), device=device)
+    config = PrecisionConfig(a_mx_scale=x_scales, b_mx_scale=w_scales, c_mx_scale=y_scales, a_mx_tensor_scale=unit,
+                             b_mx_tensor_scale=unit, a_microblock_size=16, b_microblock_size=16, c_microblock_size=16,
+                             out_dtype=torch.uint8)
+    metadata = make_ragged_tensor_metadata_torch(torch.tensor([m // 2, m // 2], device=device, dtype=torch.int32), m)
+    indices = torch.arange(m - 1, -1, -1, device=device, dtype=torch.int32)
+    epilogue = Epilogue(FnSpecs(FnName.QUANTIZE_NVFP4.name, quantize_nvfp4_fn), effective_itemsize=2.)
+    with scoped_opt_flags_constraints({"epilogue_subtile": 4, "num_stages": 2}):
+        out = matmul(a, b, None, a_ragged_metadata=metadata, gather_indx=indices, scatter_indx=indices,
+                     precision_config=config, epilogue=epilogue)
+    # Each dot product is 128. Its E4M3 block scale rounds 128 / 6 up to 22.
+    assert (out == 0x77).all()
+    assert (y_scales.float() == 22).all()
+
+
 def test_compute_num_warps_uses_two_warp_floor():
     precision_config = PrecisionConfig()
     assert opt_flags_nvidia.compute_num_warps(16, 256, False, precision_config, {}) == 2

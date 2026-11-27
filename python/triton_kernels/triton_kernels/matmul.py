@@ -1,7 +1,6 @@
 # isort: off
 # fmt: off
 from dataclasses import dataclass, replace
-import itertools
 import torch
 import triton
 from enum import Enum, auto
@@ -16,8 +15,7 @@ from triton_kernels.tensor_details.layout_details.hopper_scale import HopperMXSc
 # details
 from .matmul_details._matmul import _matmul
 from .matmul_details._p_matmul import _p_matmul, get_per_device_per_stream_alloc_fn
-from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale
-from .numerics_details.mxfp_details._downcast_to_mxfp import NVFP_BLOCK_SIZE
+from .numerics_details.mxfp import MXFP_BLOCK_SIZE, check_tensor_scale, broadcast_tensor_scale
 from .tensor_details.layout_details.strided import StridedLayout
 from .tensor_details.layout_details.tiled import TiledLayout
 from .tensor_details.layout_details.blackwell_scale import BlackwellActMXScaleLayout, SWIZZLE_SIZE_OUTER
@@ -144,6 +142,17 @@ class PrecisionConfig:
     intermediate_out_dtype: torch.dtype | None = None
     enforce_bitwise_invariance: bool = False
 
+
+def _input_scale_table(scale, n_groups, n_positions):
+    """View a matmul input scale as (group, position). A vector indexes positions."""
+    if scale is None:
+        return None
+    scale = torch.atleast_2d(scale)
+    if scale.ndim == 2 and isinstance(n_positions, int) and scale.size(1) > n_positions:
+        scale = scale[:, :n_positions]  # The caller may supply scales for padded storage.
+    return broadcast_tensor_scale(scale, (n_groups, n_positions))
+
+
 # TODO: merge in opt_flags
 def get_swap_xw(precision_config, opt_flags, lhs_dtype, rhs_dtype):
     if triton.runtime.driver.active.get_current_target().backend != "cuda":
@@ -269,6 +278,14 @@ def matmul(a, b, bias,
     NVFP4 inputs and outputs require NVIDIA Blackwell or newer (compute capability 10.0+).
     Set a_mx_tensor_scale or b_mx_tensor_scale if and only if the corresponding input
     is NVFP4 (packed FP4 values with E4M3 block scales). Use a scalar one for unit scaling.
+    A scalar broadcasts globally. In batched or ragged-M matmul, (E, 1) supplies one
+    scale per batch or expert. Ragged-M selects the activation scale by the scheduled expert
+    even when it gathers a token shared by several experts. A 1D input scale
+    indexes positions, equivalent to (1, M_source) for X or (1, N) for W.
+    An (E, M_source) scale uses both the scheduled expert and the source row.
+    The NVFP4 output tensor scale (flex_ctx.out_data.expected_scale) broadcasts
+    over (E, M_output). Its row index is the destination after scatter. A vector
+    of length E selects groups. Use (1, M_output) for shared row scales when E == M_output.
 
     A gather index of -1 denotes an inactive input row: its values contribute
     zero to the matmul without reading source values or scales. Bias and other
@@ -347,10 +364,12 @@ def matmul(a, b, bias,
     if not isinstance(a, Tensor):
         dtype = FP4 if a_has_mx and a.dtype == torch.uint8 else None
         a = wrap_torch_tensor(a, dtype=dtype)
-    check_tensor_scale(a, a_scale, a_tensor_scale)
-    check_tensor_scale(b, b_scale, b_tensor_scale)
-    uses_nvfp4 = (a_tensor_scale is not None or b_tensor_scale is not None
-                  or epilogue.specs.name == FnName.QUANTIZE_NVFP4.name)
+    a_microblock_size = precision_config.a_microblock_size
+    b_microblock_size = precision_config.b_microblock_size
+    check_tensor_scale(a, a_scale, a_tensor_scale, a_microblock_size)
+    check_tensor_scale(b, b_scale, b_tensor_scale, b_microblock_size)
+    nvfp4_output = epilogue.specs.name == FnName.QUANTIZE_NVFP4.name
+    uses_nvfp4 = a_tensor_scale is not None or b_tensor_scale is not None or nvfp4_output
     if uses_nvfp4 and not target_info.cuda_capability_geq(10, 0):
         raise ValueError("NVFP4 matmul requires NVIDIA Blackwell or newer (compute capability 10.0+)")
     # Mixed FP8/16-bit dots widen FP8 tiles and support either weight layout.
@@ -360,38 +379,10 @@ def matmul(a, b, bias,
     intermediate_out_dtype = precision_config.intermediate_out_dtype
     if intermediate_out_dtype is None:
         intermediate_out_dtype = torch.float64 if a.dtype == b.dtype == FP64 else torch.float32
-    a_scale_dtype = None if a_scale is None else a_scale.storage.data.dtype
-    b_scale_dtype = None if b_scale is None else b_scale.storage.data.dtype
-    # NOTE: uint8 scale means OCP E8M0 here. Direct NVFP-style scales stay float8_e4m3fn.
-    if a_scale_dtype is not None:
-        assert a_scale_dtype == torch.uint8 or a_scale_dtype == torch.float8_e4m3fn, (
-            f"Unsupported microscale dtype {a_scale_dtype}"
-        )
-    a_microblock_size = precision_config.a_microblock_size
-    if a_microblock_size is not None:
-        assert a_microblock_size == int(MXFP_BLOCK_SIZE) or a_microblock_size == int(NVFP_BLOCK_SIZE), (
-            f"Unsupported microscale block size {a_microblock_size}"
-        )
-    assert a_scale is None or a_microblock_size is not None, (
-        "precision_config.a_microblock_size is required when precision_config.a_mx_scale is set"
-    )
-    if b_scale_dtype is not None:
-        assert b_scale_dtype == torch.uint8 or b_scale_dtype == torch.float8_e4m3fn, (
-            f"Unsupported microscale dtype {b_scale_dtype}"
-        )
-    b_microblock_size = precision_config.b_microblock_size
-    if b_microblock_size is not None:
-        assert b_microblock_size == int(MXFP_BLOCK_SIZE) or b_microblock_size == int(NVFP_BLOCK_SIZE), (
-            f"Unsupported microscale block size {b_microblock_size}"
-        )
-    assert b_scale is None or b_microblock_size is not None, (
-        "precision_config.b_microblock_size is required when precision_config.b_mx_scale is set"
-    )
-    requantize_a = (a.dtype == FP4 and b.dtype == FP4 and a_microblock_size == 16
-                    and b_microblock_size == 32 and is_cuda()
-                    and target_info.cuda_capability_geq(10, 0))
+    x_is_nvfp4 = a_tensor_scale is not None
+    w_is_mxfp4 = b.dtype == FP4 and b_scale is not None and b_scale.data.dtype == torch.uint8
+    requantize_a = x_is_nvfp4 and w_is_mxfp4
     if requantize_a:
-        assert a_scale_dtype == torch.float8_e4m3fn and b_scale_dtype == torch.uint8
         assert a.shape[-1] % 32 == 0, "NVFP4 to MXFP8 requires K divisible by 32"
         precision_config = replace(
             precision_config,
@@ -482,6 +473,7 @@ def matmul(a, b, bias,
         w_transpose = b_transpose,
         rhs_layout=b.storage.layout,
         epilogue_reduction_n=fused_activation.specs.reduction_n,
+        has_gather=has_gather,
     )
     if any(isinstance(t.storage.layout, TiledLayout) for t in (a, b)):
         if not opt_flags.is_persistent or not can_use_tma or ragged_dimension != "K":
@@ -685,11 +677,22 @@ def matmul(a, b, bias,
     a_scale_strides = pad_strides(a_scale_strides, 3)
     b_scale_strides = b_scale.stride() if b_has_mx and not b_scale_has_tma else (None, None, None)
     b_scale_strides = pad_strides(b_scale_strides, 3)
-    # Row and column scales keep their strides. A zero-dimensional scale broadcasts with two zero strides.
-    a_tensor_scale_strides = a_tensor_scale.stride() if a_tensor_scale is not None else (None, None)
-    a_tensor_scale_strides = pad_strides(a_tensor_scale_strides, 2)
-    b_tensor_scale_strides = b_tensor_scale.stride() if b_tensor_scale is not None else (None, None)
-    b_tensor_scale_strides = pad_strides(b_tensor_scale_strides, 2)
+    n_groups = b.shape[0] if b.ndim == 3 else 1
+    y_tensor_scale = out_matmul_flex.expected_scale
+    a_tensor_scale = _input_scale_table(a_tensor_scale, n_groups, a.shape[-2])
+    b_tensor_scale = _input_scale_table(b_tensor_scale, n_groups, b.shape[-1])
+    y_scale_table = None
+    if nvfp4_output:
+        y_scale_shape = (n_groups if is_c_ragged else batch_size, out_matmul.size(-2))
+        y_scale_table = broadcast_tensor_scale(y_tensor_scale, y_scale_shape)
+    tensor_scale_strides = []
+    for table in (a_tensor_scale, b_tensor_scale, y_scale_table):
+        group_stride = position_stride = 0
+        if table is not None:
+            group_stride = table.stride(0) if table.size(0) != 1 else 0
+            position_stride = table.stride(1) if table.size(1) != 1 else 0
+        tensor_scale_strides.append((group_stride, position_stride))
+    a_tensor_scale_strides, b_tensor_scale_strides, (y_group_stride, y_row_stride) = tensor_scale_strides
 
     out_matmul_scale_strides = out_matmul_scale.storage.data.stride() if out_matmul_has_mx else (None, None, None, None)
     out_matmul_scale_strides = pad_strides(out_matmul_scale_strides, 4)
@@ -726,7 +729,9 @@ def matmul(a, b, bias,
     n_valid_slices = b_tensor_or_tma.shape[0] if ragged_dimension == "M" else n_slices
     (kernels._p_matmul if opt_flags.is_persistent else kernels._matmul)[(grid,)](
                    c_tensor_or_tma, c_data, *out_matmul.stride(),
-                   *((out_matmul_flex.expected_scale, out_matmul_scale.storage.data, None) if out_matmul_has_mx else out_matmul_flex),
+                   y_tensor_scale, y_group_stride, y_row_stride,
+                   out_matmul_scale.storage.data if out_matmul_has_mx else out_matmul_flex.actual_scale,
+                   None if out_matmul_has_mx else out_matmul_flex.checksum_scale,
                    *out_matmul_scale_strides[-4:],
                    a_tensor_or_tma, a.storage.data, *a_strides, a_transpose,
                    flex.lhs_data.scale,
@@ -758,7 +763,7 @@ def matmul(a, b, bias,
                    precision_config.allow_tf32,
                    precision_config.flexpoint_saturate_inf,
                    flex.rhs_data.is_per_batch,
-                   out_matmul_flex.is_per_batch,
+                   not nvfp4_output and out_matmul_flex.is_per_batch,
                    flex.acc_data.is_per_batch,
                    opt_flags.block_m,
                    opt_flags.block_n,
@@ -777,7 +782,8 @@ def matmul(a, b, bias,
                    num_warps=opt_flags.num_warps,
                    num_stages=opt_flags.num_stages,
                    arch=opt_flags.arch,
-                   UPCAST_INDICES=should_upcast_indices(a, b, out_matmul),
+                   UPCAST_INDICES=should_upcast_indices(a, b, out_matmul, a_scale, b_scale, out_matmul_scale,
+                                                       a_tensor_scale, b_tensor_scale, y_tensor_scale),
                    X_TMA_MODE=a_tma_mode,
                    Y_TMA_MODE=c_tma_mode,
                    Y_MX_SCALE_LAYOUT=out_matmul_scale_layout,
@@ -839,53 +845,38 @@ def matmul(a, b, bias,
 # -----------------------------------------------------------------------------
 
 def apply_precision(x_tri, w_tri, precision_config):
-    from .tensor_details import layout
     from .numerics_details.mxfp import upcast_from_mxfp
 
-    check_tensor_scale(x_tri, precision_config.a_mx_scale, precision_config.a_mx_tensor_scale)
-    check_tensor_scale(w_tri, precision_config.b_mx_scale, precision_config.b_mx_tensor_scale)
-    flex_ctx = precision_config.flex_ctx
+    def decode(x: Tensor | torch.Tensor, block_scale: Tensor | torch.Tensor | None, tensor_scale: torch.Tensor | None,
+               flex_scale: torch.Tensor | None, axis: int) -> torch.Tensor:
+        if isinstance(x, Tensor):
+            x = convert_layout(x, StridedLayout(major_dim=axis)).data
+        if block_scale is not None:
+            if isinstance(block_scale, Tensor):
+                block_scale = convert_layout(block_scale, StridedLayout(major_dim=axis)).data
+            out = upcast_from_mxfp(x, block_scale, torch.bfloat16, axis=axis)
+        else:
+            out = x.clone()
 
-    def apply(x, scale):
-        if scale is None:
-            return x.clone()
-        return x.float() * scale
+        if tensor_scale is not None:
+            n_groups = out.size(0) if out.ndim == 3 else 1
+            n_positions = out.size(-2) if axis == out.ndim - 1 else out.size(-1)
+            table = _input_scale_table(tensor_scale, n_groups, n_positions)
+            if out.ndim == 2:
+                table = table[0]
+            out = out * table.unsqueeze(axis).to(out.device)
+        if flex_scale is not None:
+            out = out.float() * flex_scale
+        return out
 
-    if precision_config.a_mx_scale is not None:
-        a_scale = precision_config.a_mx_scale
-        mx_axis = x_tri.ndim - 1
-        canonical_layout = layout.StridedLayout(major_dim=mx_axis)
-        x_tri = convert_layout(x_tri, canonical_layout)
-        x_tri_scale = convert_layout(a_scale, canonical_layout)
-        x_ref = upcast_from_mxfp(
-            x_tri.storage.data,
-            x_tri_scale.storage.data,
-            torch.bfloat16,
-            axis=mx_axis,
-            tensor_scale=precision_config.a_mx_tensor_scale,
-        )
-    else:
-        x_ref = apply(x_tri, flex_ctx.lhs_data.scale)
-
-    if precision_config.b_mx_scale is not None:
-        b_scale = precision_config.b_mx_scale
-        mx_axis = w_tri.ndim - 2
-        canonical_layout = layout.StridedLayout(major_dim=mx_axis)
-        w_tri = convert_layout(w_tri, canonical_layout)
-        w_tri_scale = convert_layout(b_scale, canonical_layout)
-        w_ref = upcast_from_mxfp(
-            w_tri.storage.data,
-            w_tri_scale.storage.data,
-            torch.bfloat16,
-            axis=mx_axis,
-            tensor_scale=precision_config.b_mx_tensor_scale,
-        )
-    else:
-        w_ref = apply(w_tri, flex_ctx.rhs_data.scale)
-
-    return (
-        x_ref, w_ref,
-    )
+    x_scale = precision_config.a_mx_tensor_scale
+    w_scale = precision_config.b_mx_tensor_scale
+    check_tensor_scale(x_tri, precision_config.a_mx_scale, x_scale, precision_config.a_microblock_size)
+    check_tensor_scale(w_tri, precision_config.b_mx_scale, w_scale, precision_config.b_microblock_size)
+    flex = precision_config.flex_ctx
+    x = decode(x_tri, precision_config.a_mx_scale, x_scale, flex.lhs_data.scale, x_tri.ndim - 1)
+    w = decode(w_tri, precision_config.b_mx_scale, w_scale, flex.rhs_data.scale, w_tri.ndim - 2)
+    return x, w
 
 
 def scale(val, scal):
@@ -918,7 +909,95 @@ def matmul_torch(a, b, bias,
                  gammas = None,
                  round_x = None, round_y = None,
                  ):
+    n_groups = b.shape[0] if b.ndim == 3 else 1
+    block_scale = precision_config.a_mx_scale
+    n_rows = a.shape[-2] if gather_indx is None else gather_indx.numel()
+    if a_ragged_metadata is not None and b_ragged_metadata is None and a.ndim == 2:
+        sizes = a_ragged_metadata.slice_sizes[:n_groups]
+        starts = a_ragged_metadata.slice_offs[:len(sizes)]
+        offs = list(zip(starts.tolist(), (starts + sizes).tolist()))
+    else:
+        offs = [(0, n_rows)] * n_groups
+
+    x_scale = precision_config.a_mx_tensor_scale
+    if x_scale is not None and x_scale.numel() > 1 and a.ndim == 2 and b_ragged_metadata is None:
+        table = _input_scale_table(x_scale, n_groups, a.shape[-2])
+        # Each routed row selects its expert's scale for the original activation row.
+        expert = torch.zeros(n_rows, device=table.device, dtype=torch.long)
+        for i, (lo, hi) in enumerate(offs):
+            expert[lo:hi] = i
+        if gather_indx is None:
+            x_scale = table[expert, torch.arange(n_rows, device=table.device)]
+        else:
+            rows = gather_indx.to(table.device)
+            active = rows >= 0
+            x_scale = table.new_ones(n_rows)
+            x_scale[active] = table[expert[active], rows[active]]
+        precision_config = replace(precision_config, a_mx_tensor_scale=x_scale)
+
+    if gather_indx is not None:
+        assert a.ndim == 2 and b_ragged_metadata is None, "gather requires an unbatched M dimension"
+        check_tensor_scale(a, block_scale, x_scale, precision_config.a_microblock_size)
+        active = gather_indx >= 0
+        rows = gather_indx[active]
+
+        def gather_rows(data):
+            if isinstance(data, Tensor):
+                data = convert_layout(data, StridedLayout(major_dim=1)).data
+            dtype = data.dtype
+            if data.element_size() == 1:
+                data = data.view(torch.uint8)  # FP8 indexing uses its storage bytes.
+            out = data.new_zeros((n_rows, data.size(1)))
+            out[active] = data[rows]
+            return out.view(dtype)
+
+        a = gather_rows(a)
+        # Blackwell activation block scales are already stored in gathered row order.
+        if block_scale is not None and not (isinstance(block_scale, Tensor)
+                                            and isinstance(block_scale.storage.layout, BlackwellActMXScaleLayout)):
+            precision_config = replace(precision_config, a_mx_scale=gather_rows(block_scale))
+
     a, b = apply_precision(a, b, precision_config)
+    if gather_indx is not None:
+        a.masked_fill_(~active[:, None], 0.0)
+    output_blocks = precision_config.c_mx_scale
+    nvfp4_output = output_blocks is not None and output_blocks.data.dtype == torch.float8_e4m3fn
+    compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
+    result_dtype = a.dtype
+    if nvfp4_output:
+        result_dtype = torch.float32  # The quantization epilogue reads the FP32 accumulator.
+    if bias is not None and bias.ndim == 1:
+        bias = bias[None, :]
+
+    flex = precision_config.flex_ctx.out_data
+    expected_scale = flex.expected_scale
+    y_scales = None
+    if nvfp4_output and expected_scale is not None:
+        output_groups = n_groups if b_ragged_metadata is None else b_ragged_metadata.slice_sizes.shape[0]
+        output_rows = n_rows if scatter_indx is None else scatter_indx.numel()
+        y_scales = broadcast_tensor_scale(expected_scale, (output_groups, output_rows))
+
+    def finish_output(out):
+        if flex.actual_scale is not None:
+            flex.actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
+        if y_scales is None:
+            out = scale(out, expected_scale)
+        return out
+
+    def dot(x, w, group, lo, hi):
+        if round_x is not None:
+            x = round_x(x, torch.arange(lo, hi, device=x.device))
+        acc = torch.matmul(x.to(compute_dtype), w.to(compute_dtype))
+        if bias is not None:
+            group_bias = bias[group]
+            if betas is not None:
+                group_bias = group_bias * betas[lo:hi, None]
+            acc += group_bias
+        if gammas is not None:
+            acc *= gammas[lo:hi, None]
+        if round_y is not None:
+            acc = round_y(acc)
+        return acc
 
     if b_ragged_metadata is not None:
         n_expts_tot = b_ragged_metadata.slice_sizes.shape[0]
@@ -934,17 +1013,10 @@ def matmul_torch(a, b, bias,
             w_start = int(w_slice_offs[expt].item())
             x_slice = a[:, x_start:x_start + k]
             w_slice = b[w_start:w_start + k, :]
-            out_expt = matmul_torch(
-                x_slice, w_slice, None, None,
-                None, None, None, PrecisionConfig(),
-                betas, gammas,
-                round_x, round_y,
-            )
-            out[expt] = out_expt.to(out.dtype)
-        actual_scale = precision_config.flex_ctx.out_data.actual_scale
-        if actual_scale is not None:
-            actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
-        return scale(out, precision_config.flex_ctx.out_data.expected_scale)
+            out[expt] = dot(x_slice, w_slice, 0, 0, m).to(result_dtype)
+        if y_scales is not None:
+            out = out * y_scales[:, :, None].float().reciprocal()
+        return finish_output(out)
 
     is_input_batched = a.ndim == 3
     assert a.dtype.itemsize > 1
@@ -953,48 +1025,20 @@ def matmul_torch(a, b, bias,
         assert gather_indx is None, "gather not supported in batched mode"
         assert scatter_indx is None, "scatter not supported in batched mode"
         assert b.ndim == 3 and b.shape[0] == a.shape[0]
-    if round_x is None:
-        round_x = lambda x, idx: x
-    if round_y is None:
-        round_y = lambda x: x
-    if bias is not None and bias.ndim == 1:
-        bias = bias.view(1, *bias.shape)
     if b.ndim == 2:
         b = b.view(1, *b.shape)
     if a.ndim == 2:
         a = a.view(1, *a.shape)
-    # memory offsets
-    if a_ragged_metadata is not None and not is_input_batched:
-        sizes = a_ragged_metadata.slice_sizes
-        off = torch.zeros(sizes.shape[0] + 1, dtype=torch.int32)
-        off[1:] = torch.cumsum(sizes, 0)
-        offs = list(itertools.pairwise(off))
-    else:
-        offs = [[0, a.shape[1]] for _ in range(b.shape[0])]
     # compute
-    compute_dtype = torch.float64 if a.dtype == b.dtype == torch.float64 else torch.float32
-    n_rows = a.shape[1] if gather_indx is None else gather_indx.shape[0]
-    y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=a.dtype)
+    y = torch.zeros((a.shape[0], n_rows, b.shape[-1]), device=a.device, dtype=result_dtype)
     for i, (lo, hi) in enumerate(offs):
-        if gather_indx is None:
-            idx = torch.arange(lo, hi, device=a.device)
-        else:
-            idx = gather_indx[lo:hi]
         batch = i if is_input_batched else 0
-        if gather_indx is None:
-            x = a[batch, idx, :]
-        else:
-            # Inactive routing slots contribute zero, not Python's last row.
-            x = a.new_zeros((idx.numel(), a.shape[-1]))
-            active = idx >= 0
-            x[active] = a[batch, idx[active], :]
-        out = torch.matmul(round_x(x, torch.arange(lo, hi, device=a.device)).to(compute_dtype),
-                           b[i].to(compute_dtype))
-        if bias is not None:
-            out += bias[i, :] if betas is None else bias[i, :] * betas[lo:hi, None]
-        if gammas is not None:
-            out *= gammas[lo:hi, None]
-        y[batch, lo:hi, :] = round_y(out)
+        x = a[batch, lo:hi]
+        out = dot(x, b[i], i, lo, hi)
+        if y_scales is not None:
+            dest = slice(lo, hi) if scatter_indx is None else scatter_indx[lo:hi].clamp_min(0)
+            out = out.to(result_dtype) * y_scales[i, dest, None].float().reciprocal()
+        y[batch, lo:hi] = out
     if not is_input_batched:
         y = y.view(y.shape[1], y.shape[2])
     if scatter_indx is None:
@@ -1003,10 +1047,7 @@ def matmul_torch(a, b, bias,
         out = torch.zeros((scatter_indx.shape[0], y.shape[-1]), dtype=y.dtype, device=a.device)
         msk = scatter_indx != -1
         out[scatter_indx[msk], :] = y[msk, :]
-    actual_scale = precision_config.flex_ctx.out_data.actual_scale
-    if actual_scale is not None:
-        actual_scale.copy_(compute_actual_scale(out, precision_config.out_dtype))
-    return scale(out, precision_config.flex_ctx.out_data.expected_scale)
+    return finish_output(out)
 
 
 def post_matmul_comm_torch(y: torch.Tensor, rank: int, n_reduce_shards: int,
