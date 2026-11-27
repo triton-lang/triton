@@ -15,4 +15,4 @@
 void unload_{kernel_name}(void);
 void load_{kernel_name}(void);
 // tt-linker: {kernel_name}:{full_signature}:{algo_info}
-hipError_t{_placeholder} {kernel_name}(hipStream_t stream, {signature});
+hipError_t{_placeholder} {kernel_name}(hipStream_t stream{trailing_signature});
