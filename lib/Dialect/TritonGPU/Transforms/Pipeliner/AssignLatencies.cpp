@@ -144,11 +144,26 @@ public:
     return !incompatible;
   }
 
+  static bool hasCacheModifierCV(tt::LoadOp op) {
+    Attribute cachePolicy = op.getCachePolicyAttr();
+    if (auto policy = dyn_cast_if_present<tt::CachePolicyAttr>(cachePolicy))
+      return policy.getCacheModifier() == tt::CacheModifier::CV;
+    if (auto policy = dyn_cast_if_present<ttng::CachePolicyAttr>(cachePolicy))
+      return policy.getCacheModifier() == tt::CacheModifier::CV;
+    return false;
+  }
+
   static bool
   isPipeliningBeneficial(Operation *op, Operation *finalUser,
                          tt::ModuleAxisInfoAnalysis &axisInfoAnalysis,
                          bool filterSmall) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      // cp.async cannot preserve volatile or .cv load semantics.
+      if (loadOp.getIsVolatile() || hasCacheModifierCV(loadOp)) {
+        LDBG("Load " << *loadOp
+                     << " has semantics unsupported by async copies");
+        return false;
+      }
       if (filterSmall && !canBeConvertedToAsyncLoad(loadOp, axisInfoAnalysis)) {
         LDBG("Load " << *loadOp << " is too small for pipelining");
         return false;
