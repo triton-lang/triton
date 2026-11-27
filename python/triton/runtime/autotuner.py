@@ -109,6 +109,12 @@ class Autotuner(KernelInterface):
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
 
+        self.key_defaults = {
+            name: param.default
+            for name, param in inspect.signature(self.base_fn).parameters.items()
+            if name in self.keys and param.default is not inspect.Parameter.empty
+        }
+
         self._do_bench = do_bench
         self.num_warmups = warmup
         self.num_reps = rep
@@ -235,7 +241,8 @@ class Autotuner(KernelInterface):
         if len(self.configs) > 1:
             all_args = {**self.nargs, **kwargs}
             _args = {k: v for (k, v) in all_args.items() if k in self.arg_names}
-            key = [_args[key] for key in self.keys if key in _args]
+            key_args = {**self.key_defaults, **_args}
+            key = [key_args[key] for key in self.keys if key in key_args]
             for _, arg in _args.items():
                 if hasattr(arg, "dtype"):
                     key.append(str(arg.dtype))
