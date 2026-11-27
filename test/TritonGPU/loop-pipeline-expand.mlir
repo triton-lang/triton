@@ -1,5 +1,28 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-pipeline | FileCheck %s --check-prefixes=CHECK
 
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: @unsigned_pipeline
+tt.func @unsigned_pipeline(%lb: i32, %ub: i32, %step: i32, %ptr: !tt.ptr<i32>) -> i32 {
+  %zero = arith.constant 0 : i32
+  // CHECK: arith.cmpi ult
+  // CHECK: arith.cmpi ule
+  // CHECK: arith.select
+  // CHECK: arith.cmpi ult
+  // CHECK: scf.for unsigned
+  // CHECK: arith.cmpi ule
+  // CHECK: arith.select
+  // CHECK: arith.cmpi ult
+  %result = scf.for unsigned %i = %lb to %ub step %step iter_args(%acc = %zero) -> i32 : i32 {
+    %value = tt.load %ptr {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.ptr<i32>
+    %next = arith.addi %acc, %value {loop.cluster = 0 : i32, loop.stage = 2 : i32} : i32
+    scf.yield %next : i32
+  } {tt.num_stages = 3 : i32, tt.scheduled_max_stage = 2 : i32}
+  tt.return %result : i32
+}
+}
+
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 128, 8]}>

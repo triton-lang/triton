@@ -1,5 +1,66 @@
 // RUN: triton-opt %s --allow-unregistered-dialect --tritongpu-fuse-nested-loops -canonicalize -cse | FileCheck %s
 
+// CHECK-LABEL: @unsigned_outer_loop
+tt.func @unsigned_outer_loop(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: arith.minui
+  // CHECK: arith.ceildivui
+  // CHECK: arith.maxui
+  // CHECK: scf.for unsigned
+  // CHECK-NOT: scf.for
+  // CHECK: "body"
+  scf.for unsigned %i = %lb to %ub step %step : i32 {
+    scf.for %j = %lb to %ub step %step : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+    }
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
+// CHECK-LABEL: @unsigned_inner_loop
+tt.func @unsigned_inner_loop(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK: arith.ceildivui
+  // CHECK: arith.maxui
+  // CHECK: scf.for unsigned
+  // CHECK-NOT: scf.for
+  // CHECK: arith.cmpi ult
+  // CHECK: "body"
+  scf.for %i = %lb to %ub step %step : i32 {
+    scf.for unsigned %j = %lb to %ub step %step : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+    }
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
+// CHECK-LABEL: @unsigned_inner_widen
+tt.func @unsigned_inner_widen(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i32, %ubj: i32, %stepj: i32) {
+  // CHECK: %[[COUNT:.*]] = arith.ceildivui {{.*}} : i32
+  // CHECK: arith.extui %[[COUNT]] : i32 to i64
+  // CHECK: scf.for unsigned
+  scf.for %i = %lbi to %ubi step %stepi : i64 {
+    scf.for unsigned %j = %lbj to %ubj step %stepj : i32 {
+      "body"(%i, %j) : (i64, i32) -> ()
+    }
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
+// CHECK-LABEL: @unsigned_dependent_bounds
+tt.func @unsigned_dependent_bounds(%lb: i64, %ub: i64, %step: i64, %extent: i64) {
+  // The loop computing the total trip count must also compare unsigned bounds.
+  // CHECK: scf.for unsigned
+  // CHECK: arith.ceildivui
+  // CHECK: scf.for unsigned
+  // CHECK: "body"
+  scf.for unsigned %i = %lb to %ub step %step : i64 {
+    %end = arith.addi %i, %extent : i64
+    scf.for unsigned %j = %i to %end step %step : i64 {
+      "body"(%i, %j) : (i64, i64) -> ()
+    }
+  } {"ttg.always-fuse"}
+  tt.return
+}
+
 // CHECK-LABEL: @empty_function
 tt.func @empty_function() {
   tt.return
@@ -571,7 +632,7 @@ tt.func @speculate_unsigned_inner_bounds(%m: i32, %lb: i32, %ub: i32) {
   // CHECK-NEXT: "epilogue"
   // CHECK-NEXT: }
   // CHECK-NEXT: } else {
-  // CHECK: scf.for
+  // CHECK: scf.for unsigned
   // CHECK: "body"
   scf.for %i = %c0 to %m step %c1 : i32 {
     "prologue"(%i) : (i32) -> ()
