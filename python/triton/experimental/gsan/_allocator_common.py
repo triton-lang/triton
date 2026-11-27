@@ -1,6 +1,7 @@
 """Build and handle types shared by the independent CUDA allocators."""
 from enum import IntEnum
 import hashlib
+import os
 from pathlib import Path
 
 from triton.runtime import driver as runtime_driver
@@ -14,9 +15,24 @@ class ShareableHandleType(IntEnum):
 
 def load_allocator(source: str, name: str, *, torch_integration: bool = False, extra_sources=()):
     # Loading the direct allocator must not initialize PyTorch CUDA.
-    if not torch_integration and runtime_driver.active.get_current_target().backend != "cuda":
-        raise RuntimeError("GSan allocators require the CUDA backend.")
-    from triton.backends.nvidia.driver import library_dirs, include_dirs
+    backend = "cuda" if torch_integration else runtime_driver.active.get_current_target().backend
+    if backend == "cuda":
+        from triton.backends.nvidia import driver as nvidia_driver
+        library_paths = nvidia_driver.library_dirs()
+        includes = list(nvidia_driver.include_dirs)
+        libraries = ["libcuda.so.1"]
+        flags = []
+    elif backend == "hip":
+        from triton.backends.amd import driver as amd_driver
+
+        # Link the HIP runtime PyTorch uses so allocations are visible to it.
+        libhip = amd_driver._get_path_to_hip_runtime_dylib()
+        library_paths = [os.path.dirname(libhip)]
+        includes = list(amd_driver.include_dirs)
+        libraries = [os.path.basename(libhip)]
+        flags = ["-DGSAN_BACKEND_HIP", f"-Wl,-rpath,{library_paths[0]}"]
+    else:
+        raise RuntimeError("GSan allocators require the CUDA or HIP backend.")
     directory = Path(__file__).resolve().parent / "src"
     # compile_module_from_file hashes the source but not included headers.
     # Invalidate both allocators when the shared helpers or layouts change.
@@ -24,10 +40,7 @@ def load_allocator(source: str, name: str, *, torch_integration: bool = False, e
     for header in sorted(p for p in directory.iterdir() if p.suffix in (".h", ".cuh")):
         digest.update(header.name.encode())
         digest.update(header.read_bytes())
-    libraries = ["libcuda.so.1"]
-    library_paths = library_dirs()
-    includes = list(include_dirs)
-    flags = [str(directory / extra_source) for extra_source in extra_sources]
+    flags.extend(str(directory / extra_source) for extra_source in extra_sources)
     for extra_source in extra_sources:
         digest.update((directory / extra_source).read_bytes())
     if torch_integration:

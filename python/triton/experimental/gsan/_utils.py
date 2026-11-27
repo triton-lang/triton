@@ -9,6 +9,7 @@ _DL_UINT = 1
 _DL_BITS_UINT8 = 8
 _DL_LANES = 1
 _DL_CUDA = 2
+_DL_ROCM = 10
 
 
 class _DLDevice(ctypes.Structure):
@@ -71,7 +72,9 @@ class _DLPackCudaPtrView:
         self._strides = (ctypes.c_int64 * 1)(1)
 
         self._managed_tensor.dl_tensor.data = ctypes.c_void_p(data_ptr)
-        self._managed_tensor.dl_tensor.device = _DLDevice(_DL_CUDA, device_index)
+        # ROCm builds of PyTorch expose HIP devices as "cuda" but only import kDLROCM.
+        device_type = _DL_ROCM if torch.version.hip else _DL_CUDA
+        self._managed_tensor.dl_tensor.device = _DLDevice(device_type, device_index)
         self._managed_tensor.dl_tensor.ndim = 1
         self._managed_tensor.dl_tensor.dtype = _DLDataType(_DL_UINT, _DL_BITS_UINT8, _DL_LANES)
         self._managed_tensor.dl_tensor.shape = ctypes.cast(self._shape, ctypes.POINTER(ctypes.c_int64))
