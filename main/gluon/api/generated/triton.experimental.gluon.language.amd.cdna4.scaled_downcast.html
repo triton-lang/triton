@@ -132,8 +132,8 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="triton.experimental.gluon.language.amd.cdna4.scaled_downcast">
 <span class="sig-prename descclassname"><span class="pre">triton.experimental.gluon.language.amd.cdna4.</span></span><span class="sig-name descname"><span class="pre">scaled_downcast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">format</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">-1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">_semantic</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#triton.experimental.gluon.language.amd.cdna4.scaled_downcast" title="Link to this definition"></a></dt>
-<dd><p>Scale and convert FP16, BF16, or FP32 values to a low-precision MX format,
-dividing by the raw E8M0 <code class="docutils literal notranslate"><span class="pre">scale</span></code> payload (<code class="docutils literal notranslate"><span class="pre">int8</span></code> or <code class="docutils literal notranslate"><span class="pre">uint8</span></code>).</p>
+<dd><p>Scale and convert FP16, BF16, or FP32 values to a low-precision MX format.</p>
+<p>Divide input values by the raw E8M0 <code class="docutils literal notranslate"><span class="pre">scale</span></code> payload (<code class="docutils literal notranslate"><span class="pre">int8</span></code> or <code class="docutils literal notranslate"><span class="pre">uint8</span></code>).</p>
 <p><code class="docutils literal notranslate"><span class="pre">format</span></code> selects the target type and packing behavior:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">&quot;e4m3&quot;</span></code> / <code class="docutils literal notranslate"><span class="pre">&quot;e5m2&quot;</span></code> (fp8): elementwise, so the output keeps the
@@ -144,9 +144,11 @@ high nibble), so the result extent along <code class="docutils literal notransla
 of <code class="docutils literal notranslate"><span class="pre">scaled_upcast</span></code>).</p></li>
 </ul>
 <p><code class="docutils literal notranslate"><span class="pre">axis</span></code> (default: last dim) selects the dimension along which scales are
-shared. <code class="docutils literal notranslate"><span class="pre">scale</span></code> must be compact along <code class="docutils literal notranslate"><span class="pre">axis</span></code> with one E8M0 byte per
-block of consecutive input elements along <code class="docutils literal notranslate"><span class="pre">axis</span></code>, and each block must
-span a multiple of 8 consecutive input elements.</p>
+shared. <code class="docutils literal notranslate"><span class="pre">scale</span></code> provides one E8M0 byte per block of consecutive input
+elements along <code class="docutils literal notranslate"><span class="pre">axis</span></code>. The block size must be a power of two and a
+multiple of 2 on CDNA4 or 8 on CDNA5. For packed FP4, CDNA4 permits one scale
+per output byte. The block size and scale layout are checked when the
+kernel is compiled.</p>
 </dd></dl>
 
 </section>
