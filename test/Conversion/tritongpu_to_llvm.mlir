@@ -2283,7 +2283,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
   // CHECK-LABEL: @atomic_rmw_bf16_single_warp
   tt.func private @atomic_rmw_bf16_single_warp(%ptr: !tt.ptr<bf16>, %val: bf16, %mask: i1) -> bf16 {
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
-    // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("block") monotonic
+    // CHECK: llvm.atomicrmw ignore_denormal_mode fadd {{.*}} syncscope("block") monotonic
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
     // CHECK: nvvm.shfl.sync idx
     // CHECK-NOT: {{llvm.store|llvm.load|nvvm.barrier}}
@@ -4719,9 +4719,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.tar
   // CHECK-LABEL: @scalar_atomic_float_ops
   // CHECK-NOT: llvm.cond_br
   // CHECK: atom.global.gpu.relaxed.add.noftz.f16
-  // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
+  // CHECK: llvm.atomicrmw ignore_denormal_mode fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
   // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f32
-  // CHECK: llvm.atomicrmw fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
+  // CHECK: llvm.atomicrmw ignore_denormal_mode fadd {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
   // CHECK: llvm.atomicrmw xchg {{.*}} syncscope("device") monotonic{{.*}} : !llvm.ptr<1>, f64
   // PTX-LABEL: .visible .entry scalar_atomic_float_ops(
   // PTX: atom.global.gpu.relaxed.add.noftz.f16

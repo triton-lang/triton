@@ -1332,8 +1332,13 @@ def test_fdiv_approx(approx, reciprocal, enable_fp_fusion, device):
     maxulp = 3 if approx and is_hip() else 2
     np.testing.assert_array_max_ulp(to_numpy(z_tri), expected, maxulp=maxulp)
     if is_cuda() and not is_interpreter():
-        instruction = "rcp.approx.f32" if reciprocal else "div.approx.f32"
-        assert (instruction if approx else "div.full.f32") in compiled.asm["ptx"]
+        if approx:
+            instruction = "rcp.approx.f32" if reciprocal else "div.approx.f32"
+        else:
+            # NVPTX selects llvm.nvvm.div.full with a unit numerator as rcp.approx.f32.
+            assert "llvm.nvvm.div.full" in compiled.asm["llir"]
+            instruction = "rcp.approx.f32" if reciprocal else "div.full.f32"
+        assert instruction in compiled.asm["ptx"]
     if approx and is_hip() and not is_interpreter():
         assert "llvm.amdgcn.fdiv.fast" in compiled.asm["llir"]
 

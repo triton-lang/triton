@@ -971,11 +971,16 @@ public:
 
         // Codegen the atomic-rmw instruction(s)
         rewriter.setInsertionPointToEnd(atomicBlock);
-        Value atom = LLVM::AtomicRMWOp::create(
-                         rewriter, loc, *llvmAtomicBinOp, rmwPtr,
-                         valElements[i], *llvmAtomicMemOrdering,
-                         targetInfo.getAtomicSyncScope(op.getScope()))
-                         .getResult();
+        // Lower fadd to atom.add whatever its denormal handling.
+        Value atom =
+            LLVM::AtomicRMWOp::create(
+                rewriter, loc, *llvmAtomicBinOp, rmwPtr, valElements[i],
+                *llvmAtomicMemOrdering,
+                targetInfo.getAtomicSyncScope(op.getScope()), /*alignment=*/0,
+                /*isVolatile=*/false,
+                /*ignoreDenormalMode=*/*llvmAtomicBinOp ==
+                    LLVM::AtomicBinOp::fadd)
+                .getResult();
         LLVM::BrOp::create(rewriter, loc, atom, endBlock);
         rewriter.setInsertionPointToStart(endBlock);
         resultVals[i] = endBlock->getArgument(0);

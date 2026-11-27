@@ -6,6 +6,10 @@
 #include <utility>
 #include <vector>
 
+namespace llvm::cl {
+class LibraryOptionsContext;
+} // namespace llvm::cl
+
 namespace mlir::triton::tools {
 
 // LLVM command line options (cl::opt and TableGen library options) are
@@ -25,6 +29,12 @@ namespace mlir::triton::tools {
 // pipeline run must happen inside a scope, even one without overrides, so that
 // the registry is never rewritten underneath it.
 //
+// Most TableGen library options, including codegen's start/stop passes and the
+// scalar transforms' tunables, are read from the compiled module's LLVMContext
+// rather than from globals. A scope keeps its overrides of those options aside;
+// apply() hands them to a context, and a TargetMachine reads them only when
+// MCOptions.LibraryOptions points at that context.
+//
 // A thread must not request an ExclusiveLLVMOptionAccess while it holds a
 // scope; the exclusive access would wait for that scope forever. Likewise, it
 // must not fork while it holds exclusive access.
@@ -41,7 +51,13 @@ public:
   ScopedLLVMOptions(const ScopedLLVMOptions &) = delete;
   ScopedLLVMOptions &operator=(const ScopedLLVMOptions &) = delete;
 
+  // Replaces the per-context library options in `context` with this scope's
+  // overrides, leaving the rest at their defaults.
+  void apply(llvm::cl::LibraryOptionsContext &context) const;
+
 private:
+  // The registry's per-context library options, alive while the scope is.
+  const llvm::cl::LibraryOptionsContext *libraryOptions = nullptr;
   // A forked child starts with a fresh registry. Objects inherited from the
   // parent must therefore leave that registry alone when they are destroyed.
   std::uint64_t registryGeneration = 0;

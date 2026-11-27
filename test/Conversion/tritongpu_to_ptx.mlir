@@ -82,7 +82,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.thr
 
   tt.func public @reciprocal_f32(%ptr: !tt.ptr<f32>, %arg: f32) {
     // CHECK-LABEL: reciprocal_f32(
-    // CHECK: div.full.f32
+    // NVPTX selects llvm.nvvm.div.full with a unit numerator as rcp.approx.f32.
+    // CHECK-NOT: div.approx.f32
+    // CHECK: rcp.approx.f32
     %one = arith.constant 1.0 : f32
     %result = arith.divf %one, %arg : f32
     tt.store %ptr, %result : !tt.ptr<f32>

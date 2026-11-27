@@ -1093,8 +1093,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]]{{\[}}%[[BUF_IDX_NEXT_CND]]{{\]}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[MMA_TOK:.*]] = ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %[[ACC_TM_SLICE]][], %[[TRUE]], %[[TRUE]], %[[BAR_SLICE]][%true] {is_async, loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %{{.*}}, %{{.*}} {loop.cluster = 0 : i32, loop.stage = 3 : i32}
-  // CHECK:   scf.if
-  // CHECK:     %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]]{{\[}}%[[BUF_IDX_NEXT_CND]]{{\]}}
+  // CHECK:   scf.if %[[CND]]
+  // CHECK:     %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]]{{\[}}%[[BUF_IDX]]{{\]}}
   // CHECK:     %[[LOAD_ACC:.*]], %[[USER_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][]
   // CHECK:     "use"(%[[LOAD_ACC]])
   // CHECK:   }
@@ -1173,8 +1173,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]]{{\[}}%[[BUF_IDX_NEXT_CND]]{{\]}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[MMA_TOK:.*]] = ttng.tc_gen5_mma %{{.*}}, %{{.*}}, %[[ACC_TM_SLICE]][], %[[CND]], %[[TRUE]], %[[BAR_SLICE]][%true] {is_async, loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   ttng.wait_barrier %[[BAR_SLICE]], %[[PHASE]] deps %{{.*}}, %{{.*}} {loop.cluster = 0 : i32, loop.stage = 3 : i32}
-  // CHECK:   scf.if
-  // CHECK:     %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]]{{\[}}%[[BUF_IDX_NEXT_CND]]{{\]}}
+  // CHECK:   scf.if %[[CND]]
+  // CHECK:     %[[ACC_TM_SLICE:.*]] = ttg.memdesc_index %[[ACC_TM]]{{\[}}%[[BUF_IDX]]{{\]}}
   // CHECK:     %[[LOAD_ACC:.*]], %[[USER_TOK:.*]] = ttng.tmem_load %[[ACC_TM_SLICE]][]
   // CHECK:     "use"(%[[LOAD_ACC]])
   // CHECK:   }

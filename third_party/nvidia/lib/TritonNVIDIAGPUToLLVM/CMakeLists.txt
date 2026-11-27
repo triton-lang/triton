@@ -31,6 +31,7 @@ add_triton_library(TritonNVIDIAGPUToLLVM
     TritonGPUToLLVM
     TritonInstrumentIR
     TritonInstrumentToLLVM
+    MLIRArithCommonConversion
     MLIRReconcileUnrealizedCasts
     NVGPUIR
     MLIRUBToLLVM
