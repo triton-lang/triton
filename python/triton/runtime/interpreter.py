@@ -404,6 +404,38 @@ class ExtraFunctions:
         return tl.tensor(_semantic.builder.create_fp_to_fp(input.handle, dst_ty, fp_downcast_rounding), dst_ty)
 
 
+# arith.maximumf/minimumf (IEEE 754-2019 maximum/minimum) propagate NaN and order -0.0 < +0.0.
+# np.maximum/np.minimum also propagate NaN, but return either operand when comparing -0.0 with +0.0.
+def _maximumf(lhs, rhs):
+    out = np.maximum(lhs, rhs)
+    if np.issubdtype(out.dtype, np.floating):
+        out = np.where(lhs == rhs, np.where(np.signbit(lhs), rhs, lhs), out)
+    return out
+
+
+def _minimumf(lhs, rhs):
+    out = np.minimum(lhs, rhs)
+    if np.issubdtype(out.dtype, np.floating):
+        out = np.where(lhs == rhs, np.where(np.signbit(lhs), lhs, rhs), out)
+    return out
+
+
+def _max_propagate_nan(data, axis, keepdims):
+    out = np.max(data, axis=axis, keepdims=keepdims)
+    if np.issubdtype(data.dtype, np.floating):
+        has_pos_zero = np.any((data == 0) & ~np.signbit(data), axis=axis, keepdims=keepdims)
+        out = np.where(out == 0, np.where(has_pos_zero, 0.0, -0.0), out).astype(data.dtype)
+    return out
+
+
+def _min_propagate_nan(data, axis, keepdims):
+    out = np.min(data, axis=axis, keepdims=keepdims)
+    if np.issubdtype(data.dtype, np.floating):
+        has_neg_zero = np.any((data == 0) & np.signbit(data), axis=axis, keepdims=keepdims)
+        out = np.where(out == 0, np.where(has_neg_zero, -0.0, 0.0), out).astype(data.dtype)
+    return out
+
+
 class InterpreterBuilder:
     ir_sem_to_interpreter_sem = {
         _ir.MEM_SEMANTIC.ACQUIRE: _interpreter.MEM_SEMANTIC.ACQUIRE,
@@ -664,11 +696,11 @@ class InterpreterBuilder:
     create_lshr = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.right_shift)
     create_minsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
     create_minui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
-    create_minimumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.minimum)
+    create_minimumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, _minimumf)
     create_minnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmin)
     create_maxsi = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
     create_maxui = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
-    create_maximumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.maximum)
+    create_maximumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, _maximumf)
     create_maxnumf = lambda self, lhs, rhs: self.binary_op(lhs, rhs, np.fmax)
     create_icmpSLE = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less_equal)
     create_icmpSLT = lambda self, lhs, rhs: self.comparison_op(lhs, rhs, np.less)
@@ -1209,9 +1241,9 @@ class ReduceOps(ReduceScanOpInterface):
         elif self.combine_fn is tl.standard._elementwise_min_ignore_nan:
             return self.min_max(input[0], np.nanmin)
         elif self.combine_fn is tl.standard._elementwise_max_propagate_nan:
-            return self.min_max(input[0], np.max)
+            return self.min_max(input[0], _max_propagate_nan)
         elif self.combine_fn is tl.standard._elementwise_min_propagate_nan:
-            return self.min_max(input[0], np.min)
+            return self.min_max(input[0], _min_propagate_nan)
         elif self.combine_fn is tl.standard._sum_combine:
             return self.sum(input[0])
         else:
