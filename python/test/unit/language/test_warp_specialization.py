@@ -516,6 +516,28 @@ def test_warp_specialize_tma_matmul_persistent_consan(M, N, K, a_use_tma, b_use_
 
 
 @pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
+def test_warp_specialize_accumulator_teardown_consan(fresh_compilation_knobs):
+    triton.knobs.compilation.instrumentation_mode = "consan"
+
+    @triton.jit
+    def kernel(A, B, C, tiles):
+        for tile in tl.range(0, tiles, warp_specialize=True, num_stages=2):
+            a = A.load([tile * 128, 0])
+            b = B.load([tile * 128, 0])
+            acc = tl.dot(a, b.T)
+            # The epilogue makes a separate warp partition consume the accumulator.
+            C.store([tile * 128, 0], acc + 1)
+
+    a = torch.ones((256, 128), device="cuda", dtype=torch.float16)
+    b = torch.ones_like(a)
+    b[128:].fill_(2.0)
+    c = torch.empty_like(a, dtype=torch.float32)
+    descs = [TensorDescriptor.from_tensor(t, [128, 128]) for t in (a, b, c)]
+    kernel[(1, )](*descs, 2, num_warps=4, num_stages=2)
+    torch.testing.assert_close(c, b.float() * 128 + 1, atol=0, rtol=0)
+
+
+@pytest.mark.skipif(not is_blackwell(), reason="Requires Blackwell")
 def test_warp_specialize_scaled_matmul_tmem_reuse(fresh_compilation_knobs, with_allocator):
     triton.knobs.compilation.instrumentation_mode = "consan"
 

@@ -422,7 +422,7 @@ struct TMEMAref {
       stageClusters[*partitionId] = paritionIdStageCluster.second;
     buffer = {};
   }
-  void release(OpBuilder &b, Location loc) {
+  AsyncOp release(OpBuilder &b, Location loc) {
     auto asyncOpIt = asyncOp.find(partitionId);
     assert(asyncOpIt != asyncOp.end() && asyncOpIt->second);
     AsyncOp currentAsyncOp = *asyncOpIt->second;
@@ -442,6 +442,7 @@ struct TMEMAref {
               AsyncOpAttr::get(b.getContext(), currentAsyncOp)}));
       kind = PUT;
     }
+    return currentAsyncOp;
   }
   Value getBuffer(OpBuilder &b, std::optional<PartitionId> partitionId,
                   Operation *op) {
@@ -782,8 +783,14 @@ int insertTmemAref(TmemAccessDag &accessDag, int numTmemBlocks,
         break;
       }
     }
+    auto producerPartitionId = state.partitionId;
     state.acquire(b, node->op->getLoc(), {otherPartitionId, {}});
-    state.release(b, node->op->getLoc());
+    if (state.release(b, node->op->getLoc()) == AsyncOp::TC5MMA) {
+      // Wait for the last async GET before teardown. The producer owns the
+      // stage and phase needed to wait on the empty barrier.
+      b.setInsertionPoint(arefOp->getBlock()->getTerminator());
+      state.acquire(b, arefOp.getLoc(), {producerPartitionId, {}});
+    }
   }
 
   return numTmemBlocks;
