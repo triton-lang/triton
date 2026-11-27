@@ -906,8 +906,6 @@ public:
   virtual size_t getNumElements() = 0;
 
 protected:
-  bool isRoundingUndefined() { return !roundingMode.has_value(); }
-
   ISAFamily isaFamily;
   size_t maxElementsPerThread;
   std::optional<RoundingMode> roundingMode;
@@ -932,10 +930,6 @@ public:
   std::optional<SmallVector<Value>> convert(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
-
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
 
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
@@ -1117,10 +1111,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     if (isa<Float8E5M2FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp8E5M2fnuzToFp16HW(loc, rewriter, v);
@@ -1258,10 +1248,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp8E4M3ToBf16HW(loc, rewriter, v);
@@ -1377,10 +1363,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported!
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     if (isa<Float8E5M2FNUZType>(srcTy)) {
       if (hasFnuzFp8HW(isaFamily))
         return Fp8E5M2ToBf16HW(loc, rewriter, v);
@@ -1454,10 +1436,6 @@ public:
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
 
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
-
     bool useTwoStepConversion = false;
     if (isa<Float8E4M3FNUZType>(srcTy)) {
       if (isaFamily == ISAFamily::CDNA3)
@@ -1515,10 +1493,6 @@ public:
   std::optional<SmallVector<Value>> convert(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) final {
-
-    // specific rounding modes are not supported
-    if (!isRoundingUndefined())
-      return std::nullopt;
 
     bool useTwoStepConversion = false;
     if (isa<Float8E5M2FNUZType>(srcTy)) {
@@ -1662,7 +1636,10 @@ public:
         return (isaFamily == ISAFamily::CDNA5) ? 8 : 4;
       }
     } else if (roundingMode == RoundingMode::RTZ) {
-      return 4;
+      // Only OCP E5M2 shares the fp16 exponent bias that RTZ truncation
+      // relies on.
+      if (isa<Float8E5M2Type>(dstTy))
+        return 4;
     }
     return 0;
   }
@@ -1689,7 +1666,8 @@ public:
         } else
           return Fp16ToFp8E5M2rtneSW(loc, rewriter, v);
       }
-    } else if (roundingMode == RoundingMode::RTZ) {
+    } else if (roundingMode == RoundingMode::RTZ &&
+               isa<Float8E5M2Type>(dstTy)) {
       return Fp16ToFp8E5M2rtz(loc, rewriter, v);
     }
 
@@ -2563,10 +2541,7 @@ struct FpToFpOpConversion
         (srcElementType.isF16() && dstElementType.isBF16());
     if (useFp32Intermediate)
       roundingMode = roundingMode.value_or(RoundingMode::RTNE);
-    auto converter =
-        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
-                     dstElementType, maxElementsPerThread, roundingMode);
-    if (converter == nullptr) {
+    auto emitUnsupported = [&]() {
       std::string rmError;
       if (roundingMode.has_value())
         rmError = std::string(" with rounding mode ") +
@@ -2574,12 +2549,18 @@ struct FpToFpOpConversion
       op->emitError("Unsupported conversion from ")
           << srcElementType << " to " << dstElementType << rmError;
       return SmallVector<Value>{};
-    }
+    };
+    auto converter =
+        getConverter(useFp32Intermediate ? f32_ty : srcElementType,
+                     dstElementType, maxElementsPerThread, roundingMode);
+    if (converter == nullptr)
+      return emitUnsupported();
 
-    setFunctionAttributes(op);
-
+    // A converter reports a rounding mode it does not support with zero
+    // elements or by failing to convert.
     const size_t numElements = converter->getNumElements();
-    assert(numElements && "number of elements must be greater than zero");
+    if (numElements == 0)
+      return emitUnsupported();
 
     // extract a chunk of input element defined by the converter (i.e., the
     // instruction property) filled the rest of the values with undefs if the
@@ -2598,8 +2579,10 @@ struct FpToFpOpConversion
                                     : Fp16ToFp32OneValue(loc, rewriter, v);
 
     auto maybeOutVals = converter->convert(loc, rewriter, inVals);
-    assert(maybeOutVals.has_value());
+    if (!maybeOutVals)
+      return emitUnsupported();
     auto outVals = maybeOutVals.value();
+    setFunctionAttributes(op);
 
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));

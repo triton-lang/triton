@@ -1239,16 +1239,12 @@ OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
 }
 
 LogicalResult FpToFpOp::verify() {
-  auto dstType = getType();
-  auto srcType = getSrc().getType();
-  if (auto dstTensorType = dyn_cast<RankedTensorType>(dstType))
-    dstType = dstTensorType.getElementType();
-  if (auto srcTensorType = dyn_cast<RankedTensorType>(srcType))
-    srcType = srcTensorType.getElementType();
-  if ((dstType.getIntOrFloatBitWidth() < srcType.getIntOrFloatBitWidth()) &&
-      (!getRounding().has_value())) {
+  unsigned srcWidth = getElementTypeOrSelf(getSrc()).getIntOrFloatBitWidth();
+  unsigned dstWidth = getElementTypeOrSelf(getType()).getIntOrFloatBitWidth();
+  if (dstWidth < srcWidth && !getRounding())
     return emitError("Rounding mode is required for FP downcast");
-  }
+  if (dstWidth > srcWidth && getRounding())
+    return emitError("Rounding mode is not allowed for FP upcast");
   return success();
 }
 

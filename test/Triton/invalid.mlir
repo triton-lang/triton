@@ -857,3 +857,11 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
     tt.return
   }
 }
+
+// -----
+
+tt.func @rounded_fp8_upcast(%arg0: f8E4M3FN) -> f16 {
+  // expected-error @below {{Rounding mode is not allowed for FP upcast}}
+  %0 = tt.fp_to_fp %arg0, rounding = rtz : f8E4M3FN -> f16
+  tt.return %0 : f16
+}
