@@ -86,7 +86,10 @@ def _run(command, *, phase=None, num_gpus=None, cwd=ROOT, environment=None, time
 
 def _concurrent(commands):
     processes = [subprocess.Popen(command, cwd=cwd, env=environment) for command, cwd, environment in commands]
-    return max(process.wait() for process in processes)
+    return max(
+        (process.wait() for process in processes),
+        key=lambda status: (status != 0, status),
+    )
 
 
 def _capability():
