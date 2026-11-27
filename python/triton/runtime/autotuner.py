@@ -239,6 +239,9 @@ class Autotuner(KernelInterface):
             for _, arg in _args.items():
                 if hasattr(arg, "dtype"):
                     key.append(str(arg.dtype))
+            if not knobs.runtime.interpret:
+                # A configuration selected for one target may not run on another.
+                key.append(str(driver.active.get_current_target()))
             key = tuple(key)
             if key not in self.cache:
                 used_cached_result = False
