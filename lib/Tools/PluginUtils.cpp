@@ -50,11 +50,13 @@ llvm::Expected<TritonPlugin> TritonPlugin::load(const std::string &filename) {
 
   plugin.info = reinterpret_cast<decltype(tritonGetPluginInfo) *>(getInfoFn)();
 
-  if (plugin.info->apiVersion != TRITON_PLUGIN_API_VERSION)
+  if (plugin.info->apiVersion < TRITON_PLUGIN_API_VERSION_MIN ||
+      plugin.info->apiVersion > TRITON_PLUGIN_API_VERSION)
     return llvm::make_error<llvm::StringError>(
         Twine("Wrong API version on plugin '") + filename + "'. Got version " +
-            Twine(plugin.info->apiVersion) + ", supported version is " +
-            Twine(TRITON_PLUGIN_API_VERSION) + ".",
+            Twine(plugin.info->apiVersion) + ", supported range is [" +
+            Twine(TRITON_PLUGIN_API_VERSION_MIN) + ", " +
+            Twine(TRITON_PLUGIN_API_VERSION) + "].",
         llvm::inconvertibleErrorCode());
 
   if (!isTritonAndPluginsVersionsMatch(plugin.info->tritonVersion))
@@ -141,6 +143,14 @@ const std::vector<Op> TritonPlugin::listOps() const {
     }
   }
   return ops;
+}
+
+void TritonPlugin::extendHost(HostExtensionArgs *args) const {
+  if (!info || info->apiVersion < 3 || !info->extend || !args || !args->irModule)
+    return;
+  LLVM_DEBUG(llvm::dbgs() << "Extending host IR via plugin "
+                          << info->pluginName << "\n");
+  info->extend(args);
 }
 
 static std::vector<TritonPlugin> plugins;
