@@ -119,10 +119,7 @@ def compute_offsets(
         # pid_z indicates slice ID: experts are laid sequentially along the K dimension
         # (i.e., we have columns for expert 0, and then expert 1, and then so on).
         # pid_k is meaningless (always zero).
-        tl.static_assert(
-            X_SLICE_SIZE_DIVISIBILITY is not None or W_SLICE_SIZE_DIVISIBILITY is not None,
-            "At least one input must be padded!",
-        )
+        # Padding for persistent ragged-K is enforced by the host-side checks in matmul.py.
         tl.static_assert(SPLIT_K == 1, "Not supported yet")
         off_x_k = tl.load(XSliceOffs + pid_z)
         off_w_k = tl.load(WSliceOffs + pid_z)
