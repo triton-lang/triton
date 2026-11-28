@@ -1,3 +1,8 @@
+// RTLD_DEFAULT is declared only under _GNU_SOURCE before glibc 2.36, and
+// <dlfcn.h> is included before Python.h (which would define it) below.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "cuda.h"
 #include <dlfcn.h>
 #include <stdalign.h>
