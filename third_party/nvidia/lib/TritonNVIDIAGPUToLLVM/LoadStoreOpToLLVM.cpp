@@ -1105,6 +1105,19 @@ struct AsyncCopyGlobalToLocalOpConversion
     // The maximum vector size is 128 bits on NVIDIA GPUs.
     maxVec = std::min(maxVec, 128 / resElemTy.getIntOrFloatBitWidth());
 
+    auto smemLayout = ttg::toLinearLayoutIgnoringPadding(dstTy);
+    auto cvt = srcLayout.invertAndCompose(smemLayout);
+    if (!cvt.isTrivialOver({str_attr("block")})) {
+      return emitError(loc,
+                       "cp.async does not support non-trivial block dimension");
+    }
+    if (auto padded = ttg::getPaddedEncoding(dstTy.getEncoding())) {
+      // Each copy must stay contiguous and naturally aligned after padding.
+      unsigned dstContiguity = cvt.getNumConsecutiveInOut();
+      maxVec = std::min({maxVec, dstContiguity, padded.getMinInterval(),
+                         *llvm::min_element(padded.getPaddings())});
+    }
+
     int vecBytes = maxVec * resElemTy.getIntOrFloatBitWidth() / 8;
     if (vecBytes < 4) {
       return emitError(loc, "cp.async does not support transfers smaller than "
@@ -1215,17 +1228,14 @@ struct AsyncCopyGlobalToLocalOpConversion
     // %dst
     auto smemObj =
         getSharedMemoryObjectFromStruct(loc, llDst, resElemTy, rewriter);
-    auto smemLayout = ttg::toLinearLayout(dstTy);
-    auto cvt = srcLayout.invertAndCompose(smemLayout);
-    if (!cvt.isTrivialOver({str_attr("block")})) {
-      return emitError(loc,
-                       "cp.async does not support non-trivial block dimension");
-    }
+    auto paddingShifts = getPaddedSharedShifts(
+        dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth(),
+        /*offsetInBytes=*/true);
     auto affineOffset = smemObj.getShmemOffset(loc, rewriter, dstTy);
     auto maskSpanAffineOffset = SharedMemoryObject::getMaskSpanOffsets(dstTy);
     auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(),
-              /*paddingShifts=*/{}, affineOffset, maskSpanAffineOffset,
+    lowerLdSt(loc, ctx, cvt, vals, resElemTy, smemObj.getBase(), paddingShifts,
+              affineOffset, maskSpanAffineOffset,
               /*affineBlockOffset=*/Value(), /*maskSpanAffineBlock=*/0, laneId,
               warpId, rewriter, targetInfo, maxVec, emitCpAsync);
 

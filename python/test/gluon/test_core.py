@@ -1519,6 +1519,56 @@ def test_async_copy_mbarrier(copy_vec, cache_policy):
     assert ("L2::cache_hint" in ptx) == expect_policy
 
 
+@gluon.jit
+def async_copy_padded_shared_kernel(inp, out, ROWS: ttgl.constexpr, COPY_VEC: ttgl.constexpr,
+                                    SHARED_LAYOUT: ttgl.constexpr):
+    copy_layout: ttgl.constexpr = ttgl.BlockedLayout([1, COPY_VEC], [4, 8], [4, 1], [1, 0])
+    x = ttgl.arange(0, 32, ttgl.SliceLayout(1, copy_layout))[:, None]
+    y = ttgl.arange(0, 32, ttgl.SliceLayout(0, copy_layout))[None, :]
+    smem = ttgl.allocate_shared_memory(inp.dtype.element_ty, [32, 32], SHARED_LAYOUT)
+    mask = x < ROWS if ROWS < 32 else None
+    async_copy.async_load(smem, inp + x * 32 + y, mask)
+    async_copy.commit_group()
+    async_copy.wait_group(0)
+
+    # Scalar shared reads isolate cp.async from local_load vector alignment.
+    result_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [4, 1], [1, 0])
+    x = ttgl.arange(0, 32, ttgl.SliceLayout(1, result_layout))[:, None]
+    y = ttgl.arange(0, 32, ttgl.SliceLayout(0, result_layout))[None, :]
+    ttgl.store(out + x * 32 + y, smem.load(result_layout))
+
+
+@pytest.mark.parametrize("dtype, interval, padding, rows", [
+    (torch.float32, 2, 2, 20),  # A four-element source vector crosses a padding boundary.
+    (torch.float16, 64, 2, 20),  # Padding limits an eight-element source vector to four bytes.
+    (torch.float32, 64, 4, 32),
+    (torch.float16, 32, 8, 20),
+], ids=["f32-interval", "f16-alignment", "f32-reporter", "f16-reporter"])
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
+def test_async_copy_padded_shared(dtype, interval, padding, rows):
+    shared = ttgl.PaddedSharedLayout.with_identity_for([[interval, padding]], [32, 32], [1, 0])
+    inp = torch.arange(1, 1025, device="cuda", dtype=dtype).reshape(32, 32)
+    out = torch.full_like(inp, -1)
+    # Offer a 16-byte source vector regardless of the padded destination layout.
+    kernel = async_copy_padded_shared_kernel[(1, )](inp, out, rows, 16 // inp.element_size(), shared)
+    expected = inp.clone()
+    expected[rows:] = 0
+    assert torch.equal(out, expected)
+    assert re.search(r"cp\.async\.(?:ca|cg)\.shared", kernel.asm["ptx"])
+
+
+@pytest.mark.skipif(not is_ampere_or_newer(), reason="Requires Ampere")
+def test_async_copy_padded_shared_rejects_two_byte_copy(capfd):
+    shared = ttgl.PaddedSharedLayout.with_identity_for([[64, 1]], [32, 32], [1, 0])
+    inp = torch.empty((32, 32), device="cuda", dtype=torch.float16)
+    out = torch.empty_like(inp)
+    with pytest.raises(RuntimeError, match="PassManager::run failed"):
+        async_copy_padded_shared_kernel.warmup(inp, out, 20, 8, shared, grid=(1, ))
+    captured = capfd.readouterr()
+    assert "cp.async does not support transfers smaller than 4 bytes; calculated this as 2 bytes" in (captured.out +
+                                                                                                      captured.err)
+
+
 @pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
 @pytest.mark.parametrize("num_ctas", [2, 4])
 @pytest.mark.parametrize("batch", [2, 4])
