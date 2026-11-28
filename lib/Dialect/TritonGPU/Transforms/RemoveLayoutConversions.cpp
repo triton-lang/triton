@@ -20,6 +20,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/TritonGPUConversion.h"
@@ -1337,6 +1338,72 @@ bool LayoutRematerialization::hoistConvertDotOperand(
   return true;
 }
 
+static bool isWideningCast(Operation *op) {
+  if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp>(op))
+    return true;
+  if (auto castOp = dyn_cast<FpToFpOp>(op)) {
+    auto srcType = cast<RankedTensorType>(castOp.getOperand().getType());
+    auto dstType = cast<RankedTensorType>(castOp.getType());
+    return getElementBitWidth(srcType) < getElementBitWidth(dstType);
+  }
+  return false;
+}
+
+struct CombineSplitResultConversions
+    : public OpRewritePattern<triton::SplitOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::SplitOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!op.getOutLHS().hasOneUse() || !op.getOutRHS().hasOneUse())
+      return failure();
+    auto lhs = dyn_cast<ConvertLayoutOp>(*op.getOutLHS().getUsers().begin());
+    auto rhs = dyn_cast<ConvertLayoutOp>(*op.getOutRHS().getUsers().begin());
+    if (!lhs || !rhs || lhs.getType() != rhs.getType() ||
+        lhs->getBlock() != op->getBlock() || rhs->getBlock() != op->getBlock())
+      return failure();
+    Operation *first = lhs;
+    if (lhs->getNextNode() != rhs) {
+      if (rhs->getNextNode() != lhs)
+        return failure();
+      first = rhs;
+    }
+
+    auto conversion = minimalCvtLayout(lhs.getSrc().getType(), lhs.getType());
+    auto dims = conversion.getInDimNames();
+    if (!llvm::is_contained(dims, StringAttr::get(op.getContext(), "warp")) ||
+        llvm::is_contained(dims, StringAttr::get(op.getContext(), "block")))
+      return failure();
+
+    auto dst = lhs.getType().getEncoding();
+    auto src = inferSrcEncoding(op, dst);
+    if (!src || inferDstEncoding(op, src) != dst)
+      return failure();
+
+    // Only combine when backward rematerialization can reach a widening cast.
+    SetVector<Value> slice;
+    DenseMap<Value, Attribute> layout;
+    if (failed(mlir::getRematerializableSlice(op.getSrcMutable(), slice, src,
+                                              layout, isWideningCast)) ||
+        !llvm::any_of(slice, [](Value v) {
+          auto *def = v.getDefiningOp();
+          return def && isWideningCast(def);
+        }))
+      return failure();
+
+    // Exchange both halves together before splitting them in registers.
+    rewriter.setInsertionPoint(first);
+    auto type = op.getSrc().getType().cloneWithEncoding(src);
+    auto converted =
+        ConvertLayoutOp::create(rewriter, op.getLoc(), type, op.getSrc());
+    auto split = triton::SplitOp::create(rewriter, op.getLoc(), converted);
+    rewriter.replaceOp(lhs, split.getOutLHS());
+    rewriter.replaceOp(rhs, split.getOutRHS());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
@@ -1347,16 +1414,7 @@ bool LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     return false;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
-    if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
-            ExpandDimsOp>(op)) {
-      return true;
-    }
-    if (auto fpToFpOp = dyn_cast<FpToFpOp>(op)) {
-      auto srcType = cast<RankedTensorType>(fpToFpOp.getOperand().getType());
-      return getElementBitWidth(srcType) <
-             getElementBitWidth(cast<RankedTensorType>(fpToFpOp.getType()));
-    }
-    return false;
+    return isWideningCast(op) || isa<BroadcastOp, ExpandDimsOp>(op);
   };
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
@@ -1568,6 +1626,8 @@ public:
     ModuleOp m = getOperation();
     RewritePatternSet cleanUpPatterns(context);
     ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns, context);
+    if (!disableRematSplitting)
+      cleanUpPatterns.add<CombineSplitResultConversions>(context);
     if (applyPatternsGreedily(m, std::move(cleanUpPatterns)).failed()) {
       signalPassFailure();
     }

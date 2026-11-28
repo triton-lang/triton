@@ -4992,3 +4992,49 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#packed = #ttg.blocked<{sizePerThread = [1, 4, 2], threadsPerWarp = [4, 8, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#src = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#dst = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  // CHECK-LABEL: @combine_widened_split_conversions
+  // CHECK: %[[EXT:.*]] = arith.extf %arg0
+  // CHECK-NEXT: %[[PACKED:.*]] = ttg.convert_layout %[[EXT]]
+  // CHECK-NEXT: %[[L:[^,]+]], %[[R:[^ ]+]] = tt.split %[[PACKED]]
+  // CHECK-NEXT: tt.return %[[L]], %[[R]]
+  tt.func @combine_widened_split_conversions(%arg0: tensor<32x64x2xbf16, #packed>) -> (tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>) {
+    %x = arith.extf %arg0 : tensor<32x64x2xbf16, #packed> to tensor<32x64x2xf32, #packed>
+    %l, %r = tt.split %x : tensor<32x64x2xf32, #packed> -> tensor<32x64xf32, #src>
+    %b = ttg.convert_layout %r : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
+    %a = ttg.convert_layout %l : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
+    tt.return %a, %b : tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>
+  }
+
+  // CHECK-LABEL: @keep_fixed_width_split_conversions
+  // CHECK: %[[L:[^,]+]], %[[R:[^ ]+]] = tt.split %arg0
+  // CHECK-NEXT: %[[A:.*]] = ttg.convert_layout %[[L]]
+  // CHECK-NEXT: %[[B:.*]] = ttg.convert_layout %[[R]]
+  // CHECK-NEXT: tt.return %[[A]], %[[B]]
+  tt.func @keep_fixed_width_split_conversions(%arg0: tensor<32x64x2xf32, #packed>) -> (tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>) {
+    %l, %r = tt.split %arg0 : tensor<32x64x2xf32, #packed> -> tensor<32x64xf32, #src>
+    %a = ttg.convert_layout %l : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
+    %b = ttg.convert_layout %r : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
+    tt.return %a, %b : tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>
+  }
+
+  // CHECK-LABEL: @keep_split_with_another_user
+  // CHECK: %[[EXT:.*]] = arith.extf %arg0
+  // CHECK-NEXT: %[[L:[^,]+]], %[[R:[^ ]+]] = tt.split %[[EXT]]
+  // CHECK-NEXT: %[[A:.*]] = ttg.convert_layout %[[L]]
+  // CHECK-NEXT: %[[B:.*]] = ttg.convert_layout %[[R]]
+  // CHECK-NEXT: tt.return %[[A]], %[[B]], %[[L]]
+  tt.func @keep_split_with_another_user(%arg0: tensor<32x64x2xbf16, #packed>) -> (tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>, tensor<32x64xf32, #src>) {
+    %x = arith.extf %arg0 : tensor<32x64x2xbf16, #packed> to tensor<32x64x2xf32, #packed>
+    %l, %r = tt.split %x : tensor<32x64x2xf32, #packed> -> tensor<32x64xf32, #src>
+    %a = ttg.convert_layout %l : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
+    %b = ttg.convert_layout %r : tensor<32x64xf32, #src> -> tensor<32x64xf32, #dst>
+    tt.return %a, %b, %l : tensor<32x64xf32, #dst>, tensor<32x64xf32, #dst>, tensor<32x64xf32, #src>
+  }
+}
