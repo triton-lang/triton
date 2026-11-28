@@ -53,14 +53,14 @@ of gemms. The scheduling is static and we do it on device.
             N  cuBLAS (runtime(ms))  Triton (runtime(ms))
     0   128.0              0.022528              0.012288
     1   256.0              0.025600              0.013312
-    2   512.0              0.032768              0.018432
+    2   512.0              0.032768              0.017408
     3  1024.0              0.073728              0.060416
     group-gemm-performance-m-8192-k-8192:
             M  cuBLAS (runtime(ms))  Triton (runtime(ms))
-    0   128.0              0.458752              0.445440
-    1   256.0              0.726016              0.728064
-    2   512.0              2.052096              1.447936
-    3  1024.0              2.632704              2.853888
+    0   128.0              0.458752              0.443904
+    1   256.0              0.726016              0.729088
+    2   512.0              2.059264              1.481728
+    3  1024.0              2.633216              2.864128
 
 
 
@@ -634,7 +634,7 @@ of gemms. The scheduling is static and we do it on device.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 5.895 seconds)
+   **Total running time of the script:** (0 minutes 6.031 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_08-grouped-gemm.py:
