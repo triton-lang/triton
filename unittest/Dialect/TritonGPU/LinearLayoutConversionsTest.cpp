@@ -2662,6 +2662,95 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v3_2x4Warps_rhs) {
                          {S("dim0"), S("dim1")}));
 }
 
+// kWarp = [4, 0]: warp bit 0 also XORs the operands' K by 4 instruction K steps
+// (4 * 64 = 256); warp bit 1 leaves K alone. The result layout is unchanged.
+TEST_F(LinearLayoutConversionsTest, WMMA_v3_KWarp) {
+  auto cgaLayout = CGAEncodingAttr::get1CTALayout(&ctx, 2);
+  LinearLayout ctaLayout({{S("register"), {}}, {S("warp"), {{1, 0}, {2, 0}}}},
+                         {S("dim0"), S("dim1")});
+  auto plain = AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, ctaLayout,
+                                        /*isTransposed=*/true, cgaLayout,
+                                        /*instrShape=*/{16, 16, 64});
+  auto kSwap = AMDWmmaEncodingAttr::get(&ctx, /*version=*/3, ctaLayout,
+                                        /*isTransposed=*/true, cgaLayout,
+                                        /*instrShape=*/{16, 16, 64},
+                                        /*kWarp=*/{4, 0});
+  EXPECT_FALSE(plain.hasKWarp());
+  EXPECT_TRUE(kSwap.hasKWarp());
+
+  EXPECT_EQ(toLinearLayout({128, 64}, kSwap), toLinearLayout({128, 64}, plain));
+
+  // A (128 x 512): warps split M, so without kWarp every warp holds all of K.
+  EXPECT_EQ(
+      toLinearLayout({128, 512}, wmmaDotOp(plain, 0, 32)),
+      LinearLayout({{S("register"),
+                     {{0, 1},
+                      {0, 2},
+                      {0, 4},
+                      {0, 8},
+                      {0, 16},
+                      {0, 64},
+                      {0, 128},
+                      {0, 256},
+                      {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 32}}},
+                    {S("warp"), {{16, 0}, {32, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({128, 512}, wmmaDotOp(kSwap, 0, 32)),
+      LinearLayout({{S("register"),
+                     {{0, 1},
+                      {0, 2},
+                      {0, 4},
+                      {0, 8},
+                      {0, 16},
+                      {0, 64},
+                      {0, 128},
+                      {0, 256},
+                      {64, 0}}},
+                    {S("lane"), {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {0, 32}}},
+                    {S("warp"), {{16, 256}, {32, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+
+  // B (512 x 64): broadcast over warps without kWarp; warp bit 0 now flips K.
+  EXPECT_EQ(
+      toLinearLayout({512, 64}, wmmaDotOp(plain, 1, 32)),
+      LinearLayout({{S("register"),
+                     {{1, 0},
+                      {2, 0},
+                      {4, 0},
+                      {8, 0},
+                      {16, 0},
+                      {64, 0},
+                      {128, 0},
+                      {256, 0},
+                      {0, 16},
+                      {0, 32}}},
+                    {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {32, 0}}},
+                    {S("warp"), {{0, 0}, {0, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({512, 64}, wmmaDotOp(kSwap, 1, 32)),
+      LinearLayout({{S("register"),
+                     {{1, 0},
+                      {2, 0},
+                      {4, 0},
+                      {8, 0},
+                      {16, 0},
+                      {64, 0},
+                      {128, 0},
+                      {256, 0},
+                      {0, 16},
+                      {0, 32}}},
+                    {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {32, 0}}},
+                    {S("warp"), {{256, 0}, {0, 0}}},
+                    {S("block"), {}}},
+                   {S("dim0"), S("dim1")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
   auto parent = blocked({2, 4}, {4, 2}, {2, 2}, {2, 2}, {2, 2}, {1, 0}, {1, 0});
   EXPECT_EQ(toLinearLayout({128}, slice(parent, 0)),

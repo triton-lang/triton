@@ -88,3 +88,8 @@
 
 // expected-error@+1 {{elementBitWidth must be 32 or 64}}
 #mfma = #ttg.amd_mfma<{version = 2, warpsPerCTA = [1, 1, 1], instrShape = [16, 16, 16], isTransposed = false, elementBitWidth = 16}>
+
+// -----
+
+// expected-error@+1 {{kWarp must have one entry per warp basis}}
+#wmma = #ttg.amd_wmma<{version = 3, ctaLayout = {warp = [[1, 0], [2, 0]]}, instrShape = [16, 16, 64], kWarp = [4]}>
