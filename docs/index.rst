@@ -45,6 +45,7 @@ Gluon
 
 - Learn about Gluon's lower-level programming model in the :doc:`Gluon overview <gluon/index>`.
 - Browse the :doc:`Gluon tutorials <getting-started/tutorials/gluon/index>`,
+  :doc:`AMD tutorials <getting-started/tutorials/gluon-amd/index>`,
   :doc:`examples <getting-started/examples/gluon/index>`, and :doc:`API reference <gluon/api/index>`.
 
 .. toctree::
@@ -54,6 +55,7 @@ Gluon
 
    Overview <gluon/index>
    Tutorials <getting-started/tutorials/gluon/index>
+   AMD Tutorials <getting-started/tutorials/gluon-amd/index>
    Examples <getting-started/examples/gluon/index>
    API Reference <gluon/api/index>
 

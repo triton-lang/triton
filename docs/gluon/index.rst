@@ -7,6 +7,8 @@ advanced kernels can trade convenience for control.
 
 - Browse the :doc:`tutorial gallery <../getting-started/tutorials/gluon/index>` for
   Gluon tutorials.
+- Browse the :doc:`AMD tutorial gallery <../getting-started/tutorials/gluon-amd/index>` for
+  Gluon tutorials on AMD GPUs.
 - Browse the :doc:`examples gallery <../getting-started/examples/gluon/index>` for
   complete Gluon example kernels.
 - Browse the :doc:`Gluon API reference <api/index>`
