@@ -7,7 +7,9 @@ from triton.experimental.gluon.language.nvidia.hopper import fence_async_shared,
 
 from triton.tools.triton_to_gluon_translator.common_helpers import *  # noqa: F401,F403
 from triton.tools.triton_to_gluon_translator.common_helpers import (
-    default_blocked_layout, )
+    default_blocked_layout,
+    tl_dot_decomposed_block_scales_impl,
+)
 
 # ---- NVIDIA MMA sync (Ampere) ----
 
@@ -32,6 +34,15 @@ def tl_dot_mma_sync_k_width(a_ty, b_ty):
     return max(32 // min_bitwidth, 1)
 
 
+@gluon.constexpr_function
+def tl_dot_mma_sync_input_precision(input_precision, allow_tf32):
+    assert input_precision is None or allow_tf32 is None, (
+        "Only one of input_precision and allow_tf32 can be specified")
+    if input_precision is not None:
+        return input_precision
+    return "ieee" if allow_tf32 is False else "tf32"
+
+
 @gluon.jit
 def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None, out_dtype=ttgl.float32):
     mma_layout: ttgl.constexpr = tl_dot_mma_sync_layout(a.type.shape, ttgl.num_warps())
@@ -43,7 +54,9 @@ def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None, out_dtype=ttgl.fl
     if acc_init is not None:
         acc = ttgl.convert_layout(acc_init, mma_layout)
     else:
-        acc = ttgl.full([a.shape[0], a.shape[1], b.shape[2]], 0.0, out_dtype, layout=mma_layout)
+        shape: ttgl.constexpr = ([a.shape[0], b.shape[1]]
+                                 if len(a.shape) == 2 else [a.shape[0], a.shape[1], b.shape[2]])
+        acc = ttgl.full(shape, 0.0, out_dtype, layout=mma_layout)
     result = mma_v2(a, b, acc, input_precision)
     if acc_init is not None:
         layout: ttgl.constexpr = acc_init.type.layout
@@ -51,6 +64,53 @@ def tl_dot_mma_sync(a, b, acc_init=None, input_precision=None, out_dtype=ttgl.fl
         layout: ttgl.constexpr = default_blocked_layout(result.type.shape, ttgl.num_warps())
     result = ttgl.convert_layout(result, layout)
     return result
+
+
+@gluon.jit
+def tl_dot(
+    a,
+    b,
+    acc=None,
+    input_precision=None,
+    allow_tf32=None,
+    max_num_imprecise_acc=None,
+    out_dtype=ttgl.float32,
+):
+    ttgl.static_assert(max_num_imprecise_acc == 0 or max_num_imprecise_acc is None,
+                       "max_num_imprecise_acc only applies to Hopper warp_group_dot")
+    input_prec: ttgl.constexpr = tl_dot_mma_sync_input_precision(input_precision, allow_tf32)
+    return tl_dot_mma_sync(a, b, acc, input_prec, out_dtype)
+
+
+@gluon.jit
+def tl_dot_scaled(
+    lhs,
+    lhs_scale,
+    lhs_format,
+    rhs,
+    rhs_scale,
+    rhs_format,
+    acc=None,
+    fast_math=False,
+    lhs_k_pack=True,
+    rhs_k_pack=True,
+    out_dtype=ttgl.float32,
+):
+    return tl_dot_decomposed_block_scales_impl(
+        tl_dot_scaled,
+        tl_dot,
+        lhs,
+        lhs_scale,
+        lhs_format,
+        rhs,
+        rhs_scale,
+        rhs_format,
+        acc=acc,
+        fast_math=fast_math,
+        lhs_k_pack=lhs_k_pack,
+        rhs_k_pack=rhs_k_pack,
+        out_dtype=out_dtype,
+    )
 
 
 @gluon.constexpr_function
