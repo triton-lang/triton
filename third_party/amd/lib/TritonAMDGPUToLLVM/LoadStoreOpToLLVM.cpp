@@ -698,11 +698,13 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
+    auto cachePolicy =
+        LLVM::AMD::getCacheModifierAndEvictionPolicy(op.getCachePolicyAttr());
+    if (failed(cachePolicy)) {
       op.emitOpError("target cache policy is not supported on AMD targets");
       return failure();
     }
+    auto [cacheModFromPolicy, evictionPolicy] = *cachePolicy;
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     // original values
@@ -746,7 +748,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
-    auto cacheMod = *cacheModifier;
+    auto cacheMod = cacheModFromPolicy;
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -768,7 +770,8 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
             otherElems, vecStart);
 
       Value loadVal = llLoad(rewriter, loc, ptr, vecTy, pred, falseVal,
-                             multicastMask, cacheMod, op.getIsVolatile());
+                             multicastMask, cacheMod, op.getIsVolatile(),
+                             /*forceNoAliasAsyncLoads=*/false, evictionPolicy);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
@@ -1861,11 +1864,13 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   LogicalResult
   matchAndRewrite(triton::StoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto cacheModifier = LLVM::AMD::getCacheModifier(op.getCachePolicyAttr());
-    if (failed(cacheModifier)) {
+    auto cachePolicy =
+        LLVM::AMD::getCacheModifierAndEvictionPolicy(op.getCachePolicyAttr());
+    if (failed(cachePolicy)) {
       op.emitOpError("target cache policy is not supported on AMD targets");
       return failure();
     }
+    auto [cacheModFromPolicy, evictionPolicy] = *cachePolicy;
     Value ptr = op.getPtr();
     Value value = op.getValue();
     Value mask = op.getMask();
@@ -1897,7 +1902,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     const size_t valueElemNBits =
         std::max<int>(8, valueElemTy.getIntOrFloatBitWidth());
 
-    auto cacheMod = *cacheModifier;
+    auto cacheMod = cacheModFromPolicy;
     const int numVecs = elemsPerThread / vec;
     auto freeVarMasks = getFreeVariableMasks(valueTy);
     Value threadPred = emitRedundantThreadPredicateNonNull(
@@ -1928,7 +1933,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
-      llStore(rewriter, loc, ptr, storeVal, pred, cacheMod);
+      llStore(rewriter, loc, ptr, storeVal, pred, cacheMod,
+              /*forceNoAliasAsyncLoads=*/false, evictionPolicy);
     } // end vec
     rewriter.eraseOp(op);
     return success();

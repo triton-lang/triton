@@ -681,14 +681,15 @@ def MaskedLoadOp : TT_AMDGPU_Op<"masked_load", []> {
     Optional<I32>:$multicastMask,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
-    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
+    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
 
   let results = (outs LLVM_Type:$result);
 
   let assemblyFormat = [{
     $ptr `,` $mask `,` $falseVal (`,` $multicastMask^)?
-    oilist(`cacheModifier` `=` $cache)
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     (`volatile` $isVolatile^)?
     (`forceNoAlias` $forceNoAlias^)?
     attr-dict `:` functional-type(operands, results)
@@ -708,12 +709,13 @@ def MaskedStoreOp : TT_AMDGPU_Op<"masked_store", []> {
     LLVM_Type:$value,
     I1:$mask,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
-    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias
+    DefaultValuedAttr<BoolAttr, "false">:$forceNoAlias,
+    DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
 
   let assemblyFormat = [{
     $ptr `,` $value `,` $mask
-    oilist(`cacheModifier` `=` $cache)
+    oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
     (`forceNoAlias` $forceNoAlias^)?
     attr-dict `:` type(operands)
   }];
