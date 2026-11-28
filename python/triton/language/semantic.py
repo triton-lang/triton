@@ -239,7 +239,9 @@ class TritonSemantic(Generic[TensorTy]):
         return a, b, c
 
     def binary_op_sanitize_overflow_impl(self, lhs: TensorTy, rhs: TensorTy, binary_op: callable):
-        if lhs.type.scalar.int_bitwidth >= 64 or not self.builder.options.sanitize_overflow:
+        # The check ends in device_assert, which is a no-op unless debug is enabled.
+        if (lhs.type.scalar.int_bitwidth >= 64 or not self.builder.options.sanitize_overflow
+                or not self.builder.options.debug):
             return
         lhs_sca_ty = lhs.type.scalar
         rhs_sca_ty = rhs.type.scalar

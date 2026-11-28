@@ -294,6 +294,25 @@ def test_bool_parameter_annotation(flag):
     run_filecheck_test(kernel, args=(MockTensor(tl.float32), flag))
 
 
+@pytest.mark.parametrize("debug", [False, True])
+@pytest.mark.parametrize("op", ["add", "sub", "mul"])
+def test_sanitize_overflow_requires_debug(op, debug):
+
+    @triton.jit
+    def kernel(x, y, OP: tl.constexpr):
+        if OP == "add":
+            anchor(x + y)
+        elif OP == "sub":
+            anchor(x - y)
+        else:
+            anchor(x * y)
+
+    module = run_parser(kernel, args=(3, 5, op), kwargs={"sanitize_overflow": True, "debug": debug})
+    ir = module.str_nodebug()
+    assert ("arith.extsi" in ir) == debug, ir
+    assert ("tt.assert" in ir) == debug, ir
+
+
 @pytest.mark.parametrize("dtype",
                          [tl.float16, tl.bfloat16, tl.float32, tl.float64, tl.float8e4nv, tl.float8e5, tl.float8e4b15],
                          ids=str)
