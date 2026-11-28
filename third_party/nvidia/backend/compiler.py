@@ -507,6 +507,8 @@ class CUDABackend(BaseBackend):
         if options.extern_libs and nvidia.has_extern_deps(llvm_mod):
             paths = [path for (name, path) in options.extern_libs]
             llvm.link_extern_libs(llvm_mod, paths)
+        # Fold libdevice's __nvvm_reflect calls before O3, not during codegen.
+        nvidia.fold_nvvm_reflect(llvm_mod, proc)
 
         # Opt in to LLVM SLP instead of the target-aware NVPTX vectorizer.
         use_slp_vectorizer = knobs.nvidia.use_slp_vectorizer
