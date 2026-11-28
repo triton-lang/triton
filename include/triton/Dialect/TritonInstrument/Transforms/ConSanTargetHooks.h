@@ -97,6 +97,7 @@ struct BarrierWaitInfo {
   Value alloc;
   Value phase;
   Value pred;
+  Value done{}; // Null for blocking waits.
 };
 
 struct BarrierInvalidateInfo {

@@ -3,6 +3,19 @@
 
 include "mlir/IR/EnumAttr.td"
 
+def TT_ReportValidityAttr : I32EnumAttr<
+    "ReportValidity", "",
+    [
+        I32EnumAttrCase<"NONE", 1, "none">,
+        I32EnumAttrCase<"PER_16B_FP32", 2, "per_16B_fp32">,
+        I32EnumAttrCase<"PER_16B_FP16", 3, "per_16B_fp16">,
+        I32EnumAttrCase<"PER_16B_FP8", 4, "per_16B_fp8">,
+        I32EnumAttrCase<"PER_16B_FP4", 5, "per_16B_fp4">,
+        I32EnumAttrCase<"PER_ELEM_1B", 6, "per_elem_1B">
+    ]> {
+    let cppNamespace = "::mlir::triton";
+}
+
 def TT_CacheModifierAttr : I32EnumAttr<
     "CacheModifier", "",
     [

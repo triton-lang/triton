@@ -570,6 +570,17 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
 
   Region *entryRegion = &entryPoint.getBody();
 
+  bool reports = false;
+  entryPoint.walk([&](AsyncTMACopyGlobalToLocalOp load) {
+    reports |= load.getReportValidity() != ReportValidity::NONE;
+  });
+  if (reports)
+    entryPoint.walk([&](WaitBarrierOp wait) {
+      if (wait.getPhaseType() == MBarrierPhaseType::CONDITIONAL)
+        conditionalWaits.insert(wait);
+    });
+  if (!conditionalWaits.empty() && numCTAs != 1)
+    return entryPoint.emitError("ConSan conditional reports require one CTA");
   int numMBarriers = barrierRegions.size();
   entryPoint.walk([&](Operation *op) {
     BarrierStages stages = hooks.getClusterBarrierStages(op);
@@ -583,6 +594,11 @@ AuxDataMap::populateAndPassToWarpSpecialize(ModuleOp module, FuncOp entryPoint,
   int numTrackedBarriers = numMBarriers + clusterBarrierSlots.size();
   if (numTrackedBarriers > 0)
     barrierRegions.resize(llvm::NextPowerOf2(numTrackedBarriers - 1));
+  if (!conditionalWaits.empty()) {
+    // Both halves see the same contributions and lifecycle events.
+    auto copy = barrierRegions;
+    llvm::append_range(barrierRegions, copy);
+  }
 
   ImplicitLocOpBuilder b(entryPoint.getLoc(), entryPoint);
   b.setInsertionPointToStart(&entryPoint.getBody().front());

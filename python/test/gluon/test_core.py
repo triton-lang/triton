@@ -1710,7 +1710,8 @@ def test_mbarrier_multiple_tma_expectations(device, expect_before_copy, synchron
     ptx = compiled.asm["ptx"]
     # Check the physical counts before launch so a mismatch fails without hanging.
     initial_count = "2" if synchronize_expect else "8"
-    assert re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx) == [initial_count]
+    assert re.findall(r"mbarrier\.init(?:\.layout::v1)?\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)",
+                      ptx) == [initial_count]
     expectations = list(re.finditer(r"mbarrier\.arrive\.expect_tx\.shared::cta\.b64\s+_,\s*\[[^\]]+\],\s*(\d+)", ptx))
     byte_counts = [expect.group(1) for expect in expectations]
     # Membar already synchronizes the first expectation when it precedes copies.
@@ -1889,7 +1890,7 @@ def test_mbarrier_automatic_warp_arrivals(producer_warps, num_ctas):
     compiled = kernel.warmup(inp, out, iterations, block, producer_warps, grid=(8, ), num_warps=4, num_ctas=num_ctas)
 
     ptx = compiled.asm["ptx"]
-    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    init_counts = re.findall(r"mbarrier\.init(?:\.layout::v1)?\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
     # Each empty slot counts four consumer warps. One producer lane signals ready.
     actual_inits = Counter(map(int, init_counts))
     # Warp-specialization cluster barriers can introduce additional mbarriers.
@@ -1997,7 +1998,7 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
     out = torch.zeros((1, ), device="cuda", dtype=torch.int32)
     compiled = kernel.warmup(out, from_cta, two_ctas, grid=(1, ), num_warps=4, num_ctas=num_ctas)
     ptx = compiled.asm["ptx"]
-    init_counts = re.findall(r"mbarrier\.init\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
+    init_counts = re.findall(r"mbarrier\.init(?:\.layout::v1)?\.shared::cta\.b64\s+\[[^\]]+\],\s*(\d+)", ptx)
     assert sorted(map(int, init_counts)) == ([2, 4] if two_ctas else [1])
     arrive_counts = re.findall(
         r"mbarrier\.arrive\.shared::cluster(?:\.multicast::cluster::32b)?\.b64\s+_,\s*\[[^\]]+\](?:,\s*(\d+))?(?:,\s*%r\d+)?;",
@@ -2007,6 +2008,74 @@ def test_mbarrier_automatic_warp_arrivals_cross_cta(num_ctas, from_cta, two_ctas
     assert ("bar.warp.sync" in ptx) == two_ctas
     kernel[(1, )](out, from_cta, two_ctas, num_warps=4, num_ctas=num_ctas)
     assert out.item() == 1
+
+
+@pytest.mark.skipif(not is_hopper_or_newer(), reason="Requires Hopper or newer")
+@pytest.mark.parametrize("num_warps", [1, 2, 4, 8])
+@pytest.mark.parametrize("warp_specialized", [False, True])
+def test_mbarrier_test_wait_validity_results(num_warps, warp_specialized, device):
+    # Check uniform results for incomplete, predicated-off, and completed queries.
+    # WS polling also checks partition-local barriers and prevents query hoisting.
+
+    @gluon.jit(noinline=True)
+    def worker(bar, out, pred_ptr, flag_ptr, WS: ttgl.constexpr):
+        width: ttgl.constexpr = 32 * ttgl.num_warps()
+        layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [ttgl.num_warps()], [0])
+        offsets = ttgl.arange(0, width, layout=layout)
+        # Check every lane's copy of both scalar results, including when the
+        # query lives in an outlined helper called by a WS worker partition.
+        done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
+        ttgl.store(out + offsets, done)
+        ttgl.store(out + width + offsets, valid)
+        if WS:
+            ttgl.atomic_store(flag_ptr, 1, sem="release", scope="cta")
+            while not done:
+                done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
+        else:
+            rubin.mbarrier.arrive(bar)
+            rubin.mbarrier.wait(bar, 0)
+        pred = ttgl.load(pred_ptr) != 0
+        done, valid = rubin.mbarrier.test_wait_validity(bar, 0, pred=pred)
+        ttgl.store(out + 2 * width + offsets, done)
+        ttgl.store(out + 3 * width + offsets, valid)
+        done, valid = rubin.mbarrier.test_wait_validity(bar, 0)
+        ttgl.store(out + 4 * width + offsets, done)
+        ttgl.store(out + 5 * width + offsets, valid)
+
+    @gluon.jit
+    def publisher(bar, flag_ptr):
+        # This partition's atomic poll also uses its own named barrier. It
+        # must be independent of the worker's completion reduction barrier.
+        ttgl.atomic_poll(flag_ptr, 1, sem="acquire", scope="cta")
+        rubin.mbarrier.arrive(bar)
+
+    @gluon.jit
+    def kernel(out, pred_ptr, flag_ptr, WS: ttgl.constexpr, WORKER_WARPS: ttgl.constexpr):
+        bar = rubin.mbarrier.allocate_mbarrier()
+        rubin.mbarrier.init(bar, count=1)
+        if WS:
+            ttgl.warp_specialize([(publisher, (bar, flag_ptr)), (worker, (bar, out, pred_ptr, flag_ptr, WS))],
+                                 [WORKER_WARPS])
+        else:
+            worker(bar, out, pred_ptr, flag_ptr, WS)
+        rubin.mbarrier.invalidate(bar)
+
+    width = 32 * num_warps
+    out = torch.full((6, width), -1, dtype=torch.int32, device=device)
+    pred = torch.zeros((), dtype=torch.int32, device=device)
+    flag = torch.zeros((), dtype=torch.int32, device=device)
+    compiled = kernel[(1, )](out, pred, flag, warp_specialized, num_warps,
+                             num_warps=4 if warp_specialized else num_warps)
+    expected = torch.zeros_like(out)
+    expected[4:] = 1
+    torch.testing.assert_close(out, expected, atol=0, rtol=0)
+    ptx = compiled.asm["ptx"]
+    if num_warps == 1:
+        assert "vote.sync.all.pred" in ptx
+        assert "barrier.cta.red.and.pred" not in ptx
+    else:
+        assert re.search(rf"barrier\.cta\.red\.and\.pred\s+%p\d+,\s*%r\d+,\s*{width},", ptx)
+    assert "skipTest" not in ptx
 
 
 # Equivalence-class multicast: multicast_cta selects which CTA-ID bits to multicast
@@ -8794,6 +8863,415 @@ def test_thread_regions_multi_cta_loop(num_ctas, tile, replicated, atomic, devic
     if not atomic:
         assert compiled.metadata.shared == 0
         assert "mapa.shared::cluster" not in compiled.asm["ptx"]
+
+
+# In the following tests, the shared buffer is initialized with invalid data.
+# To make the tests interesting, we want to ensure that the TMA warp reads
+# the invalid data at least once, before the buffer is filled with valid data.
+# A simple, atomic-based handshake protocol is used for that purpose. We found
+# that this is more robust than having the kernel wait for valid data written
+# from a separate stream.
+@gluon.jit
+def request_tma_validcheck_data_update(flag_ptr):
+    ttgl.atomic_store(flag_ptr, 1, sem="release", scope="cta")
+
+
+@gluon.jit
+def wait_for_tma_validcheck_data_update_request(flag_ptr):
+    ttgl.atomic_poll(flag_ptr, 1, sem="acquire", scope="cta")
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("report_validity", ["per_16B_fp16", "per_16B_fp8", "per_elem_1B", "per_16B_fp4"])
+def test_tma_validcheck(report_validity):
+
+    @gluon.jit
+    def tma_warp(input_ptr, need_update_ptr, smem, bar, XBLOCK: ttgl.constexpr, REPORT_VALIDITY: ttgl.constexpr):
+        input_desc = rubin.tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[XBLOCK, XBLOCK],
+            strides=[XBLOCK, 1],
+            block_shape=[XBLOCK, XBLOCK],
+            layout=smem_layout,
+        )
+
+        rubin.mbarrier.expect(bar, input_desc.block_type.nbytes)
+        rubin.tma.async_load(input_desc, [0, 0], bar, smem, report_validity=REPORT_VALIDITY)
+
+        primary_phase = 0
+        done = False
+        valid = False
+
+        # Retry after each completed attempt that reports invalid data.
+        while not done or not valid:
+            done, valid = rubin.mbarrier.test_wait_validity(bar, primary_phase)
+
+            if done and not valid:
+                # After the first request, the input buffer is filled with
+                # valid data. Keep retrying TMA until valid data is loaded.
+                request_tma_validcheck_data_update(need_update_ptr)
+                primary_phase ^= 1
+                rubin.mbarrier.expect(bar, input_desc.block_type.nbytes)
+                rubin.tma.async_load(input_desc, [0, 0], bar, smem, report_validity=REPORT_VALIDITY)
+
+    @gluon.jit
+    def consumer(output_ptr, smem, bar, XBLOCK: ttgl.constexpr):
+        block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 2], [4, 8], [4, 1], [1, 0])
+        xindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(1, block_layout))[:, None]
+        yindex = ttgl.arange(0, XBLOCK, ttgl.SliceLayout(0, block_layout))[None, :]
+
+        # Wait for the conditional phase to flip: TMA has finished and the
+        # data is valid.
+        rubin.mbarrier.wait(bar, 0, phase_type="conditional")
+        val = smem.load(block_layout)
+        ttgl.store(output_ptr + yindex + xindex * XBLOCK, val)
+
+    @gluon.jit
+    def data_init_warp(input_ptr, valid_input_ptr, need_update_ptr, XBLOCK: ttgl.constexpr):
+        # This contrived warp ensures the shared buffer is filled with valid
+        # data only after the TMA warp loads invalid data.
+        copy_layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
+        copy_width: ttgl.constexpr = 32
+        numel: ttgl.constexpr = XBLOCK * XBLOCK
+
+        wait_for_tma_validcheck_data_update_request(need_update_ptr)
+
+        for i in ttgl.static_range(numel // copy_width):
+            offsets = i * copy_width + ttgl.arange(0, copy_width, copy_layout)
+            vals = ttgl.load(valid_input_ptr + offsets)
+            ttgl.store(input_ptr + offsets, vals)
+
+    @gluon.jit
+    def kernel(
+        input_ptr,
+        valid_input_ptr,
+        need_update_ptr,
+        output_ptr,
+        XBLOCK: ttgl.constexpr,
+        smem_layout: ttgl.constexpr,
+        dtype: ttgl.constexpr,
+        REPORT_VALIDITY: ttgl.constexpr,
+    ):
+        smem = ttgl.allocate_shared_memory(dtype, [XBLOCK, XBLOCK], smem_layout)
+        bar = ttgl.allocate_shared_memory(ttgl.int64, [1], rubin.mbarrier.MBarrierLayout())
+        rubin.mbarrier.init(bar, count=1)
+
+        ttgl.warp_specialize(
+            [
+                (consumer, (output_ptr, smem, bar, XBLOCK)),
+                (tma_warp, (input_ptr, need_update_ptr, smem, bar, XBLOCK, REPORT_VALIDITY)),
+                (data_init_warp, (input_ptr, valid_input_ptr, need_update_ptr, XBLOCK)),
+            ],
+            (1, 1),
+            (128, 32),
+        )
+
+        rubin.mbarrier.invalidate(bar)
+
+    if report_validity == "per_16B_fp16":
+        element_bitwidth = 16
+        xblock = 16
+        input_tensor = -torch.zeros((xblock, xblock), device="cuda", dtype=torch.float16)
+        valid_input = torch.ones_like(input_tensor)
+        dtype = ttgl.float16
+    elif report_validity == "per_16B_fp8":
+        element_bitwidth = 8
+        xblock = 32
+        invalid_fp32 = -torch.zeros((xblock, xblock), device="cuda", dtype=torch.float32)
+        input_tensor = invalid_fp32.to(torch.float8_e4m3fn)
+        valid_input = torch.ones((xblock, xblock), device="cuda", dtype=torch.float32).to(torch.float8_e4m3fn)
+        dtype = ttgl.float8e4nv
+    elif report_validity == "per_16B_fp4":
+        element_bitwidth = 8
+        xblock = 32
+        invalid_fp32 = -torch.zeros((xblock, xblock * 2), dtype=torch.float32)
+        input_tensor = MXFP4Tensor(invalid_fp32).to_packed_tensor(1).to("cuda")
+        valid_input = MXFP4Tensor(torch.ones((xblock, xblock * 2), dtype=torch.float32)).to_packed_tensor(1).to("cuda")
+        dtype = ttgl.uint8
+    elif report_validity == "per_elem_1B":
+        element_bitwidth = 8
+        xblock = 32
+        input_tensor = torch.full((xblock, xblock), 255, dtype=torch.uint8, device="cuda")
+        valid_input = torch.ones((xblock, xblock), dtype=torch.uint8, device="cuda")
+        dtype = ttgl.uint8
+    else:
+        raise AssertionError(f"unsupported validity mode: {report_validity}")
+
+    output = torch.empty_like(input_tensor)
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=32,
+        element_bitwidth=element_bitwidth,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    need_update = torch.zeros((1, ), device="cuda", dtype=torch.int32)
+    kernel[(1, )](
+        input_tensor,
+        valid_input,
+        need_update,
+        output,
+        xblock,
+        smem_layout,
+        dtype,
+        report_validity,
+        num_warps=4,
+    )
+
+    torch.testing.assert_close(output, valid_input, rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not is_rubin(), reason="Requires Rubin")
+@pytest.mark.parametrize("num_stages", [2, 4])
+@pytest.mark.parametrize("num_blocks", [3, 8, 13])
+@pytest.mark.parametrize("retry_warps", [1, 4])
+def test_tma_validcheck_multi_stage(num_stages, num_blocks, retry_warps):
+    # Use a dedicated "retry warp" for checking data validity and re-issuing TMA.
+    # The TMA warp is unchanged from the ordinary form while the retry protocol
+    # remains fully non-blocking.
+
+    @gluon.jit
+    def tuple_replace(values, index: ttgl.constexpr, value, size: ttgl.constexpr):
+        result = ()
+        for i in ttgl.static_range(size):
+            if i == index:
+                result += (value, )
+            else:
+                result += (values[i], )
+        return result
+
+    @gluon.jit
+    def tma_warp(
+        input_desc,
+        num_elems: ttgl.constexpr,
+        block_size: ttgl.constexpr,
+        num_stages: ttgl.constexpr,
+        smem,
+        bar_full,
+        bar_empty,
+        REPORT_VALIDITY: ttgl.constexpr,
+    ):
+        num_blocks: ttgl.constexpr = num_elems // block_size
+        phase = 1
+        for batch in range(ttgl.cdiv(num_blocks, num_stages)):
+            for stage in ttgl.static_range(num_stages):
+                block = batch * num_stages + stage
+                if block < num_blocks:
+                    rubin.mbarrier.wait(bar_empty.index(stage), phase)
+                    rubin.mbarrier.expect(bar_full.index(stage), input_desc.block_type.nbytes)
+                    rubin.tma.async_load(
+                        input_desc,
+                        [0, block * block_size],
+                        bar_full.index(stage),
+                        smem.slice(stage, 1, dim=0),
+                        report_validity=REPORT_VALIDITY,
+                    )
+            phase ^= 1
+
+    @gluon.jit
+    def retry_warp(
+        input_desc,
+        need_update_ptr,
+        num_elems: ttgl.constexpr,
+        block_size: ttgl.constexpr,
+        num_stages: ttgl.constexpr,
+        smem,
+        bar_full,
+        bar_empty,
+        REPORT_VALIDITY: ttgl.constexpr,
+    ):
+        num_blocks: ttgl.constexpr = num_elems // block_size
+        primary_phases = (0, ) * num_stages
+        blocks_copied_by_stage = (0, ) * num_stages
+
+        num_copied = 0
+        while num_copied != num_blocks:
+            # Poll every stage without blocking: an invalid early stage must
+            # not prevent later stages from completing or being retried.
+            for stage in ttgl.static_range(num_stages):
+                blocks_copied = blocks_copied_by_stage[stage]
+                block = blocks_copied * num_stages + stage
+
+                if block < num_blocks:
+                    primary_phase = primary_phases[stage]
+                    attempt_done, data_valid = rubin.mbarrier.test_wait_validity(
+                        bar_full.index(stage),
+                        primary_phase,
+                    )
+
+                    if attempt_done == 1:
+                        primary_phase ^= 1
+                        primary_phases = tuple_replace(primary_phases, stage, primary_phase, num_stages)
+
+                        if data_valid == 1:
+                            blocks_copied += 1
+                            num_copied += 1
+                            blocks_copied_by_stage = tuple_replace(blocks_copied_by_stage, stage, blocks_copied,
+                                                                   num_stages)
+                            rubin.mbarrier.arrive(bar_empty.index(stage), count=1)
+                        else:
+                            request_tma_validcheck_data_update(need_update_ptr)
+                            rubin.mbarrier.expect(bar_full.index(stage), input_desc.block_type.nbytes)
+                            rubin.tma.async_load(
+                                input_desc,
+                                [0, block_size * block],
+                                bar_full.index(stage),
+                                smem.slice(stage, 1, dim=0),
+                                report_validity=REPORT_VALIDITY,
+                            )
+
+    @gluon.jit
+    def data_init_warp(
+        input_ptr,
+        valid_input_ptr,
+        order_ptr,
+        need_update_ptr,
+        num_elems: ttgl.constexpr,
+        block_size: ttgl.constexpr,
+    ):
+        # Publish aligned 16-byte chunks with one vector store per chunk, as
+        # required by per-16B validity checking. Narrow stores could expose a
+        # valid sampled element before the rest of its chunk is written.
+        copy_layout: ttgl.constexpr = ttgl.BlockedLayout([8], [32], [1], [0])
+        num_blocks: ttgl.constexpr = num_elems // block_size
+
+        wait_for_tma_validcheck_data_update_request(need_update_ptr)
+
+        for i in ttgl.static_range(num_blocks):
+            block_idx = ttgl.load(order_ptr + i).item()
+            block_offset = block_idx * block_size
+            offsets = block_offset + ttgl.arange(0, block_size, copy_layout)
+            vals = ttgl.load(valid_input_ptr + offsets)
+            ttgl.store(input_ptr + offsets, vals)
+
+    @gluon.jit
+    def consumer(
+        output_ptr,
+        num_elems: ttgl.constexpr,
+        block_size: ttgl.constexpr,
+        num_stages: ttgl.constexpr,
+        smem,
+        bar_full,
+        bar_empty,
+    ):
+        block_layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 32], [1, 4], [1, 0])
+        offset = ttgl.arange(0, block_size)
+
+        num_iter = num_elems // block_size
+        phase = 0
+
+        for batch in range(ttgl.cdiv(num_iter, num_stages)):
+            for stage in ttgl.static_range(num_stages):
+                if batch * num_stages + stage < num_iter:
+                    rubin.mbarrier.wait(bar_full.index(stage), phase, phase_type="conditional")
+
+                    value = smem.slice(stage, 1, dim=0).load(block_layout)
+                    value = ttgl.reshape(value, [block_size])
+
+                    rubin.fence_async_shared()
+                    rubin.mbarrier.arrive(bar_empty.index(stage), count=1)
+                    ttgl.store(output_ptr + offset, value)
+                    offset += block_size
+
+            phase ^= 1
+
+    @gluon.jit
+    def kernel(
+        input_ptr,
+        valid_input_ptr,
+        order_ptr,
+        need_update_ptr,
+        output_ptr,
+        num_elems: ttgl.constexpr,
+        block_size: ttgl.constexpr,
+        num_stages: ttgl.constexpr,
+        smem_layout: ttgl.constexpr,
+        dtype: ttgl.constexpr,
+        REPORT_VALIDITY: ttgl.constexpr,
+        RETRY_WARPS: ttgl.constexpr,
+    ):
+        input_desc = rubin.tma.make_tensor_descriptor(
+            input_ptr,
+            shape=[1, num_elems],
+            strides=[num_elems, 1],
+            block_shape=[1, block_size],
+            layout=smem_layout,
+        )
+        smem = ttgl.allocate_shared_memory(dtype, [num_stages, block_size], smem_layout)
+        bar_full = ttgl.allocate_shared_memory(ttgl.int64, [num_stages, 1], rubin.mbarrier.MBarrierLayout())
+        bar_empty = ttgl.allocate_shared_memory(ttgl.int64, [num_stages, 1], rubin.mbarrier.MBarrierLayout())
+
+        for i in range(num_stages):
+            rubin.mbarrier.init(bar_full.index(i), count=1)
+            # Both retry and MMA warps arrive. The retry warp consumes the TMA
+            # completion and validity report. The TMA warp cannot reuse the stage
+            # until the MMA warp finishes reading and the retry warp records a
+            # successful, valid completion.
+            rubin.mbarrier.init(bar_empty.index(i), count=2)
+
+        ttgl.warp_specialize(
+            [
+                (consumer, (output_ptr, num_elems, block_size, num_stages, smem, bar_full, bar_empty)),
+                (tma_warp, (input_desc, num_elems, block_size, num_stages, smem, bar_full, bar_empty, REPORT_VALIDITY)),
+                (retry_warp, (input_desc, need_update_ptr, num_elems, block_size, num_stages, smem, bar_full, bar_empty,
+                              REPORT_VALIDITY)),
+                (data_init_warp, (input_ptr, valid_input_ptr, order_ptr, need_update_ptr, num_elems, block_size)),
+            ],
+            (1, RETRY_WARPS, 1),
+            (128, 128, 32),
+        )
+
+        for i in ttgl.static_range(num_stages):
+            rubin.mbarrier.invalidate(bar_full.index(i))
+            rubin.mbarrier.invalidate(bar_empty.index(i))
+
+    report_validity = "per_16B_fp16"
+    element_bitwidth = 16
+    block_size = 128
+    num_elems = num_blocks * block_size
+
+    input_tensor = -torch.zeros((1, num_elems), device="cuda", dtype=torch.float16)
+    valid_input = torch.empty_like(input_tensor)
+    for block in range(num_blocks):
+        valid_input[0, block * block_size:(block + 1) * block_size] = block
+
+    output = torch.empty_like(input_tensor)
+    smem_layout = ttgl.NVMMASharedLayout(
+        swizzle_byte_width=0,
+        element_bitwidth=element_bitwidth,
+        rank=2,
+        transposed=False,
+        fp4_padded=False,
+    )
+
+    def alloc_fn(size: int, alignment: int, stream: int):
+        return torch.empty(size, device="cuda", dtype=torch.int8)
+
+    triton.set_allocator(alloc_fn)
+    need_update = torch.zeros((1, ), device="cuda", dtype=torch.int32)
+    order = torch.randperm(num_blocks, device="cuda", dtype=torch.int32)
+
+    kernel[(1, )](
+        input_tensor,
+        valid_input,
+        order,
+        need_update,
+        output,
+        num_elems,
+        block_size,
+        num_stages,
+        smem_layout,
+        ttgl.float16,
+        report_validity,
+        retry_warps,
+        num_warps=4,
+    )
+    torch.testing.assert_close(output, valid_input, rtol=0, atol=0)
 
 
 @gluon.jit

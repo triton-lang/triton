@@ -152,6 +152,8 @@ public:
   void createInvalidateBarrierStorageCall(ImplicitLocOpBuilder &b,
                                           Value barrierCTAs, Value pred,
                                           Operation *insertPoint);
+  // Enter and return with the lock held whenever pred is true.
+  Value awaitReports(ImplicitLocOpBuilder &b, Operation *op, Value pred = {});
   // verifyAndUpdateBarrierState: Validate barrier initialization, an arrive
   // count, and a tx-count delta using one snapshot of the tracked barrier
   // state. Preserve independent initialization and underflow assertions and
@@ -159,8 +161,8 @@ public:
   void createVerifyAndUpdateBarrierStateCall(ImplicitLocOpBuilder &b,
                                              Value mbar, int count, Value pred,
                                              Operation *insertPoint,
-                                             Value recipientCTAs,
-                                             int txCount = 0);
+                                             Value recipientCTAs, int txCount,
+                                             Value slots);
   // publishWriteVisibility: publish the writing threads for a buffer and clear
   // its obsolete write tracking, read visibility, and read tracking.
   void createPublishWriteVisibilityCall(ImplicitLocOpBuilder &b,
