@@ -21,6 +21,12 @@ void peelLoopEpilogue(
   Value upperBound = forOp.getUpperBound();
   Value step = forOp.getStep();
   Value newUpperBound = arith::SubIOp::create(rewriter, loc, upperBound, step);
+  // The positive step can underflow a signed upper bound, even for a nonempty
+  // loop. In that case there are no iterations before the peeled iteration.
+  Value underflow = arith::CmpIOp::create(
+      rewriter, loc, arith::CmpIPredicate::sgt, newUpperBound, upperBound);
+  newUpperBound = arith::SelectOp::create(rewriter, loc, underflow, lowerBound,
+                                          newUpperBound);
 
   rewriter.setInsertionPointAfter(forOp);
   Value lastIV = getLastInductionValue(rewriter, forOp);

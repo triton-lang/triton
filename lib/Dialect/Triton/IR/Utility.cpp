@@ -24,14 +24,17 @@ Value tt::getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
 
 Value tt::getLastInductionValue(OpBuilder &b, scf::ForOp loop) {
   Location loc = loop.getLoc();
-  // (ub - lb -1) // step * step + lb
+  // (ub - lb - 1) // step * step + lb. For a nonempty signed loop,
+  // ub - lb - 1 fits in the unsigned range of the induction variable's type,
+  // but not necessarily in its signed range. Keep the arithmetic in that type
+  // and use unsigned division; the final sum is a representable signed IV.
   Value diff =
       arith::SubIOp::create(b, loc, loop.getUpperBound(), loop.getLowerBound());
   diff = arith::SubIOp::create(
       b, loc, diff,
       arith::ConstantOp::create(b, loc, b.getIntegerAttr(diff.getType(), 1)));
   Value ceilStep = arith::MulIOp::create(
-      b, loc, arith::DivSIOp::create(b, loc, diff, loop.getStep()),
+      b, loc, arith::DivUIOp::create(b, loc, diff, loop.getStep()),
       loop.getStep());
   return arith::AddIOp::create(b, loc, ceilStep, loop.getLowerBound());
 }
