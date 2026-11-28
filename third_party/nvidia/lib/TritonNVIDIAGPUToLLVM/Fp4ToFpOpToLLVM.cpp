@@ -45,27 +45,25 @@ static constexpr const char *FP4ToBf16NativePtx =
     "cvt.rn.bf16x2.e2m1x2 $3, b3;\n"
     "}";
 
+// Each E2M1 value fits in the high byte of an IEEE half, including signed zero.
 static constexpr const char *FP4ToFP16Ptx =
     "{\n"
     ".reg .b32           a<11>;\n"
-    ".reg .b16           t<4>;\n"
     "and.b32             a0, $4, 0x77777777;\n\t"
     "and.b32             a1, $4, 0x88888888;\n\t"
     "shr.u32             a2, a1, 3;\n\t"
     "shr.u32             a3, a0, 16;\n\t"
     "shr.u32             a4, a2, 16;\n\t"
-    "prmt.b32            a5, 0x3C383000, 0x4C484440, a0;\n"
-    "prmt.b32            a6, 0x3C383000, 0x4C484440, a3;\n"
+    "prmt.b32            a5, 0x3e3c3800, 0x46444240, a0;\n"
+    "prmt.b32            a6, 0x3e3c3800, 0x46444240, a3;\n"
     "prmt.b32            a7, 0x00008000, 0x0, a2;\n"
     "prmt.b32            a8, 0x00008000, 0x0, a4;\n"
     "or.b32              a9, a5, a7;\n\t"
     "or.b32              a10, a6, a8;\n\t"
-    "mov.b32             {t0, t1}, a9;\n"
-    "mov.b32             {t2, t3}, a10;\n"
-    "cvt.rn.f16x2.e4m3x2 $0, t0;\n"
-    "cvt.rn.f16x2.e4m3x2 $1, t1;\n"
-    "cvt.rn.f16x2.e4m3x2 $2, t2;\n"
-    "cvt.rn.f16x2.e4m3x2 $3, t3;\n"
+    "prmt.b32            $0, 0, a9,  0x5040;\n"
+    "prmt.b32            $1, 0, a9,  0x7060;\n"
+    "prmt.b32            $2, 0, a10, 0x5040;\n"
+    "prmt.b32            $3, 0, a10, 0x7060;\n"
     "}";
 
 static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,

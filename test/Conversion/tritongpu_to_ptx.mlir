@@ -2,6 +2,7 @@
 // RUN: triton-opt %t/mma-partition.mlir --tritongpu-allocate-warp-groups --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --canonicalize-llvm-ir --convert-warp-specialize-to-llvm --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -passes=instcombine -S | FileCheck %s --check-prefix=MMA-PARTITION
 // RUN: triton-opt %t/common.mlir --allocate-shared-memory-nv='compute-capability=90 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck --check-prefixes CHECK,SM90 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck --check-prefixes CHECK,SM80 --dump-input-context=20 %s
+// RUN: triton-opt %t/fp4-to-f16.mlir --allocate-shared-memory-nv='compute-capability=80 ptx-version=83' --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_80 -mattr=+ptx83 | FileCheck --check-prefix=FP4-FP16-SM80 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --allocate-shared-memory-nv='compute-capability=100 ptx-version=87' --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=87' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_100 -mattr=+ptx87 | FileCheck --check-prefixes CHECK,SM100 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --convert-triton-gpu-to-llvm='compute-capability=80 ptx-version=83' -cse | FileCheck --check-prefix=VEC80 --dump-input-context=20 %s
 // RUN: triton-opt %t/common.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' -cse | FileCheck --check-prefix=VEC90 --dump-input-context=20 %s
@@ -903,6 +904,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %false = arith.constant false
     %packed = tt.extern_elementwise %hi, %lo, %false {libname = "", libpath = "", pure = true, symbol = "llvm.nvvm.ff.to.e2m1x2.rn.satfinite"} : (f32, f32, i1) -> i16
     tt.store %out, %packed : !tt.ptr<i16>
+    tt.return
+  }
+}
+
+//--- fp4-to-f16.mlir
+#blocked = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+#packed_fp4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 2 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // FP4-FP16-SM80-LABEL: .entry fp4_to_f16(
+  // FP4-FP16-SM80-NOT: cvt.rn.f16x2.e4m3x2
+  // FP4-FP16-SM80: st.global
+  tt.func public @fp4_to_f16(%ptr: tensor<512x!tt.ptr<f16>, #blocked>, %arg: tensor<256xi8, #packed_fp4>) {
+    %result = ttg.fp4_to_fp %arg {axis = 0 : i32} : tensor<256xi8, #packed_fp4> -> tensor<512xf16, #blocked>
+    tt.store %ptr, %result : tensor<512x!tt.ptr<f16>, #blocked>
     tt.return
   }
 }
