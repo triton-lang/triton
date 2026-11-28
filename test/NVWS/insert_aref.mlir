@@ -156,6 +156,42 @@ module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
     tt.return
   }
 
+  // A descriptor_load feeding a local_alloc in each branch of an scf.if must not
+  // be fused into either alloc's aref, which would erase the load while the
+  // other alloc still uses it. Each alloc stores the loaded registers instead.
+  // CHECK-LABEL: @load_used_by_allocs_in_both_branches
+  // CHECK: [[AREF0:%.*]] = nvws.aref.create
+  // CHECK: [[AREF1:%.*]] = nvws.aref.create
+  // CHECK: [[LOAD:%.*]] = tt.descriptor_load
+  // CHECK: scf.if
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK: [[BUF0:%.*]], {{.*}} = nvws.aref.put.enter [[AREF0]]
+  // CHECK-NEXT: ttg.local_store [[LOAD]], [[BUF0]]
+  // CHECK: [[GET0:%.*]], {{.*}} = nvws.aref.get.enter [[AREF0]]
+  // CHECK-NEXT: "use1"([[GET0]])
+  // CHECK: } else {
+  // CHECK-NOT: ttg.local_alloc
+  // CHECK: [[BUF1:%.*]], {{.*}} = nvws.aref.put.enter [[AREF1]]
+  // CHECK-NEXT: ttg.local_store [[LOAD]], [[BUF1]]
+  // CHECK: [[GET1:%.*]], {{.*}} = nvws.aref.get.enter [[AREF1]]
+  // CHECK-NEXT: "use2"([[GET1]])
+  // CHECK-NOT: ttg.local_alloc
+  tt.func @load_used_by_allocs_in_both_branches(%arg0: !tt.tensordesc<128x64xf16, #shared>, %arg1: i32, %cnd: i1) {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    scf.for %arg2 = %c0_i32 to %arg1 step %c1_i32  : i32 {
+      %0 = tt.descriptor_load %arg0[%arg2, %arg2] {loop.cluster = 2 : i32, loop.stage = 0 : i32, ttg.partition = array<i32: 2>} : !tt.tensordesc<128x64xf16, #shared> -> tensor<128x64xf16, #blocked1>
+      scf.if %cnd {
+        %a = ttg.local_alloc %0 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 2>} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+        "use1"(%a) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 1>} : (!ttg.memdesc<128x64xf16, #shared, #smem>) -> ()
+      } else {
+        %b = ttg.local_alloc %0 {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 2>} : (tensor<128x64xf16, #blocked1>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
+        "use2"(%b) {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 1>} : (!ttg.memdesc<128x64xf16, #shared, #smem>) -> ()
+      } {loop.cluster = 0 : i32, loop.stage = 1 : i32, ttg.partition = array<i32: 1, 2>}
+    } {ttg.partition = array<i32: 0, 1, 2>, tt.num_stages = 2 : i32, tt.scheduled_max_stage = 1 : i32, tt.warp_specialize, ttg.partition.stages = [0 : i32, 1 : i32, 0 : i32], ttg.warp_specialize.tag = 0 : i32}
+    tt.return
+  }
+
   // CHECK-LABEL: @matmul_scaled_rhs_scales_tma
   tt.func @matmul_scaled_rhs_scales_tma(%arg0: i32, %arg1: i32, %arg2: i32, %arg3: !tt.tensordesc<128x64xf8E4M3FN, #shared3>, %arg4: !tt.tensordesc<128x64xf8E4M3FN, #shared3>, %arg5: !tt.tensordesc<128x8xi8, #shared2>) {
     %true = arith.constant true
