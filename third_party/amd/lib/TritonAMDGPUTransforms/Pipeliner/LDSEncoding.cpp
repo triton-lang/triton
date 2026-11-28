@@ -4,6 +4,8 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/CGAEncodingAttr.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Tools/GenericSwizzling.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 
 #undef DEBUG_TYPE
@@ -211,6 +213,29 @@ std::optional<ttg::SharedEncodingTrait> getSharedEncIfAllUsersAreDotEnc(
           tempAttr = mfmaEnc.composeSharedLayoutForOperand(
               cgaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
               /*needTrans=*/false);
+          // A preshuffled operand can already have conflict-free LDS reads.
+          // Avoid swizzling its async-copy addresses in that case.
+          if (targetFeatures.isCDNA4() && useAsyncCopy && opIdx < 2 &&
+              isa<tt::LoadOp>(loadOp) &&
+              canBeConvertedToAsyncLoad(2, cast<tt::LoadOp>(loadOp), {},
+                                        axisInfoAnalysis, targetInfo)) {
+            auto flat = ttg::SwizzledSharedEncodingAttr::get(
+                loadedValue.getContext(), vecSize, 1, 1, order, cgaLayout);
+            auto regLayout = ttg::toLinearLayout(
+                cast<RankedTensorType>(userResult.getType()));
+            auto sharedLayout = ttg::toLinearLayout(srcTy.getShape(), flat);
+            auto cvt = regLayout.invertAndCompose(sharedLayout);
+            auto flatVecSize = triton::largestVectorisation(
+                                   loadOp->getContext(), cvt, bitWidth)
+                                   .first;
+            auto loadTile =
+                targetInfo.getSharedLdStTiles(flatVecSize * bitWidth).first;
+            if (flatVecSize >= vecSize &&
+                ttg::bankConflictsMemDesc(regLayout, sharedLayout, bitWidth,
+                                          targetInfo.getSharedMemoryBanks(),
+                                          loadTile) == 0)
+              tempAttr = flat;
+          }
           LDBG("Deduced shared encoding candidate from mfma layout: "
                << tempAttr);
           sharedEncs.push_back(tempAttr);
