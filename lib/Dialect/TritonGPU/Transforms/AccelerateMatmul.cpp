@@ -798,7 +798,12 @@ public:
     // transpose for TF32 inputs.
     bool allowTranspose = !dotOp.getA().getType().getElementType().isF32();
     a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
-    b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
+    auto bType = cast<RankedTensorType>(b.getType());
+    int64_t nPerCTA = getShapePerCTA(bType)[1];
+    // An N-major RHS must cover a 16-byte shared-memory core along N.
+    bool allowTransposeB =
+        allowTranspose && nPerCTA * bType.getElementTypeBitWidth() >= 128;
+    b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTransposeB);
     MLIRContext *context = dotOp->getContext();
     auto instrShape = mmaVersionToInstrShape(
         versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);

@@ -156,8 +156,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
         pytest.skip("Skipping unsupported case")
     if "float32" == dtype_src_str and NUM_CTAS > 1:
         pytest.skip("FMA matmul not supported for multiple CTAs")
-    if (BLOCK_M < 64 or (BLOCK_M == 64 and BLOCK_N == 16)) and NUM_CTAS > 1:
-        pytest.skip("multi-CTAs is broken for mmav2")
+    if NUM_CTAS > 1 and BLOCK_N == 16 and (not is_blackwell() or dtype_src_str == "float64"):
+        pytest.skip("Multi-CTA BLOCK_N=16 coverage is limited to Blackwell TF32, FP16, and FP8 inputs")
     if EPILOGUE_SUBTILE and (is_hip() or NUM_CTAS > 1 or BLOCK_N >= 512):
         pytest.skip("creates convert layout too big to fit in smem")
     M, N, K = 1024, 512, 256
