@@ -3,9 +3,34 @@
 
 #include "triton/Analysis/Function.h"
 #include "triton/Analysis/Membar/SmemModel.h"
+#include <set>
 #include <utility>
 
 namespace mlir::triton::AMD {
+
+/// Effects accumulated across CFG paths.
+struct BlockInfo {
+  // A set makes joins idempotent across backedges and repeated calls.
+  std::set<membar::SMemAccess> accesses;
+  membar::ThreadEffects threads;
+
+  void join(const BlockInfo &other) {
+    accesses.insert(other.accesses.begin(), other.accesses.end());
+    threads.merge(other.threads);
+  }
+
+  template <typename Effects>
+  bool isIntersected(const Effects &other, const MembarFilterFn &filter,
+                     Allocation &allocation) const {
+    // The forward walk invalidates relative addresses on backedges.
+    for (const auto &a : accesses)
+      for (const auto &b : other.accesses)
+        if (a.conflict(b, filter, allocation) == membar::Conflict::Always)
+          return true;
+    return false;
+  }
+  bool operator==(const BlockInfo &) const = default;
+};
 
 /// Legacy forward-flow state at the current program point and at function
 /// boundaries.
@@ -30,14 +55,8 @@ struct MembarInfo {
     return *this;
   }
 
-  void addBlockInfo(const BlockInfo &blockInfo) {
-    if (!allPathsFromEntrySynced)
-      entryBlockInfo.join(blockInfo);
-    pending.join(blockInfo);
-  }
-
   void sync() {
-    pending.sync();
+    pending = {};
     allPathsFromEntrySynced = true;
   }
 
@@ -47,11 +66,6 @@ struct MembarInfo {
     if (callee.allPathsFromEntrySynced)
       sync();
     pending.join(callee.pending);
-  }
-
-  template <typename Transform> void transformSlices(Transform transform) {
-    pending.transformSlices(transform);
-    entryBlockInfo.transformSlices(transform);
   }
 
   bool operator==(const MembarInfo &) const = default;
@@ -80,7 +94,7 @@ public:
                  CompletionScopeFn completionScope = nullptr)
       : allocation(allocation), regions(regions), filter(std::move(filter)),
         shared(allocation, regions,
-               triton::membar::SMemModel::AccessMode::AllSharedAccesses,
+               triton::membar::SMemModel::Mode::FunctionSummary,
                completionScope) {}
 
 private:
@@ -91,9 +105,6 @@ private:
 
   void update(Operation *operation, MembarInfo *membarInfo, FuncMapT *funcMap,
               OpBuilder *builder) override;
-
-  void syncIfNeeded(Operation *operation, const BlockInfo &effects,
-                    MembarInfo *membarInfo, OpBuilder *builder);
 
   Allocation &allocation;
   BufferRegionAnalysis &regions;
@@ -112,7 +123,7 @@ public:
       : moduleAllocation(moduleAllocation), filter(std::move(filter)) {}
 
   void run() {
-    // Geometry and interval slices use the same completed allocation, including
+    // Derive physical footprints from the completed allocation, including
     // backend scratch sizes and shared-memory partition offsets.
     auto solver = createDataFlowSolver();
     auto *regions = solver->load<triton::BufferRegionAnalysis>(

@@ -47,7 +47,7 @@ enum class Boundary {
   None,
   WaitAll,      // Complete issued TMEM accesses.
   Publication,  // Order peer-visible TMEM effects.
-  KernelReturn, // Complete issued TMEM accesses and order CompletionSync::All.
+  KernelReturn, // Complete issued TMEM accesses at kernel exit.
 };
 
 enum class ArrivalMode { Scalar, PerWarp, Either };
@@ -55,7 +55,7 @@ enum class ArrivalMode { Scalar, PerWarp, Either };
 // Observe the input before the operation and start new producers at its output.
 // A scratch rendezvous lies between those two sets of effects.
 struct OpModel {
-  BlockInfo sharedIn, sharedOut;
+  SMemData shared;
   SmallVector<TMemAccess, 1> tmemAccesses;
   // Native transfers need a completion wait; descriptor asm needs region order.
   std::optional<SyncKind> tmemProducerNeed;
@@ -93,7 +93,33 @@ struct FixedSync {
   bool operator==(const FixedSync &) const = default;
 };
 
-// Arrival observes incoming effects; departure starts outgoing dependencies.
+// Graph point for regional barrier placement. The fixed masks below show
+// shared-memory coverage. A fullBarrier covers every warp in the region.
+//
+// cfg.nodes[i]                      Node<OpModel>
+// │   # Graph Solver Info
+// ├── op                            Operation*  TTGIR op at the insertion site
+// ├── insertionCost                 unsigned    0 forbids insertion here
+// ├── loopDepth                     unsigned    Breaks placement ties
+// ├── body                          unsigned    First point of this body
+// ├── gap                           unsigned    Site shared by copies of op
+// ├── inWorker                      bool        In a worker partition
+// ├── next                          SmallVector<Edge, 2>
+// │   └── [j]                       Edge
+// │       ├── to                    unsigned    Successor point
+// │       ├── invalidatesIteration  bool        Can rebind SSA values
+// │       └── warp                  WarpEdge    None | EnterWorker | ExitWorker
+// │
+// │   # Sync Info
+// ├── fixed                         FixedSync   Synchronization provided by op
+// │   ├── before                    unsigned    0 | fullBarrier
+// │   ├── inside                    unsigned    0 | fullBarrier
+// │   └── after                     unsigned    0 | warpBarrier | fullBarrier
+// │
+// │   # Dependencies Info
+// └── effects                       OpModel     See the tree in SmemModel.h
+//
+// Arrival observes incoming effects. Departure starts outgoing dependencies.
 // A fixed internal rendezvous orders paths passing through the operation.
 template <typename Facts> struct Node {
   Operation *op = nullptr;

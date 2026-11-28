@@ -2,6 +2,7 @@
 #define TRITON_ANALYSIS_MEMBAR_ASYNCFENCEMODEL_H
 
 #include "triton/Analysis/Membar/Dependencies.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 
 namespace mlir::triton::membar {
 

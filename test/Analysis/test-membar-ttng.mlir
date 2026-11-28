@@ -644,10 +644,36 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
 !barrier = !ttg.memdesc<1xi64, #bar, #ttg.shared_memory, mutable>
 !ptrs = tensor<128x!tt.ptr<i32>, #blocked>
 !values = tensor<128xi32, #blocked>
+!slot = !ttg.memdesc<128xi32, #bar, #ttg.shared_memory, mutable>
 !row_tile = tensor<16x16xf32, #rows>
 !col_tile = tensor<16x16xf32, #cols>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  tt.func private @write_slot(%slot: !slot, %input: !values) attributes {noinline = true} {
+    ttg.local_store %input, %slot : !values -> !slot
+    tt.return
+  }
+
+  // The callee writes only the second slot in the caller's frame.
+  // Its entry is disjoint from the first store. Its exit conflicts with the gather.
+  // FLOW-LABEL: @caller_owned_slots
+  // FLOW: ttg.local_store
+  // FLOW-NEXT: tt.call @write_slot
+  // FLOW-NEXT: ttg.barrier local
+  // FLOW-NEXT: {{.*}} = ttg.local_gather
+  tt.func @caller_owned_slots(%input: !values, %indices: !values) -> (!values, !values) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %slots = ttg.local_alloc : () -> !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable>
+    %first = ttg.memdesc_index %slots[%c0] : !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable> -> !slot
+    %second = ttg.memdesc_index %slots[%c1] : !ttg.memdesc<2x128xi32, #bar, #ttg.shared_memory, mutable> -> !slot
+    ttg.local_store %input, %first : !values -> !slot
+    tt.call @write_slot(%second, %input) : (!slot, !values) -> ()
+    %gather = ttg.local_gather %second[%indices] {axis = 0 : i32} : !slot, !values -> !values
+    %load = ttg.local_load %first : !slot -> !values
+    tt.return %gather, %load : !values, !values
+  }
+
   // Counter waits do not require known allocation origins.
   // CHECK-LABEL: @consecutive_waits_argument
   // CHECK: ttng.wait_barrier
@@ -737,6 +763,32 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.thr
     ttng.arrive_barrier %read_done, 1 : !barrier
     tt.store %dst, %value : !ptrs
     ttng.arrive_barrier %write_done, 1 : !barrier
+    tt.return
+  }
+
+  // A summary containing a general effect already includes global-read events.
+  // Both waits share one rendezvous before the load.
+  // FLOW-LABEL: @full_and_readonly_completions_in_loop
+  // FLOW: ttg.barrier local
+  // FLOW-NEXT: {{.*}} = tt.load
+  // FLOW-NEXT: tt.store
+  tt.func @full_and_readonly_completions_in_loop(%n: i32, %m: i32, %src: !tt.ptr<i32>, %dst: !tt.ptr<i32>, %wait_reads: i1) {
+    %zero = arith.constant 0 : i32
+    %one = arith.constant 1 : i32
+    tt.store %dst, %zero : !tt.ptr<i32>
+    scf.for %i = %zero to %n step %one : i32 {
+      %wait = arith.cmpi slt, %i, %m : i32
+      scf.if %wait {
+        scf.for %j = %zero to %i step %one : i32 {
+          ttng.async_tma_store_wait {pendings = 0 : i32}
+        }
+        scf.if %wait_reads {
+          ttng.async_tma_store_wait {pendings = 0 : i32, read_only}
+        }
+      }
+      %v = tt.load %src : !tt.ptr<i32>
+      tt.store %dst, %v : !tt.ptr<i32>
+    }
     tt.return
   }
 
