@@ -380,11 +380,11 @@ private:
         broadcastLaneIdMask |= 1u << bit;
       }
     }
-    // Reorder the layout even when no lane holds the axis: the warp and block
-    // bases along it are renumbered as in reducedRegLaneLayout.
     if (reduceLaneIdMask != 0)
       warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
 
+    // Reorder even when no lane holds the axis, so the warp and block bases
+    // along it are renumbered as in reducedRegLaneLayout.
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(),
                                                          kLane);
     return {std::move(layout), std::move(accs)};
