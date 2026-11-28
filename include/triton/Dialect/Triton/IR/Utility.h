@@ -203,7 +203,8 @@ template <typename T> auto seq(T start, T end, T step) {
 Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                   Value pred);
 
-// Get the value of the induction variable at the end of the loop.
+// Get the last induction variable value of a nonempty loop. The result is
+// unspecified for an empty loop.
 Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);
 
 bool isHostSideDescriptor(Value v);
