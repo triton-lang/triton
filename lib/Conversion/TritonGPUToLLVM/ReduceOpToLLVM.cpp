@@ -380,12 +380,12 @@ private:
         broadcastLaneIdMask |= 1u << bit;
       }
     }
-    if (reduceLaneIdMask == 0) {
-      return {std::move(layout), std::move(accs)};
-    }
+    if (reduceLaneIdMask != 0)
+      warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
 
-    warpReduce(op, reduceLaneIdMask, broadcastLaneIdMask, accs, rewriter);
-
+    // Reorder even when the reduction-axis coordinate is broadcast across
+    // lanes, so the warp and block bases along it are renumbered as in
+    // reducedRegLaneLayout.
     layout = ReduceOpHelper::zeroBasesAlongDimAndReorder(layout, op.getAxis(),
                                                          kLane);
     return {std::move(layout), std::move(accs)};

@@ -978,6 +978,14 @@ def _funky_reduce_layouts():
             block_bases=[],
             shape=[64, 8],
         ),
+        # Only warps hold dim 1, with their bases out of order
+        ttgl.DistributedLinearLayout(
+            reg_bases=[],
+            lane_bases=[[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]] + ([[0, 0]] * (ilog2(THREADS_PER_WARP) - 5)),
+            warp_bases=[[0, 2], [0, 1]],
+            block_bases=[],
+            shape=[32, 4],
+        ),
         # Funky layout where warp bases do *not* fit in the lane bases
         ttgl.DistributedLinearLayout(
             reg_bases=[[1, 0], [2, 0]],
