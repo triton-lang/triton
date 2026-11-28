@@ -1124,6 +1124,9 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
     return FpToFpOp::create(builder, loc, tensorPromotedType, operand,
                             RoundingModeAttr{});
   }
+  if (isa<IntegerType>(operandElType)) {
+    return arith::ExtSIOp::create(builder, loc, tensorPromotedType, operand);
+  }
   return arith::ExtFOp::create(builder, loc, tensorPromotedType, operand,
                                arith::FastMathFlagsAttr{});
 }
