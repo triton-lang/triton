@@ -14,10 +14,10 @@ public:
 protected:
   FloatType getComputeType(ScaleDotElemType aType, ScaleDotElemType bType,
                            PatternRewriter &rewriter) const;
-  TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,
-                                         TypedValue<RankedTensorType> scale,
-                                         FloatType computeType,
-                                         bool handleNan) const;
+  TypedValue<RankedTensorType> decodeScale(PatternRewriter &rewriter,
+                                           TypedValue<RankedTensorType> scale,
+                                           FloatType computeType,
+                                           bool handleNan) const;
   TypedValue<RankedTensorType>
   broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
                  TypedValue<RankedTensorType> scale, int dim,

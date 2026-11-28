@@ -57,10 +57,9 @@ DecomposeScaledBlocked::getComputeType(ScaleDotElemType aType,
   return rewriter.getBF16Type();
 }
 
-TypedValue<RankedTensorType>
-DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
-                                  TypedValue<RankedTensorType> scale,
-                                  FloatType computeType, bool handleNan) const {
+TypedValue<RankedTensorType> DecomposeScaledBlocked::decodeScale(
+    PatternRewriter &rewriter, TypedValue<RankedTensorType> scale,
+    FloatType computeType, bool handleNan) const {
   auto loc = scale.getLoc();
   auto scaleTy = scale.getType();
   if (isa<Float8E8M0FNUType>(scaleTy.getElementType())) {
@@ -95,14 +94,12 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
   auto shift =
       SplatOp::create(rewriter, loc, scaleTy.clone(intType), shiftConst);
   Value scaleBits = arith::ShLIOp::create(rewriter, loc, zexted, shift);
-  if (computeType.isBF16()) {
-    // E8M0 byte zero is 2^-127, which is subnormal in bf16 and rounds to
-    // zero in fp16.
-    auto minScaleBits = arith::ConstantIntOp::create(rewriter, loc, 0x0040, 16);
-    auto minScale =
-        SplatOp::create(rewriter, loc, scaleTy.clone(intType), minScaleBits);
-    scaleBits = arith::MaxUIOp::create(rewriter, loc, scaleBits, minScale);
-  }
+  // Byte zero encodes 2^-127, a subnormal in both bf16 and f32.
+  auto minScaleBits = arith::ConstantIntOp::create(
+      rewriter, loc, 1 << (shiftValue - 1), intWidth);
+  auto minScale =
+      SplatOp::create(rewriter, loc, scaleTy.clone(intType), minScaleBits);
+  scaleBits = arith::MaxUIOp::create(rewriter, loc, scaleBits, minScale);
   Value scaleFP =
       BitcastOp::create(rewriter, loc, scaleTy.clone(largeFpType), scaleBits);
   if (handleNan) {
@@ -111,10 +108,6 @@ DecomposeScaledBlocked::scaleTo16(PatternRewriter &rewriter,
         arith::ConstantOp::create(rewriter, loc, scaleFP.getType(),
                                   rewriter.getZeroAttr(scaleFP.getType()));
     scaleFP = math::FmaOp::create(rewriter, loc, scaleFP, zero, scaleFP);
-  }
-  if (largeFpType != computeType) {
-    scaleFP = arith::TruncFOp::create(rewriter, loc, scaleTy.clone(computeType),
-                                      scaleFP);
   }
   return cast<TypedValue<RankedTensorType>>(scaleFP);
 }
@@ -193,7 +186,8 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::maskNan(
   TypedValue<RankedTensorType> scaleIsNan;
   if (isa<FloatType>(scaleTy.getElementType())) {
     auto computeType = cast<FloatType>(mxfp.getType().getElementType());
-    auto scaleFp = scaleTo16(rewriter, scale, computeType, /*handleNan=*/true);
+    auto scaleFp =
+        decodeScale(rewriter, scale, computeType, /*handleNan=*/true);
     scaleIsNan = cast<TypedValue<RankedTensorType>>(
         arith::CmpFOp::create(rewriter, loc, arith::CmpFPredicate::UNO, scaleFp,
                               scaleFp)
@@ -251,11 +245,20 @@ DecomposeScaledBlocked::scaleArg(PatternRewriter &rewriter,
   if (!scale)
     return v;
 
-  // Cast scale to fp16/bf16, broadcast it and convert its layout.
   auto reshapeScale = extendAndBroadcastScale(
       rewriter, scaledDotOp, scale, computeType, v.getType(), opIdx,
       /*handleNan=*/!scaledDotOp.getFastMath());
 
+  // An E8M0 scale can overflow or underflow f16 even when the scaled
+  // operand fits. Round the product to f16 after applying the scale in f32.
+  if (reshapeScale.getType().getElementType().isF32()) {
+    auto extended = arith::ExtFOp::create(rewriter, loc, reshapeScale.getType(),
+                                          v, arith::FastMathFlagsAttr{});
+    auto product = arith::MulFOp::create(rewriter, loc, extended, reshapeScale);
+    return cast<TypedValue<RankedTensorType>>(
+        arith::TruncFOp::create(rewriter, loc, v.getType(), product)
+            .getResult());
+  }
   return cast<TypedValue<RankedTensorType>>(
       arith::MulFOp::create(rewriter, loc, v, reshapeScale).getResult());
 }
@@ -279,11 +282,8 @@ TypedValue<RankedTensorType> DecomposeScaledBlocked::extendAndBroadcastScale(
     scale = TransOp::create(rewriter, loc, scale, order);
   }
 
-  // 1) Cast scale to compute type (fp16/bf16)
-  auto scale16 = scaleTo16(rewriter, scale, computeType, handleNan);
-
-  // 2) Broadcast scale to the same shape as v and convert the layout
-  return broadcastScale(rewriter, scaledDotOp, scale16, kDim,
+  auto decoded = decodeScale(rewriter, scale, computeType, handleNan);
+  return broadcastScale(rewriter, scaledDotOp, decoded, kDim,
                         dstType.getEncoding());
 }
 
