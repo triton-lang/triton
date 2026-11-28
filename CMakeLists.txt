@@ -137,7 +137,13 @@ execute_process(
 )
 include("${TRITON_THIRD_PARTY_CMAKE_VARS_FILE}")
 
-if(TRITON_BUILD_PYTHON_MODULE)
+if(TRITON_BUILD_PYTHON_MODULE AND
+   ("nvidia" IN_LIST TRITON_CODEGEN_BACKENDS OR
+    "amd" IN_LIST TRITON_CODEGEN_BACKENDS OR TRITON_BUILD_PROTON))
+  set(TRITON_GPU_DEPENDENCY_ARGS --backends ${TRITON_CODEGEN_BACKENDS})
+  if(TRITON_BUILD_PROTON)
+    list(APPEND TRITON_GPU_DEPENDENCY_ARGS --build-proton)
+  endif()
   set_property(
     DIRECTORY
     APPEND
@@ -156,6 +162,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
             ${CMAKE_CURRENT_SOURCE_DIR}/python/build_helpers.py
             download_and_copy_dependencies
             ${TRITON_BUILD_HELPER_COMMON_ARGS}
+            ${TRITON_GPU_DEPENDENCY_ARGS}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMAND_ERROR_IS_FATAL ANY
   )
@@ -356,6 +363,14 @@ if(TRITON_BUILD_PYTHON_MODULE)
 
   foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
     add_subdirectory(third_party/${CODEGEN_BACKEND})
+  endforeach()
+
+  # Shared TritonGPU, Gluon, and Proton code also needs the compiler libraries
+  # of backends whose Python plugins are disabled.
+  foreach(COMPILER_BACKEND IN ITEMS nvidia amd)
+    if(NOT "${COMPILER_BACKEND}" IN_LIST TRITON_CODEGEN_BACKENDS)
+      add_subdirectory(third_party/${COMPILER_BACKEND})
+    endif()
   endforeach()
 
   if (TRITON_BUILD_PROTON)

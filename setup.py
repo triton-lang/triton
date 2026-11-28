@@ -203,6 +203,13 @@ class CMakeBuildPy(build_py):
 
     def run(self) -> None:
         self.run_command('build_ext')
+        python_dir = Path(__file__).resolve().parent / "python"
+        for link, _ in get_disabled_backend_paths():
+            staged = Path(self.build_lib) / link.relative_to(python_dir)
+            if staged.is_symlink():
+                staged.unlink()
+            elif staged.is_dir():
+                shutil.rmtree(staged)
         return super().run()
 
 
@@ -397,7 +404,31 @@ class CMakeBuild(build_ext):
                                   cwd=cmake_dir)
 
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+def get_codegen_backends():
+    # Match CMake's semicolon-separated list; an empty value selects no in-tree backends.
+    selected = os.getenv("TRITON_CODEGEN_BACKENDS", "nvidia;amd")
+    names = list(dict.fromkeys(name.strip() for name in selected.split(";") if name.strip()))
+    unsupported = set(names) - {"nvidia", "amd"}
+    if unsupported:
+        raise ValueError(f"Unsupported in-tree backends: {', '.join(sorted(unsupported))}. "
+                         "Use TRITON_PLUGIN_DIRS for external backends.")
+    return names
+
+
+backends = [*BackendInstaller.copy(get_codegen_backends()), *BackendInstaller.copy_externals()]
+
+
+def get_disabled_backend_paths():
+    root = Path(__file__).resolve().parent
+    selected = {backend.name for backend in backends}
+    for name in sorted({"nvidia", "amd"} - selected):
+        source = root / "third_party" / name
+        yield root / "python/triton/backends" / name, source / "backend"
+        for kind in ("language", "tools"):
+            extra = source / kind
+            if extra.is_dir():
+                for entry in extra.iterdir():
+                    yield root / "python/triton" / kind / "extra" / entry.name, entry
 
 
 def get_package_dirs():
@@ -428,7 +459,12 @@ def get_package_dirs():
 
 
 def get_packages():
-    yield from find_packages(where="python")
+    python_dir = Path(__file__).resolve().parent / "python"
+    excluded = []
+    for link, _ in get_disabled_backend_paths():
+        package = ".".join(link.relative_to(python_dir).parts)
+        excluded.extend((package, package + ".*"))
+    yield from find_packages(where="python", exclude=excluded)
 
     for backend in backends:
         yield f"triton.backends.{backend.name}"
@@ -450,6 +486,10 @@ def get_packages():
 
 
 def add_link_to_backends(external_only):
+    for link, source in get_disabled_backend_paths():
+        if link.is_symlink() and link.resolve() == source.resolve():
+            link.unlink()
+
     for backend in backends:
         if external_only and not backend.is_external:
             continue
