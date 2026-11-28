@@ -198,6 +198,9 @@ public:
   bool supportsBufferAtomicFadd(mlir::Type elementType) const {
     return targetFeatures.supportsBufferAtomicFadd(elementType);
   }
+  bool supportsBufferAtomicFMinMax(mlir::Type elementType) const {
+    return targetFeatures.supportsBufferAtomicFMinMax(elementType);
+  }
   // Returns the cache policy (cpol) immediate for buffer atomic instructions.
   // When hasUsers is true, sets SC0/TH_ATOMIC_RETURN to return pre-op value.
   // On CDNA5, also sets SCOPE_DEV for device-wide visibility.

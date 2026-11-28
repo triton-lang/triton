@@ -557,12 +557,16 @@ LogicalResult verifyRegisterConsecutiveGroups(Operation *op,
   return success();
 }
 
-std::optional<TargetFeatures> getScaledUpcastTarget(Operation *op) {
+std::optional<TargetFeatures> getModuleTargetFeatures(Operation *op) {
   auto module = op->getParentOfType<ModuleOp>();
   if (!module)
     return std::nullopt;
-  TargetFeatures features = TargetFeatures::fromModuleOp(module);
-  if (!features.supportsHwScaledUpcast())
+  return TargetFeatures::tryFromModuleOp(module);
+}
+
+std::optional<TargetFeatures> getScaledUpcastTarget(Operation *op) {
+  auto features = getModuleTargetFeatures(op);
+  if (!features || !features->supportsHwScaledUpcast())
     return std::nullopt;
   return features;
 }
@@ -707,10 +711,15 @@ std::optional<Attribute> inferScaledDowncastScaleEncoding(OpT op,
       op.getContext(), compact->removeZeroBasesAlongDim(kRegister));
 }
 
+// Verifies that the scale's shape and layout fit the output and the target's
+// v_cvt_scalef32 groups. Sizes are in dst elements: a packed fp4 element is one
+// i8 holding two fp4 values.
 template <typename OpT>
-LogicalResult verifyScaledDowncastScaleLayout(OpT op, int64_t groupSize,
-                                              StringRef groupDescription,
-                                              StringRef blockDescription) {
+LogicalResult verifyScaledDowncastScaleLayout(OpT op, int64_t packFactor,
+                                              StringRef valueName) {
+  auto countOf = [](int64_t count, StringRef noun) {
+    return (Twine(count) + " " + noun + (count == 1 ? "" : "s")).str();
+  };
   auto scaleTy = op.getScale().getType();
   auto outputTy = op.getOutput().getType();
   auto scaleEnc = scaleTy.getEncoding();
@@ -721,42 +730,59 @@ LogicalResult verifyScaledDowncastScaleLayout(OpT op, int64_t groupSize,
   if (!scaleEnc)
     return success();
 
+  std::optional<int64_t> groupSize;
+  if (auto features = getModuleTargetFeatures(op)) {
+    groupSize = features->getScaledDowncastGroupSize(packFactor);
+    if (!groupSize)
+      return op.emitError() << "scaled downcast requires a CDNA4 or CDNA5 "
+                               "target, but the module targets "
+                            << features->getArch();
+  }
+
   auto elementsPerBlock = scaledDowncastScaleBlock(op);
   if (!elementsPerBlock)
     return op.emitError() << "scale shape is not compatible with the output "
                              "shape along the scaled axis";
-  if (*elementsPerBlock == 1)
-    return op.emitError()
-           << "scaled_downcast requires compact scales along the scaled axis; "
-              "expanded scales (one scale per output element) are not "
-              "supported";
-  if (*elementsPerBlock % groupSize != 0)
-    return op.emitError()
-           << "each scale block along the scaled axis must cover "
-           << blockDescription << ", but got " << *elementsPerBlock
-           << " output elements per scale";
-  auto outputLL = gpu::toLinearLayout(
-      outputTy.getShape(), cast<gpu::LayoutEncodingTrait>(outputEnc));
+  if (groupSize && *elementsPerBlock % *groupSize != 0) {
+    InFlightDiagnostic diag = op.emitError();
+    diag << "each scale block along the scaled axis must cover a multiple of "
+         << countOf(*groupSize * packFactor, valueName);
+    if (packFactor > 1)
+      diag << " (" << countOf(*groupSize, "packed byte") << ")";
+    diag << ", but got " << countOf(*elementsPerBlock * packFactor, valueName);
+    if (packFactor > 1)
+      diag << " (" << countOf(*elementsPerBlock, "packed byte") << ")";
+    return diag << " per scale";
+  }
+
+  // The lowering converts each thread's unique values, so form groups after
+  // dropping registers that repeat an element.
+  auto kRegister = StringAttr::get(op.getContext(), "register");
+  auto outputLL = gpu::toLinearLayout(outputTy.getShape(),
+                                      cast<gpu::LayoutEncodingTrait>(outputEnc))
+                      .removeZeroBasesAlongDim(kRegister);
   auto compact =
       OpT::computeScaleLayout(outputLL, op.getAxis(), *elementsPerBlock);
   if (!compact)
     return op.emitError() << "the scale block along the scaled axis must be a "
                              "power of two";
 
-  auto kRegister = StringAttr::get(op.getContext(), "register");
-  if (!groupSharesSingleScale(*compact, kRegister, groupSize))
-    return op.emitError()
-           << "each v_cvt_scalef32_pk8 group of " << groupDescription
-           << " must share a single scale; the scale block along the scaled "
-              "axis must be a "
-           << blockDescription;
+  // The lowering zero-pads a thread with fewer values than a group, so those
+  // values only need to share one scale.
+  if (groupSize &&
+      !groupSharesSingleScale(
+          *compact, kRegister,
+          std::min<int64_t>(*groupSize, compact->getInDimSize(kRegister))))
+    return op.emitError() << "each v_cvt_scalef32 group of "
+                          << countOf(*groupSize * packFactor, valueName)
+                          << " must share a single scale, but the layout "
+                             "places a thread's group in more than one scale "
+                             "block";
 
-  auto stripRegisters = [&](RankedTensorType type, Attribute enc) {
-    return gpu::toLinearLayout(type.getShape(),
-                               cast<gpu::LayoutEncodingTrait>(enc))
-        .removeZeroBasesAlongDim(kRegister);
-  };
-  auto actualLayout = stripRegisters(scaleTy, scaleEnc);
+  auto actualLayout =
+      gpu::toLinearLayout(scaleTy.getShape(),
+                          cast<gpu::LayoutEncodingTrait>(scaleEnc))
+          .removeZeroBasesAlongDim(kRegister);
   auto expectedLayout = compact->removeZeroBasesAlongDim(kRegister);
   if (actualLayout != expectedLayout)
     return op.emitError()
@@ -1231,9 +1257,8 @@ LogicalResult ScaledDowncastFp4Op::verify() {
   if (failed(verifyScaledDowncastScaleShapeAndAxis(*this, outputTy, scaleTy)))
     return failure();
 
-  if (failed(verifyScaledDowncastScaleLayout(
-          *this, /*groupSize=*/4, /*groupDescription=*/"8 fp4 values",
-          /*blockDescription=*/"a multiple of 8 fp4 values (4 packed bytes)")))
+  if (failed(verifyScaledDowncastScaleLayout(*this, /*packFactor=*/2,
+                                             /*valueName=*/"fp4 value")))
     return failure();
 
   // Reuse fp4tofp verifier for packed/unpacked relationship
@@ -1341,10 +1366,8 @@ LogicalResult ScaledDowncastFp8Op::verify() {
   if (failed(verifyScaledDowncastScaleShapeAndAxis(*this, outputTy, scaleTy)))
     return failure();
 
-  return verifyScaledDowncastScaleLayout(
-      *this, /*groupSize=*/8,
-      /*groupDescription=*/"8 elements",
-      /*blockDescription=*/"a multiple of 8 elements");
+  return verifyScaledDowncastScaleLayout(*this, /*packFactor=*/1,
+                                         /*valueName=*/"fp8 value");
 }
 
 Attribute ScaledDowncastFp8Op::inferDstEncoding(unsigned opIdx,
@@ -1600,10 +1623,16 @@ LogicalResult BufferAtomicStoreOp::verify() {
 }
 
 LogicalResult BufferAtomicRMWOp::verify() {
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 
 LogicalResult BufferAtomicCASOp::verify() {
+  if (failed(
+          verifyBufferScalarOffset(getOperation(), getSoffset(), getOffsets())))
+    return failure();
   return verifyBufferWriteBase(getOperation(), getPtr());
 }
 

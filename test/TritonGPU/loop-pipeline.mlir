@@ -311,7 +311,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:   %[[LOCAL_ALLOC_12:.*]] = ttg.local_alloc
 //       AMD:   %[[CMPI_13:.*]] = arith.cmpi slt, %{{.*}}, %{{.*}}
 //       AMD:   %[[SPLAT_14:.*]] = tt.splat %[[CMPI_13]]
-//       AMD:   %[[LOAD_15:.*]] = tt.load %{{[^, ]+}}, %[[SPLAT_14]] {amd.pipeliner_part = "prologue"}
+//       AMD:   %[[LOAD_15:.*]] = tt.load %{{[^, ]+}}, %[[SPLAT_14]] :
 //       AMD:   %[[MEMDESC_SUBVIEW_16:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_15]], %[[MEMDESC_SUBVIEW_16]]
 //       AMD:   %[[SUBI_17:.*]] = arith.subi %{{.*}}, %{{.*}}
@@ -404,14 +404,14 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     %[[LOCAL_ALLOC_0:.*]] = ttg.local_alloc
 //       AMD:     %[[LOCAL_ALLOC_1:.*]] = ttg.local_alloc
 //       AMD:     %[[CMPI_2:.*]] = arith.cmpi sgt, %{{.*}}, %{{.*}}
-//       AMD:     %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]] {amd.pipeliner_part = "prologue"}
+//       AMD:     %[[LOAD_5:.*]] = tt.load %{{.*}}, %[[CMPI_2]] :
 //       AMD:     %[[SPLAT_3:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] {amd.pipeliner_part = "prologue"}
+//       AMD:     %[[LOAD_4:.*]] = tt.load %{{.*}}, %[[SPLAT_3]] :
 //       AMD:     %[[MULI_6:.*]] = arith.muli %{{.*}}, %[[LOAD_5]]
 //       AMD:     %[[SPLAT_7:.*]] = tt.splat %[[MULI_6]]
 //       AMD:     %[[ADDPTR_8:.*]] = tt.addptr %{{.*}}, %[[SPLAT_7]]
 //       AMD:     %[[SPLAT_9:.*]] = tt.splat %[[CMPI_2]]
-//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] {amd.pipeliner_part = "prologue"}
+//       AMD:     %[[LOAD_10:.*]] = tt.load %[[ADDPTR_8]], %[[SPLAT_9]] :
 //       AMD:     %[[MEMDESC_SUBVIEW_11:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_0]]{{\[}}%{{.*}}{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_11]]
 //       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%{{.*}}{{\]}}

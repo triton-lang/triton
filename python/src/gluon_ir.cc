@@ -1382,7 +1382,7 @@ void init_gluon_ir(py::module_ &m) {
               Value mask) -> Value {
              return self.create<ttag::BufferAtomicRMWOp>(
                  value.getType(), op, ptr, offsets, value, Value() /*stride*/,
-                 sem, scope, mask);
+                 sem, scope, mask, /*soffset=*/Value());
            })
       .def(
           "create_buffer_desc_load_to_local",

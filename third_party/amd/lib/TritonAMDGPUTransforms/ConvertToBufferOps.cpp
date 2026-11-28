@@ -310,7 +310,7 @@ struct ConvertTritonAtomicCASOpToBufferAtomicCAS
         op->getLoc(), op);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicCASOp>(
         op, op.getVal().getType(), basePtr, tensorOffset, op.getCmp(),
-        op.getVal(), blockStride, sem, scope);
+        op.getVal(), blockStride, sem, scope, /*soffset=*/Value());
     return success();
   }
 
@@ -473,7 +473,8 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
         op->getLoc(), op);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicRMWOp>(
         op, op.getVal().getType(), atomicRmwOp, basePtr, tensorOffset,
-        op.getVal(), blockStride, sem, scope, op.getMask());
+        op.getVal(), blockStride, sem, scope, op.getMask(),
+        /*soffset=*/Value());
 
     return success();
   }

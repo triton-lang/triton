@@ -88,11 +88,13 @@ struct BufferEmitter {
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
   Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
-                      Value data, Value pred, bool hasUsers);
+                      Value data, Value pred, bool hasUsers,
+                      Value soffsetBytes = {});
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.cmpswap
   Value emitAtomicCAS(Type type, Value rsrcDesc, Value offset, Value casCmpVal,
-                      Value casStoreVal, Value pred, bool hasUsers);
+                      Value casStoreVal, Value pred, bool hasUsers,
+                      Value soffsetBytes = {});
 
   // Emit a predicated rocdl.raw.ptr.buffer.store
   void emitStore(Value rsrcDesc, Value offset, Value soffsetBytes, Value data,

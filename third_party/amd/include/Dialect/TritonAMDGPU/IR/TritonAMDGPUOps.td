@@ -432,11 +432,11 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   BufferOpInterface,
   DeclareOpInterfaceMethods<PredicatedOpInterface>,
   TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  TypesMatchWith<"result element type matches the element type of buffer base", "result", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
-  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  TypesMatchWith<"value element type matches the element type of buffer base", "value", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
@@ -444,7 +444,8 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     let summary = "Atomic RMW op which reads, modifies, and writes to a scalar base pointer and a tensor offset";
     let description = [{
         AMD Buffer atomic RMW operation. Buffer atomics are similar to normal atomics, but access global memory via a
-        scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+        scalar base pointer or buffer descriptor and a tensor of offsets instead of a tensor of pointers.
+        Addressing and descriptor bounds follow BufferOpInterface; soffset counts elements.
         Similar to other buffer ops, the `mask` is a boolean vector that determines if a given element should be processed with
         the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
         Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr with
@@ -455,13 +456,14 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     }];
     let arguments = (ins
       TT_AtomicRMWAttr:$atomic_rmw_op,
-      Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      Arg<TTAMDG_BufferBase, "Global memory pointer or buffer descriptor", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       TT_Tensor:$value,
       Optional<I32>:$stride,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope,
-      Optional<TT_BoolTensor>:$mask
+      Optional<TT_BoolTensor>:$mask,
+      Optional<TTAMDG_ScalarOffset>:$soffset
     );
     let results = (outs TT_Tensor:$result);
 
@@ -469,7 +471,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-        (`stride` `=` $stride^)?
+        (`stride` `=` $stride^)? (`soffset` `=` $soffset^ `:` type($soffset))?
         attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
@@ -479,11 +481,12 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 //===----------------------------------------------------------------------===//
 def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
   AtomicOpInterface,
+  AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
   BufferOpInterface,
   TypesMatchWith<"result element type matches the val type", "result", "val", "$_self">,
   TypesMatchWith<"result element type matches the cmp type", "result", "cmp", "$_self">,
-  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "$_self", "::mlir::triton::elementTypeMatchesPointee">,
+  TypesMatchWith<"result element type matches the element type of buffer base", "result", "ptr", "$_self", "::mlir::triton::amdgpu::elementTypeMatchesBufferBase">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"val and offsets have the same shape", "val", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"val and cmp have the same shape", "val", "cmp", "$_self">,
@@ -491,7 +494,8 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
     let summary = "Atomic CAS op which does compare-exchange to a scalar base pointer and a tensor offset";
     let description = [{
         AMD Buffer Atomic CAS operation. Buffer atomics are similar to normal atomics, but access global memory via a
-        scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+        scalar base pointer or buffer descriptor and a tensor of offsets instead of a tensor of pointers.
+        Addressing and descriptor bounds follow BufferOpInterface; soffset counts elements.
         Similar to TT_AtomicCASOp: Buffer atomic CAS op loads data at $ptr, and stores $val to $ptr atomically if value at $ptr equals $cmp, with
         the specified memory semantics and scope. Atomic CAS ops return the pre-op value if used, otherwise the value is implicitly dropped.
         Stride is the distance between the beginning of contiguous memory chunks. When performing a CAS, the `stride` is
@@ -499,13 +503,14 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
         when it converts to the buffer ops because it is important for optimizing the cache memory access.
     }];
     let arguments = (ins
-      Arg<TT_Ptr, "Global memory pointer", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
+      Arg<TTAMDG_BufferBase, "Global memory pointer or buffer descriptor", [MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>:$ptr,
       I32Tensor:$offsets,
       TT_Tensor:$cmp,
       TT_Tensor:$val,
       Optional<I32>:$stride,
       TT_MemSemanticAttr:$sem,
-      TT_MemSyncScopeAttr:$scope
+      TT_MemSyncScopeAttr:$scope,
+      Optional<TTAMDG_ScalarOffset>:$soffset
     );
     let results = (outs TT_Tensor:$result);
 
@@ -513,7 +518,7 @@ def BufferAtomicCASOp : TT_AMDGPU_Op<"buffer_atomic_cas", [
 
     let assemblyFormat = [{
         $sem `,` $scope `,` $cmp `,` $val `,` $ptr `[` $offsets `]`
-        (`stride` `=` $stride^)?
+        (`stride` `=` $stride^)? (`soffset` `=` $soffset^ `:` type($soffset))?
         attr-dict `:` qualified(type($ptr)) `->` type($result)
     }];
 }
@@ -825,11 +830,11 @@ def ScaledDowncastFp4Op : TT_AMDGPU_Op<"scaled_downcast_fp4", [
     half the input extent (the inverse of `scaled_upcast_fp4`).
 
     The `axis` attribute identifies the dimension along which the fp4 elements
-    are packed and along which scales are shared. The scale must be compact
-    along `axis`: one raw E8M0 i8 payload covers multiple consecutive packed
-    bytes along that axis (unlike :func:`scaled_upcast_fp4`, expanded scales
-    with one scale per output element are not supported). Each scale block along
-    `axis` must cover a multiple of 8 fp4 values.
+    are packed and along which scales are shared. Each raw E8M0 i8 scale covers
+    a block of consecutive fp4 values along `axis`, so both values of a packed
+    byte always share one scale (unlike :func:`scaled_upcast_fp4`, which also
+    accepts one scale per fp4 value). Each block must cover a multiple of 8 fp4
+    values (4 packed bytes) on CDNA5, or 2 fp4 values (1 packed byte) on CDNA4.
 
     This will be hardware accelerated on architectures supporting
     `v_cvt_scalef32_pk_*` instructions (e.g. CDNA4 and CDNA5).
@@ -885,7 +890,7 @@ def ScaledDowncastFp8Op : TT_AMDGPU_Op<"scaled_downcast_fp8", [
     covers multiple consecutive output elements along that axis (unlike
     :func:`scaled_upcast_fp8`, expanded scales with one scale per output element
     are not supported). Each scale block along `axis` must cover a multiple of 8
-    output elements.
+    output elements on CDNA5, or 2 on CDNA4.
 
     This will be hardware accelerated on architectures supporting
     `v_cvt_scalef32_pk_{fp8,bf8}_*` instructions (e.g. CDNA4 and CDNA5).
