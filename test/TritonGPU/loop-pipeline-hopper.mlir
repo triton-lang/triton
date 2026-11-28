@@ -19,7 +19,7 @@
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
 // CHECK: %[[ABUFFER:.*]] = ttg.local_alloc
 // CHECK: %[[BBUFFER:.*]] = ttg.local_alloc
-// CHECK-DAG: %[[LOOP_COND_0:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
+// CHECK-DAG: %[[LOOP_COND_0:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]] : index
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[ASUB:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}} : !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable> -> !ttg.memdesc<128x32xf16, #shared, #smem, mutable>
 // CHECK: %[[T_A0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]]
@@ -28,8 +28,15 @@
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] {contiguity = 4 : i32} : tensor<32x128x!tt.ptr<f16>, #blocked> -> <32x128xf16, #shared1, #smem, mutable>
-// CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
-// CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
+// CHECK:     %[[LB_I64:.*]] = arith.index_cast %[[LB]] : index to i64
+// CHECK:     %[[STEP_I64:.*]] = arith.index_cast %[[STEP:.*]] : index to i64
+// CHECK:     %[[UB_I64:.*]] = arith.index_cast %[[UB]] : index to i64
+// CHECK:     %[[IN_ORDER:.*]] = arith.cmpi slt, %[[LB_I64]], %[[UB_I64]] : i64
+// CHECK:     %[[DIFF:.*]] = arith.subi %[[UB_I64]], %[[LB_I64]] : i64
+// CHECK:     %[[STEP_NONNEG:.*]] = arith.cmpi sge, %[[STEP_I64]], %{{.*}} : i64
+// CHECK:     %[[FITS:.*]] = arith.cmpi ult, %[[STEP_I64]], %[[DIFF]] : i64
+// CHECK:     %[[STEP_FITS:.*]] = arith.andi %[[STEP_NONNEG]], %[[FITS]] : i1
+// CHECK:     %[[LOOP_COND_1:.*]] = arith.andi %[[IN_ORDER]], %[[STEP_FITS]] : i1
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
 // CHECK-DAG: %[[ASUB1:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK: %[[T_A1:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB1]] mask %[[LOOP_COND_1_SPLAT_A]]

@@ -69,10 +69,12 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.tensordesc<128x64xf16, #
   // CHECK-SAME: [[RHS_BUF_IDX:%arg[0-9]+]] = %c-1_i32
   // CHECK-SAME: [[RHS_PHASE_ARG:%arg[0-9]+]] = %c0_i32
   %3 = scf.for %arg6 = %c0_i32 to %arg3 step %c1_i32 iter_args(%arg7 = %cst) -> (tensor<128x256xf32, #mma>)  : i32 {
-    // CHECK: [[RHS_MAX_ITER:%.*]] = arith.subi %arg3, %c3_i32
-    // CHECK-NEXT: [[RHS_MASK:%.*]] = arith.cmpi slt, [[I]], [[RHS_MAX_ITER]]
-    // CHECK: [[LHS_MAX_ITER:%.*]] = arith.subi %arg3, %c1_i32
-    // CHECK-NEXT: [[LHS_MASK:%.*]] = arith.cmpi slt, [[I]], [[LHS_MAX_ITER]]
+    // CHECK-DAG: [[I64:%.*]] = arith.extsi [[I]] : i32 to i64
+    // CHECK-DAG: [[UB64:%.*]] = arith.extsi %arg3 : i32 to i64
+    // CHECK: [[RHS_MAX_ITER:%.*]] = arith.subi [[UB64]], %c3_i64 : i64
+    // CHECK-NEXT: [[RHS_MASK:%.*]] = arith.cmpi slt, [[I64]], [[RHS_MAX_ITER]] : i64
+    // CHECK: [[LHS_MAX_ITER:%.*]] = arith.subi [[UB64]], %c1_i64 : i64
+    // CHECK-NEXT: [[LHS_MASK:%.*]] = arith.cmpi slt, [[I64]], [[LHS_MAX_ITER]] : i64
 
     // Compute RHS buffer index modulo 4.
     // CHECK: [[V0:%.*]] = arith.addi [[RHS_BUF_IDX]], %c1_i32

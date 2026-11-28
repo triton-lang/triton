@@ -21,15 +21,22 @@
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
 // CHECK: %[[ABUFFER:.*]] = ttg.local_alloc
 // CHECK: %[[BBUFFER:.*]] = ttg.local_alloc
-// CHECK-DAG: %[[LOOP_COND_0:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
+// CHECK-DAG: %[[LOOP_COND_0:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]] : index
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[ASUB:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK: %[[T_A0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB]] mask %[[LOOP_COND_0_SPLAT_A]]
 // CHECK-DAG: %[[LOOP_COND_0_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_0]]
 // CHECK-DAG: %[[BSUB:.*]] = ttg.memdesc_index %[[BBUFFER]]{{\[}}%[[CONSTANT_0]]{{\]}}
 // CHECK: %[[T_B0:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB]] mask %[[LOOP_COND_0_SPLAT_B]] {
-// CHECK-DAG: %[[IV_1:.*]] = arith.addi %[[LB]], %[[STEP:.*]]
-// CHECK-DAG: %[[LOOP_COND_1:.*]] = arith.cmpi slt, %[[IV_1]], %[[UB]]
+// CHECK:     %[[LB_I64:.*]] = arith.index_cast %[[LB]] : index to i64
+// CHECK:     %[[STEP_I64:.*]] = arith.index_cast %[[STEP:.*]] : index to i64
+// CHECK:     %[[UB_I64:.*]] = arith.index_cast %[[UB]] : index to i64
+// CHECK:     %[[IN_ORDER:.*]] = arith.cmpi slt, %[[LB_I64]], %[[UB_I64]] : i64
+// CHECK:     %[[DIFF:.*]] = arith.subi %[[UB_I64]], %[[LB_I64]] : i64
+// CHECK:     %[[STEP_NONNEG:.*]] = arith.cmpi sge, %[[STEP_I64]], %{{.*}} : i64
+// CHECK:     %[[FITS:.*]] = arith.cmpi ult, %[[STEP_I64]], %[[DIFF]] : i64
+// CHECK:     %[[STEP_FITS:.*]] = arith.andi %[[STEP_NONNEG]], %[[FITS]] : i1
+// CHECK:     %[[LOOP_COND_1:.*]] = arith.andi %[[IN_ORDER]], %[[STEP_FITS]] : i1
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_A:.*]] = tt.splat %[[LOOP_COND_1]]
 // CHECK-DAG: %[[ASUB1:.*]] = ttg.memdesc_index %[[ABUFFER]]{{\[}}%[[CONSTANT_1]]{{\]}}
 // CHECK: %[[T_A1:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[ASUB1]] mask %[[LOOP_COND_1_SPLAT_A]]
@@ -57,10 +64,9 @@
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
 
 // AMD-LABEL:  tt.func @matmul_loop
-//   AMD-DAG:   %[[CM1:.*]] = arith.constant -1 : index
-//   AMD-DAG:   %[[C1:.*]] = arith.constant 1 : index
-//   AMD-DAG:   %[[C0:.*]] = arith.constant 0 : index
-//       AMD:   %[[UB1:.*]] = arith.subi %[[UB:.*]], %arg2 : index
+//   AMD-DAG:   %[[C0_I64:.*]] = arith.constant 0 : i64
+//   AMD-DAG:   %[[C1_I64:.*]] = arith.constant 1 : i64
+//       AMD:   %[[UB1:.*]] = arith.index_cast %{{.*}} : i64 to index
 //       AMD:   %[[FOR:.*]]:6 = scf.for %[[ARG5:.*]] = %[[LB:.*]] to %[[UB1]] step %[[STEP:.*]] iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %{{.*}})
 //       AMD:     %[[ADDPTR_34:.*]] = tt.addptr %[[ARG6]], %{{.*}}
 //       AMD:     %[[ADDPTR_35:.*]] = tt.addptr %[[ARG7]], %{{.*}}
@@ -79,13 +85,15 @@
 //       AMD:     ttg.local_store %[[LOAD_38]], %[[MEMDESC_SUBVIEW_46]]
 //       AMD:     scf.yield %[[ADDPTR_34]], %[[ADDPTR_35]], %[[DOT_41]], %[[SELECT_44]], %[[MEMDESC_SUBVIEW_45]], %[[MEMDESC_SUBVIEW_46]]
 //       AMD:   }
-//       AMD:   %[[CMPI_21:.*]] = arith.cmpi slt, %[[STEP]], %[[C0]]
-//       AMD:   %[[SELECT_22:.*]] = arith.select %[[CMPI_21]], %[[C1]], %[[CM1]]
-//       AMD:   %[[SUBI_23:.*]] = arith.subi %[[UB]], %[[LB]]
-//       AMD:   %[[ADDI_24:.*]] = arith.addi %[[SUBI_23]], %[[STEP]]
-//       AMD:   %[[ADDI_25:.*]] = arith.addi %[[ADDI_24]], %[[SELECT_22]]
-//       AMD:   %[[DIVSI_26:.*]] = arith.divsi %[[ADDI_25]], %[[STEP]]
-//       AMD:   %[[CMPI_27:.*]] = arith.cmpi sge, %[[DIVSI_26]], %{{.*}}
+//       AMD:   %[[CMPI_21:.*]] = arith.cmpi slt, %{{.*}}, %[[C0_I64]] : i64
+//       AMD:   %[[SELECT_22:.*]] = arith.select %[[CMPI_21]], %{{.*}}, %{{.*}} : i1
+//       AMD:   %[[SPAN:.*]] = arith.select %[[CMPI_21]], %{{.*}}, %{{.*}} : i64
+//       AMD:   %[[ABS_STEP:.*]] = arith.select %[[CMPI_21]], %{{.*}}, %{{.*}} : i64
+//       AMD:   %[[SPAN_M1:.*]] = arith.subi %[[SPAN]], %[[C1_I64]] : i64
+//       AMD:   %[[DIVUI:.*]] = arith.divui %[[SPAN_M1]], %[[ABS_STEP]] : i64
+//       AMD:   %[[CEIL_DIV:.*]] = arith.addi %[[DIVUI]], %[[C1_I64]] : i64
+//       AMD:   %[[TOTAL_ITERS:.*]] = arith.select %[[SELECT_22]], %[[CEIL_DIV]], %[[C0_I64]] : i64
+//       AMD:   %[[CMPI_27:.*]] = arith.cmpi {{(uge|ugt|ne)}}, %[[TOTAL_ITERS]], %{{.*}} : i64
 //       AMD:   %[[LOCAL_LOAD_28:.*]] = ttg.local_load %{{.*}}#4
 //       AMD:   %[[LOCAL_LOAD_29:.*]] = ttg.local_load %{{.*}}#5
 //       AMD:   %[[MULF_30:.*]] = arith.mulf %[[LOCAL_LOAD_29]], %{{.*}}
@@ -314,7 +322,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 //       AMD:   %[[LOAD_15:.*]] = tt.load %{{[^, ]+}}, %[[SPLAT_14]] :
 //       AMD:   %[[MEMDESC_SUBVIEW_16:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_12]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_15]], %[[MEMDESC_SUBVIEW_16]]
-//       AMD:   %[[SUBI_17:.*]] = arith.subi %{{.*}}, %{{.*}}
+//       AMD:   %[[SUBI_17:.*]] = arith.index_cast %{{.*}} : i64 to index
 //       AMD:   %{{.*}}:4 = scf.for %[[ARG5:.*]] = %{{.*}} to %[[SUBI_17]] step %{{.*}} iter_args(%[[ARG6:.*]] = %{{.*}}, %[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[MEMDESC_SUBVIEW_16]])
 //       AMD:       %[[ADDPTR_32:.*]] = tt.addptr %[[ARG6]], %{{.*}}
 //       AMD:       %[[LOAD_33:.*]] = tt.load %[[ADDPTR_32]]
@@ -416,7 +424,7 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:     ttg.local_store %[[LOAD_4]], %[[MEMDESC_SUBVIEW_11]]
 //       AMD:     %[[MEMDESC_SUBVIEW_12:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%{{.*}}{{\]}}
 //       AMD:     ttg.local_store %[[LOAD_10]], %[[MEMDESC_SUBVIEW_12]]
-//       AMD:     %[[SUBI_26:.*]] = arith.subi %{{.*}}, %{{.*}}
+//       AMD:     %[[SUBI_26:.*]] = arith.index_cast %{{.*}} : i64 to index
 //       AMD:     %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_26]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %{{.*}}, %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_11]], %[[ARG12:.*]] = %{{.*}}, %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_12]])
 //       AMD:       %[[ADDPTR_38:.*]] = tt.addptr %[[ARG8]], %{{.*}}
 //       AMD:       %[[ADDPTR_39:.*]] = tt.addptr %[[ARG9]], %{{.*}}
@@ -438,8 +446,8 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD:       ttg.local_store %[[LOAD_46]], %[[MEMDESC_SUBVIEW_53]]
 //       AMD:       scf.yield %[[DOT_48]], %[[ADDPTR_38]], %[[ADDPTR_39]], %[[SELECT_51]], %[[MEMDESC_SUBVIEW_52]], %[[LOAD_42]], %[[MEMDESC_SUBVIEW_53]]
 //       AMD:     } {tt.num_stages = 3
-//       AMD:     %[[CMPI_28:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
-//       AMD:     %[[CMPI_29:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
+//       AMD:     %[[CMPI_28:.*]] = arith.cmpi uge, %{{.*}}, %{{.*}}
+//       AMD:     %[[CMPI_29:.*]] = arith.cmpi uge, %{{.*}}, %{{.*}}
 //       AMD:     %[[LOCAL_LOAD_30:.*]] = ttg.local_load %{{.*}}#4
 //       AMD:     %[[LOCAL_LOAD_31:.*]] = ttg.local_load %{{.*}}#6
 //       AMD:     %[[IF_32:.*]] = scf.if %[[CMPI_28]]
@@ -590,7 +598,7 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 //       AMD:   ttg.local_store %[[LOAD_8]], %[[MEMDESC_SUBVIEW_17]]
 //       AMD:   %[[MEMDESC_SUBVIEW_18:.*]] = ttg.memdesc_index %[[LOCAL_ALLOC_1]]{{\[}}%{{.*}}{{\]}}
 //       AMD:   ttg.local_store %[[LOAD_16]], %[[MEMDESC_SUBVIEW_18]]
-//       AMD:   %[[SUBI_19:.*]] = arith.subi %{{.*}}, %{{.*}}
+//       AMD:   %[[SUBI_19:.*]] = arith.index_cast %{{.*}} : i64 to index
 //       AMD:   %{{.*}}:7 = scf.for %[[ARG6:.*]] = %{{.*}} to %[[SUBI_19]] step %{{.*}} iter_args(%[[ARG7:.*]] = %{{.*}}, %[[ARG8:.*]] = %{{.*}}, %[[ARG9:.*]] = %[[ADDPTR_6]], %[[ARG10:.*]] = %{{.*}}, %[[ARG11:.*]] = %[[MEMDESC_SUBVIEW_17]], %[[ARG12:.*]] = %[[LOAD_10]], %[[ARG13:.*]] = %[[MEMDESC_SUBVIEW_18]])
 //       AMD:     %[[ADDPTR_47:.*]] = tt.addptr %[[ARG8]], %{{.*}}
 //       AMD:     %[[ADDPTR_48:.*]] = tt.addptr %[[ARG9]], %{{.*}}
@@ -1018,8 +1026,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 //       AMD:     ttg.local_store %[[LOAD_56]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:     scf.yield %[[DOT_58]], %[[ADDPTR_47]], %[[ADDPTR_48]], %[[SELECT_61]], %[[MEMDESC_SUBVIEW_62]], %[[LOAD_51]], %[[MEMDESC_SUBVIEW_63]]
 //       AMD:   }
-//       AMD:     %[[CMPI_21:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
-//       AMD:     %[[CMPI_22:.*]] = arith.cmpi sge, %{{.*}}, %{{.*}}
+//       AMD:     %[[CMPI_21:.*]] = arith.cmpi uge, %{{.*}}, %{{.*}}
+//       AMD:     %[[CMPI_22:.*]] = arith.cmpi uge, %{{.*}}, %{{.*}}
 //       AMD:     %[[ADDPTR_23:.*]] = tt.addptr %{{.*}}#1, %{{.*}}
 //       AMD:     %[[SPLAT_24:.*]] = tt.splat %[[CMPI_22]]
 //       AMD:     %[[LOAD_25:.*]] = tt.load %[[ADDPTR_23]], %[[SPLAT_24]]
@@ -1796,4 +1804,136 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     } {tt.num_stages = 2 : i32}
     tt.return
   }
+}
+
+// -----
+
+// Verify that pipelining does not wrap signed i32 stage predicates when
+// step * (maxStage - stage) overflows i32 (regression test for #12957).
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @pipeline_large_step_i32_const_no_overflow
+// CHECK: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-COUNT-1: ttg.async_copy_global_to_local %{{[^,]+}}, %{{[^ ,]+}} {
+// CHECK-COUNT-2: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
+// CHECK-NOT: scf.for
+// CHECK: tt.dot
+tt.func @pipeline_large_step_i32_const_no_overflow(
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %B : tensor<32x128xf16, #B>) -> tensor<128x128xf32, #C> {
+  %lb = arith.constant 0 : i32
+  %ub = arith.constant 100000000 : i32
+  %step = arith.constant 1200000000 : i32
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
+
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf32, #C>) : i32 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #blocked> -> tensor<128x32xf16, #A>
+    %c = tt.dot %a, %B, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
+    scf.yield %c : tensor<128x128xf32, #C>
+  } {tt.num_stages = 4 : i32}
+  tt.return %loop : tensor<128x128xf32, #C>
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @pipeline_large_step_i32_two_trips
+// CHECK: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-COUNT-2: ttg.async_copy_global_to_local %{{[^,]+}}, %{{[^ ,]+}} {
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
+// CHECK: scf.for
+// CHECK: tt.dot
+// CHECK: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
+tt.func @pipeline_large_step_i32_two_trips(
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %B : tensor<32x128xf16, #B>) -> tensor<128x128xf32, #C> {
+  %lb = arith.constant 0 : i32
+  %ub = arith.constant 1300000000 : i32
+  %step = arith.constant 1200000000 : i32
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
+
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf32, #C>) : i32 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #blocked> -> tensor<128x32xf16, #A>
+    %c = tt.dot %a, %B, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
+    scf.yield %c : tensor<128x128xf32, #C>
+  } {tt.num_stages = 4 : i32}
+  tt.return %loop : tensor<128x128xf32, #C>
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
+#A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
+#B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @pipeline_large_step_i64_const_no_overflow
+// CHECK: %[[FALSE:.*]] = arith.constant dense<false>
+// CHECK-COUNT-1: ttg.async_copy_global_to_local %{{[^,]+}}, %{{[^ ,]+}} {
+// CHECK-COUNT-2: ttg.async_copy_global_to_local {{.*}} mask %[[FALSE]]
+// CHECK-NOT: scf.for
+// CHECK: tt.dot
+tt.func @pipeline_large_step_i64_const_no_overflow(
+                  %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked> {tt.divisibility = dense<[16, 16]> : tensor<2xi32>, tt.contiguity = dense<[1, 16]> : tensor<2xi32>},
+                  %B : tensor<32x128xf16, #B>) -> tensor<128x128xf32, #C> {
+  %lb = arith.constant 0 : i64
+  %ub = arith.constant 100000000000000000 : i64
+  %step = arith.constant 7000000000000000000 : i64
+  %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
+
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%prev_c = %c_init) -> (tensor<128x128xf32, #C>) : i64 {
+    %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #blocked>
+    %a = ttg.convert_layout %a_ : tensor<128x32xf16, #blocked> -> tensor<128x32xf16, #A>
+    %c = tt.dot %a, %B, %prev_c : tensor<128x32xf16, #A> * tensor<32x128xf16, #B> -> tensor<128x128xf32, #C>
+    scf.yield %c : tensor<128x128xf32, #C>
+  } {tt.num_stages = 4 : i32}
+  tt.return %loop : tensor<128x128xf32, #C>
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
+// CHECK-LABEL: @pipeline_dynamic_i32_widens_predicates
+// CHECK: arith.extsi %{{.*}} : i32 to i64
+// CHECK: arith.cmpi slt, %{{.*}}, %{{.*}} : i64
+// CHECK: scf.for
+// CHECK: arith.subi %{{.*}}, %{{.*}} : i64
+// CHECK: arith.cmpi slt, %{{.*}}, %{{.*}} : i64
+tt.func public @pipeline_dynamic_i32_widens_predicates(
+    %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+    %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32},
+    %lb: i32, %ub: i32, %step: i32) {
+  %c1024_i32 = arith.constant 1024 : i32
+  %cst = arith.constant dense<true> : tensor<1024xi1, #blocked>
+  %range = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+  %p0 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+  %p1 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+  scf.for %iv = %lb to %ub step %step : i32 {
+    %idx = arith.divsi %iv, %step : i32
+    %off_s = arith.muli %idx, %c1024_i32 : i32
+    %off_v = tt.splat %off_s : i32 -> tensor<1024xi32, #blocked>
+    %offs = arith.addi %off_v, %range : tensor<1024xi32, #blocked>
+    %ptr0 = tt.addptr %p0, %offs : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %val = tt.load %ptr0, %cst : tensor<1024x!tt.ptr<f32>, #blocked>
+    %ptr1 = tt.addptr %p1, %offs : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    tt.store %ptr1, %val, %cst : tensor<1024x!tt.ptr<f32>, #blocked>
+  } {tt.num_stages = 4 : i32}
+  tt.return
+}
 }

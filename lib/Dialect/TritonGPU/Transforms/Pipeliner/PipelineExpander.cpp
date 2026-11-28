@@ -27,6 +27,7 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
@@ -162,10 +163,21 @@ bool LoopPipelinerInternal::initializeLoopInfo(
     int64_t ubImm = upperBoundCst.value();
     int64_t lbImm = lowerBoundCst.value();
     int64_t stepImm = stepCst.value();
-    int64_t numIteration = llvm::divideCeilSigned(ubImm - lbImm, stepImm);
-    if (numIteration >= maxStage) {
+    if (maxStage == 0) {
       dynamicLoop = false;
-    } else if (!options.supportDynamicLoops) {
+    } else if ((stepImm > 0 && ubImm > lbImm) ||
+               (stepImm < 0 && lbImm > ubImm)) {
+      uint64_t diff =
+          stepImm > 0
+              ? static_cast<uint64_t>(ubImm) - static_cast<uint64_t>(lbImm)
+              : static_cast<uint64_t>(lbImm) - static_cast<uint64_t>(ubImm);
+      uint64_t absStep = stepImm > 0 ? static_cast<uint64_t>(stepImm)
+                                     : -static_cast<uint64_t>(stepImm);
+      uint64_t numIteration = (diff - 1) / absStep + 1;
+      if (numIteration >= static_cast<uint64_t>(maxStage))
+        dynamicLoop = false;
+    }
+    if (dynamicLoop && !options.supportDynamicLoops) {
       LDBG("--fewer loop iterations than pipeline stages -> BAIL");
       return false;
     }
@@ -274,6 +286,151 @@ bool LoopPipelinerInternal::verifySchedule() {
   return true;
 }
 
+static bool canWidenToI64(Type type, uint64_t maxFactor) {
+  auto intTy = dyn_cast<IntegerType>(type);
+  if (!intTy || intTy.getWidth() > 32)
+    return false;
+  return maxFactor <= (1ULL << 30);
+}
+
+static Value castIntOrIndex(RewriterBase &rewriter, Location loc, Value val,
+                            Type targetType) {
+  Type srcType = val.getType();
+  if (srcType == targetType)
+    return val;
+  if (isa<IndexType>(srcType) || isa<IndexType>(targetType))
+    return arith::IndexCastOp::create(rewriter, loc, targetType, val);
+  auto srcIntTy = cast<IntegerType>(srcType);
+  auto dstIntTy = cast<IntegerType>(targetType);
+  if (srcIntTy.getWidth() < dstIntTy.getWidth())
+    return arith::ExtSIOp::create(rewriter, loc, targetType, val);
+  return arith::TruncIOp::create(rewriter, loc, targetType, val);
+}
+
+static Type getOverflowFreeCalcType(RewriterBase &rewriter, Type type) {
+  if (isa<IndexType>(type))
+    return rewriter.getI64Type();
+  return type;
+}
+
+static std::optional<llvm::APInt> getConstantIntOrIndex(Value val) {
+  auto constOp = val.getDefiningOp<arith::ConstantOp>();
+  if (!constOp)
+    return std::nullopt;
+  auto intAttr = llvm::dyn_cast<IntegerAttr>(constOp.getValue());
+  if (!intAttr)
+    return std::nullopt;
+  return intAttr.getValue();
+}
+
+static Value tryEmitConstOffsetCmpSlt(RewriterBase &rewriter, Location loc,
+                                      Type type, const llvm::APInt &constBase,
+                                      const llvm::APInt &constStep,
+                                      uint64_t factor, bool subtract,
+                                      Value dynamicBound, bool boundOnRhs) {
+  assert(constBase.getBitWidth() == constStep.getBitWidth());
+  unsigned width = constBase.getBitWidth();
+  // Use wide signed arithmetic (width + 65 bits: |base| + factor * |step| is at
+  // most 2^(width-1) + 2^(width+63), well within 2^(width+64) - 1) so
+  // constant offset computation never overflows.
+  unsigned wideWidth = width + 65;
+  llvm::APInt wideProd =
+      constStep.sext(wideWidth) * llvm::APInt(wideWidth, factor);
+  llvm::APInt wideBase = constBase.sext(wideWidth);
+  llvm::APInt wideResult =
+      subtract ? (wideBase - wideProd) : (wideBase + wideProd);
+  if (wideResult.isSignedIntN(width)) {
+    llvm::APInt truncResult = wideResult.trunc(width);
+    TypedAttr valAttr =
+        type.isIndex()
+            ? cast<TypedAttr>(rewriter.getIndexAttr(truncResult.getSExtValue()))
+            : cast<TypedAttr>(rewriter.getIntegerAttr(type, truncResult));
+    Value constVal = arith::ConstantOp::create(rewriter, loc, valAttr);
+    if (boundOnRhs) {
+      return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                   constVal, dynamicBound);
+    }
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                 dynamicBound, constVal);
+  }
+  // Result lies strictly outside signed [MIN, MAX] of `type`, while the runtime
+  // bound lies inside it, so `<` is constant true iff result < MIN (or > MAX).
+  bool belowSignedMin = wideResult.isNegative();
+  bool alwaysTrue = (boundOnRhs == belowSignedMin);
+  return arith::ConstantOp::create(rewriter, loc,
+                                   rewriter.getBoolAttr(alwaysTrue))
+      .getResult();
+}
+
+/// Emit an overflow-free signed comparison `base + factor * step < bound`.
+static Value emitPlusMulLessThan(RewriterBase &rewriter, Location loc,
+                                 Value base, Value step, uint64_t factor,
+                                 Value bound) {
+  if (factor == 0) {
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt, base,
+                                 bound);
+  }
+  Type type = base.getType();
+  if (auto baseVal = getConstantIntOrIndex(base)) {
+    if (auto stepVal = getConstantIntOrIndex(step)) {
+      return tryEmitConstOffsetCmpSlt(rewriter, loc, type, *baseVal, *stepVal,
+                                      factor, /*subtract=*/false, bound,
+                                      /*boundOnRhs=*/true);
+    }
+  }
+  if (canWidenToI64(type, factor)) {
+    Type i64Ty = rewriter.getI64Type();
+    Value base64 = castIntOrIndex(rewriter, loc, base, i64Ty);
+    Value step64 = castIntOrIndex(rewriter, loc, step, i64Ty);
+    Value bound64 = castIntOrIndex(rewriter, loc, bound, i64Ty);
+    Value factorVal = arith::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getIntegerAttr(i64Ty, static_cast<int64_t>(factor)));
+    Value offset = arith::MulIOp::create(rewriter, loc, step64, factorVal);
+    Value shifted = arith::AddIOp::create(rewriter, loc, base64, offset);
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                 shifted, bound64);
+  }
+
+  Type calcTy = getOverflowFreeCalcType(rewriter, type);
+  unsigned width = cast<IntegerType>(calcTy).getWidth();
+  Value baseC = castIntOrIndex(rewriter, loc, base, calcTy);
+  Value stepC = castIntOrIndex(rewriter, loc, step, calcTy);
+  Value boundC = castIntOrIndex(rewriter, loc, bound, calcTy);
+
+  // When base < bound, the unsigned difference (bound - base) in [1, 2^W - 1]
+  // is exact. We then test (factor * step < bound - base) without signed or
+  // unsigned multiplication overflow.
+  Value inOrder = arith::CmpIOp::create(
+      rewriter, loc, arith::CmpIPredicate::slt, baseC, boundC);
+  Value diff = arith::SubIOp::create(rewriter, loc, boundC, baseC);
+  if (factor == 1) {
+    Value zero = arith::ConstantOp::create(
+        rewriter, loc, IntegerAttr::get(calcTy, APInt(width, 0)));
+    Value stepNonNeg = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::sge, stepC, zero);
+    Value fits = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ult,
+                                       stepC, diff);
+    return arith::AndIOp::create(
+        rewriter, loc, inOrder,
+        arith::AndIOp::create(rewriter, loc, stepNonNeg, fits));
+  }
+
+  APInt maxSafeStep = APInt::getMaxValue(width).udiv(APInt(width, factor));
+  Value maxSafeStepVal = arith::ConstantOp::create(
+      rewriter, loc, IntegerAttr::get(calcTy, maxSafeStep));
+  Value stepSafe = arith::CmpIOp::create(
+      rewriter, loc, arith::CmpIPredicate::ule, stepC, maxSafeStepVal);
+  Value factorVal = arith::ConstantOp::create(
+      rewriter, loc, IntegerAttr::get(calcTy, APInt(width, factor)));
+  Value offset = arith::MulIOp::create(rewriter, loc, stepC, factorVal);
+  Value fits = arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::ult,
+                                     offset, diff);
+  return arith::AndIOp::create(
+      rewriter, loc, inOrder,
+      arith::AndIOp::create(rewriter, loc, stepSafe, fits));
+}
+
 /// Clone `op` and call `callback` on the cloned op's operands as well as any
 /// operands of nested ops that:
 /// 1) aren't defined within the new op or
@@ -328,8 +485,7 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
 
     if (dynamicLoop) {
       // pred = ub > lb + (i * step)
-      predicates[i] = arith::CmpIOp::create(rewriter, loc,
-                                            arith::CmpIPredicate::slt, iv, ub);
+      predicates[i] = emitPlusMulLessThan(rewriter, loc, lb, step, i, ub);
     }
 
     for (Operation *op : opOrder) {
@@ -456,15 +612,42 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   // `numStages - 1` iterations. Then we adjust the upper bound to remove those
   // iterations.
   Value newUb = forOp.getUpperBound();
-  if (peelEpilogue) {
+  if (peelEpilogue && maxStage > 0) {
     Type t = ub.getType();
     Location loc = forOp.getLoc();
-    // newUb = ub - maxStage * step
-    Value maxStageValue = arith::ConstantOp::create(
-        rewriter, loc, rewriter.getIntegerAttr(t, maxStage));
-    Value maxStageByStep =
-        arith::MulIOp::create(rewriter, loc, step, maxStageValue);
-    newUb = arith::SubIOp::create(rewriter, loc, ub, maxStageByStep);
+    uint64_t stageCount = static_cast<uint64_t>(maxStage);
+    if (canWidenToI64(t, stageCount)) {
+      Type i64Ty = rewriter.getI64Type();
+      Value lb64 = castIntOrIndex(rewriter, loc, lb, i64Ty);
+      Value ub64 = castIntOrIndex(rewriter, loc, ub, i64Ty);
+      Value step64 = castIntOrIndex(rewriter, loc, step, i64Ty);
+      Value maxStageVal = arith::ConstantOp::create(
+          rewriter, loc,
+          rewriter.getIntegerAttr(i64Ty, static_cast<int64_t>(stageCount)));
+      Value maxStageByStep =
+          arith::MulIOp::create(rewriter, loc, step64, maxStageVal);
+      Value subUb64 =
+          arith::SubIOp::create(rewriter, loc, ub64, maxStageByStep);
+      // Clamp to lb so empty kernel loops do not underflow or run extra trips.
+      Value clampedUb64 = arith::MaxSIOp::create(rewriter, loc, lb64, subUb64);
+      newUb = castIntOrIndex(rewriter, loc, clampedUb64, t);
+    } else {
+      Type calcTy = getOverflowFreeCalcType(rewriter, t);
+      unsigned width = cast<IntegerType>(calcTy).getWidth();
+      Value hasMainLoop =
+          emitPlusMulLessThan(rewriter, loc, lb, step, stageCount, ub);
+      Value lbC = castIntOrIndex(rewriter, loc, lb, calcTy);
+      Value ubC = castIntOrIndex(rewriter, loc, ub, calcTy);
+      Value stepC = castIntOrIndex(rewriter, loc, step, calcTy);
+      Value maxStageVal = arith::ConstantOp::create(
+          rewriter, loc, IntegerAttr::get(calcTy, APInt(width, stageCount)));
+      Value maxStageByStep =
+          arith::MulIOp::create(rewriter, loc, stepC, maxStageVal);
+      Value subUbC = arith::SubIOp::create(rewriter, loc, ubC, maxStageByStep);
+      Value clampedUbC =
+          arith::SelectOp::create(rewriter, loc, hasMainLoop, subUbC, lbC);
+      newUb = castIntOrIndex(rewriter, loc, clampedUbC, t);
+    }
   }
   auto newForOp =
       scf::ForOp::create(rewriter, forOp.getLoc(), forOp.getLowerBound(), newUb,
@@ -662,42 +845,89 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
   // Emit different versions of the induction variable. They will be
   // removed by dead code if not used.
 
-  auto createConst = [&](int v) {
+  uint64_t stageCount = static_cast<uint64_t>(maxStage);
+  bool widenToI64 = canWidenToI64(t, stageCount);
+  Type calcTy =
+      widenToI64 ? rewriter.getI64Type() : getOverflowFreeCalcType(rewriter, t);
+  unsigned width = cast<IntegerType>(calcTy).getWidth();
+  auto createCalcConst = [&](int64_t v) {
     return arith::ConstantOp::create(rewriter, loc,
-                                     rewriter.getIntegerAttr(t, v));
+                                     rewriter.getIntegerAttr(calcTy, v));
   };
+  auto createUCalcConst = [&](uint64_t v) {
+    return arith::ConstantOp::create(rewriter, loc,
+                                     IntegerAttr::get(calcTy, APInt(width, v)));
+  };
+  Value lbC = castIntOrIndex(rewriter, loc, lb, calcTy);
+  Value ubC = castIntOrIndex(rewriter, loc, ub, calcTy);
+  Value stepC = castIntOrIndex(rewriter, loc, step, calcTy);
 
-  // total_iterations = cdiv(range_diff, step);
-  // - range_diff = ub - lb
-  // - total_iterations = (range_diff + step + (step < 0 ? 1 : -1)) / step
-  Value zero = createConst(0);
-  Value one = createConst(1);
+  Value zero = createCalcConst(0);
+  Value one = createCalcConst(1);
   Value stepLessZero = arith::CmpIOp::create(
-      rewriter, loc, arith::CmpIPredicate::slt, step, zero);
-  Value stepDecr = arith::SelectOp::create(rewriter, loc, stepLessZero, one,
-                                           createConst(-1));
+      rewriter, loc, arith::CmpIPredicate::slt, stepC, zero);
+  Value totalIterations;
+  Value iterI;
+  arith::CmpIPredicate predKind;
 
-  Value rangeDiff = arith::SubIOp::create(rewriter, loc, ub, lb);
-  Value rangeIncrStep = arith::AddIOp::create(rewriter, loc, rangeDiff, step);
-  Value rangeDecr =
-      arith::AddIOp::create(rewriter, loc, rangeIncrStep, stepDecr);
-  Value totalIterations =
-      arith::DivSIOp::create(rewriter, loc, rangeDecr, step);
+  if (widenToI64) {
+    // total_iterations = cdiv(range_diff, step);
+    // - range_diff = ub - lb
+    // - total_iterations = (range_diff + step + (step < 0 ? 1 : -1)) / step
+    Value stepDecr = arith::SelectOp::create(rewriter, loc, stepLessZero, one,
+                                             createCalcConst(-1));
+    Value rangeDiff = arith::SubIOp::create(rewriter, loc, ubC, lbC);
+    Value rangeIncrStep =
+        arith::AddIOp::create(rewriter, loc, rangeDiff, stepC);
+    Value rangeDecr =
+        arith::AddIOp::create(rewriter, loc, rangeIncrStep, stepDecr);
+    totalIterations = arith::DivSIOp::create(rewriter, loc, rangeDecr, stepC);
 
-  // If total_iters < max_stage, start the epilogue at zero to match the
-  // ramp-up in the prologue.
-  // start_iter = max(0, total_iters - max_stage)
-  Value iterI = arith::SubIOp::create(rewriter, loc, totalIterations,
-                                      createConst(maxStage));
-  iterI = arith::MaxSIOp::create(rewriter, loc, zero, iterI);
+    // If total_iters < max_stage, start the epilogue at zero to match the
+    // ramp-up in the prologue.
+    // start_iter = max(0, total_iters - max_stage)
+    iterI = arith::SubIOp::create(rewriter, loc, totalIterations,
+                                  createCalcConst(maxStage));
+    iterI = arith::MaxSIOp::create(rewriter, loc, zero, iterI);
+    predKind = arith::CmpIPredicate::sge;
+  } else {
+    Value hasIters = arith::SelectOp::create(
+        rewriter, loc, stepLessZero,
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sgt, lbC,
+                              ubC),
+        arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt, lbC,
+                              ubC));
+    Value span =
+        arith::SelectOp::create(rewriter, loc, stepLessZero,
+                                arith::SubIOp::create(rewriter, loc, lbC, ubC),
+                                arith::SubIOp::create(rewriter, loc, ubC, lbC));
+    Value absStep = arith::SelectOp::create(
+        rewriter, loc, stepLessZero,
+        arith::SubIOp::create(rewriter, loc, zero, stepC), stepC);
+    Value spanMinusOne = arith::SubIOp::create(rewriter, loc, span, one);
+    Value ceilDiv = arith::AddIOp::create(
+        rewriter, loc,
+        arith::DivUIOp::create(rewriter, loc, spanMinusOne, absStep), one);
+    totalIterations =
+        arith::SelectOp::create(rewriter, loc, hasIters, ceilDiv, zero);
+    Value maxStageVal = createUCalcConst(stageCount);
+    Value hasMoreThanMaxStage = arith::CmpIOp::create(
+        rewriter, loc, arith::CmpIPredicate::ugt, totalIterations, maxStageVal);
+    iterI = arith::SelectOp::create(
+        rewriter, loc, hasMoreThanMaxStage,
+        arith::SubIOp::create(rewriter, loc, totalIterations, maxStageVal),
+        zero);
+    predKind = arith::CmpIPredicate::uge;
+  }
 
   // Capture predicates for dynamic loops.
   SmallVector<Value> predicates(maxStage + 1);
 
   for (int64_t i = 1; i <= maxStage; i++) {
     // newLastIter = lb + step * iterI
-    Value newlastIter = arith::AddIOp::create(
-        rewriter, loc, lb, arith::MulIOp::create(rewriter, loc, step, iterI));
+    Value newlastIterC = arith::AddIOp::create(
+        rewriter, loc, lbC, arith::MulIOp::create(rewriter, loc, stepC, iterI));
+    Value newlastIter = castIntOrIndex(rewriter, loc, newlastIterC, t);
 
     setValueMapping(forOp.getInductionVar(), newlastIter, i);
 
@@ -708,8 +938,8 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
       // Disable stages when `i` is greater than total_iters.
       // pred = total_iters >= i
       predicates[i] =
-          arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::sge,
-                                totalIterations, createConst(i));
+          arith::CmpIOp::create(rewriter, loc, predKind, totalIterations,
+                                createUCalcConst(static_cast<uint64_t>(i)));
     }
   }
 
@@ -856,13 +1086,32 @@ Value mlir::triton::emitPredicateForStage(RewriterBase &rewriter,
                                           Value step, uint64_t maxStage,
                                           uint64_t stage) {
   auto loc = inductionVar.getLoc();
+  if (stage >= maxStage) {
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
+                                 inductionVar, upperBound);
+  }
+  uint64_t stageDist = maxStage - stage;
   auto type = inductionVar.getType();
-  Value c = arith::SubIOp::create(
-      rewriter, loc, upperBound,
-      arith::MulIOp::create(
-          rewriter, loc, step,
-          arith::ConstantOp::create(
-              rewriter, loc, rewriter.getIntegerAttr(type, maxStage - stage))));
-  return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt,
-                               inductionVar, c);
+  if (auto ubVal = getConstantIntOrIndex(upperBound)) {
+    if (auto stepVal = getConstantIntOrIndex(step)) {
+      return tryEmitConstOffsetCmpSlt(rewriter, loc, type, *ubVal, *stepVal,
+                                      stageDist, /*subtract=*/true,
+                                      inductionVar, /*boundOnRhs=*/false);
+    }
+  }
+  if (canWidenToI64(type, stageDist)) {
+    Type i64Ty = rewriter.getI64Type();
+    Value iv64 = castIntOrIndex(rewriter, loc, inductionVar, i64Ty);
+    Value ub64 = castIntOrIndex(rewriter, loc, upperBound, i64Ty);
+    Value step64 = castIntOrIndex(rewriter, loc, step, i64Ty);
+    Value distVal = arith::ConstantOp::create(
+        rewriter, loc,
+        rewriter.getIntegerAttr(i64Ty, static_cast<int64_t>(stageDist)));
+    Value offset = arith::MulIOp::create(rewriter, loc, step64, distVal);
+    Value c = arith::SubIOp::create(rewriter, loc, ub64, offset);
+    return arith::CmpIOp::create(rewriter, loc, arith::CmpIPredicate::slt, iv64,
+                                 c);
+  }
+  return emitPlusMulLessThan(rewriter, loc, inductionVar, step, stageDist,
+                             upperBound);
 }

@@ -79,8 +79,10 @@
 // CHECK:           %[[VAL_56:.*]] = ttg.memdesc_index %[[VAL_44]]{{\[}}%[[VAL_15]]{{\]}} : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_36]]{{\[}}%[[VAL_40]], %[[VAL_13]]] %[[VAL_56]], %[[VAL_54]], %[[VAL_53]] : !tt.tensordesc<256x64xf16, #[[$ATTR_2]]>, !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_57:.*]]:5 = scf.for %[[VAL_58:.*]] = %[[VAL_12]] to %[[VAL_42]] step %[[VAL_15]] iter_args(%[[VAL_59:.*]] = %[[VAL_19]], %[[VAL_60:.*]] = %[[VAL_13]], %[[VAL_61:.*]] = %[[VAL_15]], %[[VAL_62:.*]] = %[[VAL_8]], %[[VAL_63:.*]] = %[[VAL_12]]) -> (tensor<128x256xf32, #[[$ATTR_1]]>, i32, i32, i32, i32)  : i32 {
-// CHECK:             %[[VAL_64:.*]] = arith.subi %[[VAL_42]], %[[VAL_7]] : i32
-// CHECK:             %[[VAL_65:.*]] = arith.cmpi slt, %[[VAL_58]], %[[VAL_64]] : i32
+// CHECK:             %[[IV64:.*]] = arith.extsi %[[VAL_58]] : i32 to i64
+// CHECK:             %[[UB64:.*]] = arith.extsi %[[VAL_42]] : i32 to i64
+// CHECK:             %[[VAL_64:.*]] = arith.subi %[[UB64]], %c2_i64 : i64
+// CHECK:             %[[VAL_65:.*]] = arith.cmpi slt, %[[IV64]], %[[VAL_64]] : i64
 // CHECK:             %[[VAL_66:.*]] = arith.addi %[[VAL_62]], %[[VAL_15]] : i32
 // CHECK:             %[[VAL_67:.*]] = arith.cmpi sge, %[[VAL_66]], %[[VAL_6]] : i32
 // CHECK:             %[[VAL_68:.*]] = arith.select %[[VAL_67]], %[[VAL_12]], %[[VAL_66]] : i32
