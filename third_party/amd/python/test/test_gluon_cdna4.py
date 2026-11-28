@@ -3,7 +3,7 @@ import torch
 
 from triton.experimental import gluon
 import triton.experimental.gluon.language as ttgl
-from triton._internal_testing import is_hip_cdna4
+from triton._internal_testing import create_mxfp_operand, is_hip_cdna4
 
 
 @gluon.jit
@@ -85,3 +85,95 @@ def test_runtime_scaled_downcast_fp4(dtype, instruction_suffix, scale_byte):
     expected = torch.full((block_m, block_k), expected_byte, dtype=torch.uint8)
     torch.testing.assert_close(output.cpu(), expected)
     assert (f"v_cvt_scalef32_pk_fp4_{instruction_suffix}" in program.asm["amdgcn"])
+
+
+@gluon.jit
+def scaled_downcast_layout_kernel(x_ptr, scale_ptr, y_ptr, BLOCK_M: ttgl.constexpr, BLOCK_K: ttgl.constexpr,
+                                  OUT_K: ttgl.constexpr, SCALE_FACTOR: ttgl.constexpr, FORMAT: ttgl.constexpr,
+                                  LAYOUT: ttgl.constexpr, SCALE_LAYOUT: ttgl.constexpr):
+    offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, LAYOUT))
+    offs_k = ttgl.arange(0, BLOCK_K, layout=ttgl.SliceLayout(0, LAYOUT))
+    offs = offs_m[:, None] * BLOCK_K + offs_k[None, :]
+    x = ttgl.load(x_ptr + offs)
+
+    scale_k: ttgl.constexpr = BLOCK_K // SCALE_FACTOR
+    offs_scale_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, SCALE_LAYOUT))
+    offs_scale_k = ttgl.arange(0, scale_k, layout=ttgl.SliceLayout(0, SCALE_LAYOUT))
+    scale = ttgl.load(scale_ptr + offs_scale_m[:, None] * scale_k + offs_scale_k[None, :])
+
+    y = ttgl.amd.cdna4.scaled_downcast(x, scale, FORMAT, axis=1)
+    out_layout: ttgl.constexpr = y.type.layout
+    offs_out_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, out_layout))
+    offs_out_k = ttgl.arange(0, OUT_K, layout=ttgl.SliceLayout(0, out_layout))
+    ttgl.store(y_ptr + offs_out_m[:, None] * OUT_K + offs_out_k[None, :], y)
+
+
+def per_lane_layouts(scale_factor):
+    layout = ttgl.BlockedLayout([1, scale_factor], [8, 8], [4, 1], [1, 0])
+    scale_layout = ttgl.BlockedLayout([1, 1], [8, 8], [4, 1], [1, 0])
+    return layout, scale_layout
+
+
+def linear_layouts(reg_bases, lane_bases, warp_bases, scale_factor):
+
+    def to_scale(bases):
+        return [[row, col // scale_factor] for row, col in bases]
+
+    layout = ttgl.DistributedLinearLayout(reg_bases, lane_bases, warp_bases, [], [32, 128])
+    scale_layout = ttgl.DistributedLinearLayout(to_scale(reg_bases), to_scale(lane_bases), to_scale(warp_bases), [],
+                                                [32, 128 // scale_factor])
+    return layout, scale_layout
+
+
+def repeated_register_layouts(scale_factor):
+    reg_bases = [[0, 1], [0, 0], [0, 8], [8, 0], [16, 0]]
+    lane_bases = [[0, 2], [0, 4], [0, 16], [0, 32], [0, 64], [1, 0]]
+    warp_bases = [[2, 0], [4, 0]]
+    return linear_layouts(reg_bases, lane_bases, warp_bases, scale_factor)
+
+
+def repeated_register_in_group_layouts(scale_factor):
+    reg_bases = [[0, 1], [0, 2], [0, 0], [0, 4], [0, 8]]
+    lane_bases = [[0, 16], [0, 32], [0, 64], [1, 0], [2, 0], [4, 0]]
+    warp_bases = [[8, 0], [16, 0]]
+    return linear_layouts(reg_bases, lane_bases, warp_bases, scale_factor)
+
+
+SCALED_DOWNCAST_LAYOUTS = {
+    "per_lane": per_lane_layouts,
+    "repeated_register": repeated_register_layouts,
+    "repeated_register_in_group": repeated_register_in_group_layouts,
+}
+
+
+@pytest.mark.skipif(not is_hip_cdna4(), reason="Requires CDNA4")
+@pytest.mark.parametrize("layouts", SCALED_DOWNCAST_LAYOUTS)
+@pytest.mark.parametrize("scale_factor", [2, 4, 8])
+@pytest.mark.parametrize("format,out_dtype,out_mnemonic", [
+    ("e2m1", torch.uint8, "fp4"),
+    ("e4m3", torch.float8_e4m3fn, "fp8"),
+    ("e5m2", torch.float8_e5m2, "bf8"),
+])
+@pytest.mark.parametrize("dtype,in_suffix", [
+    (torch.float16, "f16"),
+    (torch.bfloat16, "bf16"),
+    (torch.float32, "f32"),
+])
+def test_runtime_scaled_downcast_layout(layouts, scale_factor, format, out_dtype, out_mnemonic, dtype, in_suffix):
+    BLOCK_M, BLOCK_K = 32, 128
+    layout, scale_layout = SCALED_DOWNCAST_LAYOUTS[layouts](scale_factor)
+    torch.manual_seed(0)
+    expected, values_ref = create_mxfp_operand(0, BLOCK_M, BLOCK_K, format)
+    num_blocks = BLOCK_K // scale_factor
+    scale = (124 + torch.arange(BLOCK_M * num_blocks) % 7).to(torch.uint8).reshape(BLOCK_M, num_blocks)
+    scale_ref = torch.exp2((scale.to(torch.int16) - 127).to(torch.float32))
+    scaled_blocks = values_ref.reshape(BLOCK_M, num_blocks, scale_factor) * scale_ref[:, :, None]
+    x = scaled_blocks.reshape(BLOCK_M, BLOCK_K).to(dtype)
+
+    out_k = BLOCK_K // 2 if format == "e2m1" else BLOCK_K
+    y = torch.empty((BLOCK_M, out_k), dtype=out_dtype, device="cuda")
+    program = scaled_downcast_layout_kernel[(1, )](x.cuda(), scale.cuda(), y, BLOCK_M, BLOCK_K, out_k, scale_factor,
+                                                   format, layout, scale_layout, num_warps=4)
+
+    assert f"v_cvt_scalef32_pk_{out_mnemonic}_{in_suffix}" in program.asm["amdgcn"]
+    torch.testing.assert_close(y.view(torch.uint8).cpu(), expected, atol=0, rtol=0)

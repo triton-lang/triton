@@ -1271,8 +1271,8 @@ class CodeGenerator(ast.NodeVisitor):
             for i in static_range:
                 self.lscope[node.target.id] = constexpr(i)
                 self.visit_compound_statement(node.body)
-                for stmt in node.orelse:
-                    ast.NodeVisitor.generic_visit(self, stmt)
+            # Triton has no `break`, so the `else` clause runs exactly once, after the loop.
+            self.visit_compound_statement(node.orelse)
             return
         num_stages = None
         loop_unroll_factor = None

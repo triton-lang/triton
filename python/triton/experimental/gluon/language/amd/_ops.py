@@ -278,13 +278,6 @@ def _check_scaled_downcast_scale_shape(input_shape, scale_shape, axis, axis_exte
     _check(scale_shape[axis] > 0 and axis_extent % scale_shape[axis] == 0,
            lambda: f"Expected axis extent {axis_extent} to be divisible by scale axis extent "
            f"{scale_shape[axis]}")
-    _check(
-        scale_shape[axis] < axis_extent, lambda: "scaled_downcast requires compact scales along the scaled axis; "
-        "expanded scales (one scale per output element) are not supported")
-    block_size = input_shape[axis] // scale_shape[axis]
-    _check(
-        block_size % 8 == 0, lambda: f"Expected each scale block to span a multiple of 8 consecutive input elements "
-        f"along axis {axis}, but got {block_size}")
 
 
 def _scaled_downcast(input, scale, elem_type, axis, semantic):
@@ -324,9 +317,9 @@ def _scaled_downcast(input, scale, elem_type, axis, semantic):
 
 @builtin
 def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
-    """
-    Scale and convert FP16, BF16, or FP32 values to a low-precision MX format,
-    dividing by the raw E8M0 ``scale`` payload (``int8`` or ``uint8``).
+    """Scale and convert FP16, BF16, or FP32 values to a low-precision MX format.
+
+    Divide input values by the raw E8M0 ``scale`` payload (``int8`` or ``uint8``).
 
     ``format`` selects the target type and packing behavior:
 
@@ -338,9 +331,11 @@ def scaled_downcast(input, scale, format, axis=-1, _semantic=None):
       of ``scaled_upcast``).
 
     ``axis`` (default: last dim) selects the dimension along which scales are
-    shared. ``scale`` must be compact along ``axis`` with one E8M0 byte per
-    block of consecutive input elements along ``axis``, and each block must
-    span a multiple of 8 consecutive input elements.
+    shared. ``scale`` provides one E8M0 byte per block of consecutive input
+    elements along ``axis``. The block size must be a power of two and a
+    multiple of 2 on CDNA4 or 8 on CDNA5. For packed FP4, CDNA4 permits one scale
+    per output byte. The block size and scale layout are checked when the
+    kernel is compiled.
     """
     axis = _unwrap_if_constexpr(axis)
     elem_type = _downcast_format_to_elem_type(format)

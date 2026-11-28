@@ -160,18 +160,6 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
   ];
 }
 
-def TritonAMDGPUMoveUpPrologueLoads
-    : Pass<"tritonamdgpu-move-up-prologue-loads", "mlir::triton::FuncOp"> {
-  let summary = "Move up global loads in prologue for better GEMM performance";
-
-  let description =
-      "This pass moves global load ops early to prefetch in the prologue. "
-      "This may increase register pressure but it enables issuing global loads "
-      "early.";
-
-  let dependentDialects = [];
-}
-
 def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "mlir::ModuleOp"> {
   let summary = "Convert memory operations to buffer operations";
 

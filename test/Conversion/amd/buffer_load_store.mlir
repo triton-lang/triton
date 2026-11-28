@@ -451,3 +451,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+// Explicit descriptors keep their bounds. Masked-off lanes use the size-aligned
+// out-of-bounds offset, which ends past any 32-bit num_records.
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_descriptor_rmw
+  tt.func @buffer_descriptor_rmw(%base: !tt.ptr<i32>, %offset: tensor<64xi32, #blocked>, %value: tensor<64xi32, #blocked>, %mask: tensor<64xi1, #blocked>, %soffset: i32) {
+    %bound = arith.constant -1 : i32
+    // CHECK: %[[DESC:.*]] = rocdl.make.buffer.rsrc
+    %desc = amdg.make_buffer_desc %base, %bound : !tt.ptr<i32> -> !amdg.buffer_desc<i32>
+    // CHECK: llvm.mul
+    // CHECK: llvm.select
+    // CHECK-NOT: rocdl.make.buffer.rsrc
+    // CHECK: llvm.call_intrinsic "llvm.amdgcn.raw.ptr.buffer.atomic.add"({{.*}}%[[DESC]]
+    %old = amdg.buffer_atomic_rmw add, relaxed, gpu, %value, %desc[%offset], %mask soffset = %soffset : i32 : !amdg.buffer_desc<i32> -> tensor<64xi32, #blocked>
+    tt.return
+  }
+}

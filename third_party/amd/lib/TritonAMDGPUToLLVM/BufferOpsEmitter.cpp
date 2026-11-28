@@ -156,7 +156,8 @@ BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
 
 Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
                                    Value casCmpVal, Value casStoreVal,
-                                   Value pred, bool hasUsers) {
+                                   Value pred, bool hasUsers,
+                                   Value soffsetBytes) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType storeVecTy = cast<VectorType>(casStoreVal.getType());
   VectorType cmpVecTy = cast<VectorType>(casCmpVal.getType());
@@ -170,7 +171,7 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
   // the opposite of the order in tl.atomic_cmpxchg
   // and amdg.buffer_atomic_cas
   SmallVector<Value, 6> args{casStoreVal, casCmpVal};
-  fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred,
+  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
                  /*isAtomicRMW=*/true, args);
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 
@@ -184,7 +185,7 @@ Value BufferEmitter::emitAtomicCAS(Type type, Value rsrcDesc, Value offset,
 
 Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
                                    Value offset, Value data, Value pred,
-                                   bool hasUsers) {
+                                   bool hasUsers, Value soffsetBytes) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(type, true);
@@ -198,7 +199,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     data = b.bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(type, rsrcDesc, offset, /*soffsetBytes=*/Value(), pred,
+  fillCommonArgs(type, rsrcDesc, offset, soffsetBytes, pred,
                  /*isAtomicRMW=*/true, args);
   int32_t aux = targetInfo.getBufferAtomicCachePolicy(hasUsers);
 

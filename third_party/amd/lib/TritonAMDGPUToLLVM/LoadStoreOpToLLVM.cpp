@@ -1949,8 +1949,6 @@ struct BufferAtomicRMWOpConversion
   matchAndRewrite(triton::amdgpu::BufferAtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
-    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
-                                 targetInfo);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
@@ -1975,19 +1973,48 @@ struct BufferAtomicRMWOpConversion
     unsigned numElems = getUniqueElemsPerThread(ptrType);
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
-    // v4f16 and v4bf16 variants of buffer atomics do not exist.
-    // only v2f16 and v2bf16.
+    // Descriptor APIs share frontend dispatch across architectures. Preserve
+    // legacy pointer lowering while validating newly exposed descriptor ops.
+    if (isa<triton::amdgpu::BufferDescType>(ptr.getType()) &&
+        (!targetInfo.supportsBufferAtomicRMW() ||
+         (atomicRmwAttr == RMWOp::FADD &&
+          !targetInfo.supportsBufferAtomicFadd(valueElemTy)) ||
+         ((atomicRmwAttr == RMWOp::MIN || atomicRmwAttr == RMWOp::MAX) &&
+          isa<FloatType>(valueElemTy) &&
+          !targetInfo.supportsBufferAtomicFMinMax(valueElemTy))))
+      return op.emitOpError(
+          "buffer atomic operation/type is unsupported on this target");
+
+    Value soffset = op.getSoffset();
+    bool tensorSoffset = soffset && isa<RankedTensorType>(soffset.getType());
+    if (tensorSoffset && !isLaneUniform(soffset))
+      return op.emitOpError("can't prove the soffset tensor is the same across "
+                            "the lanes of a wave");
+    if (mask)
+      vec = std::min<unsigned>(vec, getMaskAlignment(mask));
+    if (tensorSoffset)
+      vec = std::min<unsigned>(vec, getMaskAlignment(soffset));
+
+    // Hardware half atomics operate on aligned, contiguous pairs. Check the
+    // final access width, including mask and scalar-offset constancy, before
+    // changing IR. Direct Gluon ops do not pass through ConvertToBufferOps.
     if (valueElemTy.isBF16() || valueElemTy.isF16()) {
-      // We clamp to the only supported vectorization width here (2).
-      // In ConvertToBufferOps we check that we have a large enough vector size
-      assert(vec >= 2);
-      vec = 2u;
-      // The max width of a buffer atomic op is 64-bits
-      // Some types like F32 don't have a 2x vectorized version
-    } else if (valueElemTy.isF32() || valueElemTy.isF64() ||
-               valueElemTy.isInteger(32) || valueElemTy.isInteger(64)) {
-      vec = 1u;
+      bool alignedSoffset = true;
+      if (soffset) {
+        auto *info = axisAnalysisPass.getAxisInfo(soffset);
+        alignedSoffset =
+            info && llvm::all_of(info->getDivisibility(),
+                                 [](int64_t d) { return d % 2 == 0; });
+      }
+      if (vec < 2 || numElems % 2 != 0 || !alignedSoffset)
+        return op.emitOpError("buffer half atomics require aligned contiguous "
+                              "pairs with a common mask and soffset");
+      vec = 2;
+    } else {
+      vec = 1;
     }
+    insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
+                                 targetInfo);
 
     // Get the offsets and value
     SmallVector<Value> offsetElems =
@@ -1998,12 +2025,15 @@ struct BufferAtomicRMWOpConversion
     // Get the mask
     SmallVector<Value> maskElems;
     if (llMask) {
-      vec = std::min<unsigned>(vec, getMaskAlignment(mask));
       maskElems = unpackUniqueTensorElements(loc, llMask, rewriter);
     }
 
-    Value rsrcDesc =
-        bufferEmitter.createResourceDescriptor(llPtr, /*numRecords=*/Value());
+    auto soffsetBytes = getAtomicScalarOffsetBytes(
+        op, rewriter, loc, bufferEmitter, valueElemTy, op.getSoffset(),
+        adaptor.getSoffset(), numElems);
+    if (failed(soffsetBytes))
+      return failure();
+    Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -2014,8 +2044,6 @@ struct BufferAtomicRMWOpConversion
                          true /*preAtomic*/))) {
       return failure();
     }
-
-    mlir::Operation *lastRMWOp;
 
     //    We set GLC=1, to return the old value. Atomics in GFX942 execute with
     //    either device (default) or system scope (controlled by the sc1 flag).
@@ -2040,9 +2068,7 @@ struct BufferAtomicRMWOpConversion
 
       Value loadVal = bufferEmitter.emitAtomicRMW(
           atomicRmwAttr, vecTy, rsrcDesc, offsetElems[vecStart], storeVal, pred,
-          hasUsers);
-      // Track the last op, so we can emit a fenceop after the loop
-      lastRMWOp = loadVal.getDefiningOp();
+          hasUsers, (*soffsetBytes)[vecStart]);
 
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
@@ -2053,8 +2079,8 @@ struct BufferAtomicRMWOpConversion
     } // end vec
 
     // Acquire Fence post-atomic
-    if (failed(emitFence(op, rewriter, lastRMWOp->getLoc(), memOrdering,
-                         memScope, false /*preAtomic*/))) {
+    if (failed(emitFence(op, rewriter, loc, memOrdering, memScope,
+                         false /*preAtomic*/))) {
       return failure();
     }
 
@@ -2077,9 +2103,13 @@ struct BufferAtomicCASOpConversion
   LogicalResult
   matchAndRewrite(triton::amdgpu::BufferAtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto loc = op->getLoc();
+    if (op.getSoffset() && isa<RankedTensorType>(op.getSoffset().getType()) &&
+        !isLaneUniform(op.getSoffset()))
+      return op.emitOpError("can't prove the soffset tensor is the same across "
+                            "the lanes of a wave");
     insertAtomicOrderingBarriers(op, op.getSem(), op.getScope(), rewriter,
                                  targetInfo);
+    auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
@@ -2113,8 +2143,12 @@ struct BufferAtomicCASOpConversion
     SmallVector<Value> cmpElems =
         unpackUniqueTensorElements(loc, llCmp, rewriter);
 
-    Value rsrcDesc =
-        bufferEmitter.createResourceDescriptor(llPtr, /*numRecords=*/Value());
+    auto soffsetBytes = getAtomicScalarOffsetBytes(
+        op, rewriter, loc, bufferEmitter, valueElemTy, op.getSoffset(),
+        adaptor.getSoffset(), numElems);
+    if (failed(soffsetBytes))
+      return failure();
+    Value rsrcDesc = getResourceDescriptor(bufferEmitter, ptr, llPtr);
     SmallVector<Value> loadedVals;
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer
@@ -2126,8 +2160,6 @@ struct BufferAtomicCASOpConversion
                          true /*preAtomic*/))) {
       return failure();
     }
-
-    mlir::Operation *lastCASOp;
 
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
     bool hasUsers = !op.getResult().use_empty();
@@ -2147,11 +2179,9 @@ struct BufferAtomicCASOpConversion
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           cmpElems, vecStart);
 
-      Value loadVal =
-          bufferEmitter.emitAtomicCAS(vecTy, rsrcDesc, offsetElems[vecStart],
-                                      casCmpVal, casStoreVal, pred, hasUsers);
-      // Track the last op, so we can emit a fenceop after the loop
-      lastCASOp = loadVal.getDefiningOp();
+      Value loadVal = bufferEmitter.emitAtomicCAS(
+          vecTy, rsrcDesc, offsetElems[vecStart], casCmpVal, casStoreVal, pred,
+          hasUsers, (*soffsetBytes)[vecStart]);
 
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
@@ -2162,8 +2192,8 @@ struct BufferAtomicCASOpConversion
     } // end vec
 
     // Emit post-atomic acquire fence
-    if (failed(emitFence(op, rewriter, lastCASOp->getLoc(), memOrdering,
-                         memScope, false /*preAtomic*/))) {
+    if (failed(emitFence(op, rewriter, loc, memOrdering, memScope,
+                         false /*preAtomic*/))) {
       return failure();
     }
 
