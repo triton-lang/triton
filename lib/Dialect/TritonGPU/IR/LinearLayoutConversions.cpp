@@ -1776,6 +1776,7 @@ chooseMfmaLikeStoreLayout(RankedTensorType valType) {
 
 LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
                                 ArrayRef<unsigned> warpsPerCTA,
+                                ArrayRef<unsigned> instrsPerCTA,
                                 const LinearLayout &cgaLayout, int totalWarps,
                                 std::optional<uint32_t> warpUsedHint) {
   int numDims = blockShape.size();
@@ -1783,6 +1784,7 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
 
   assert(numDims >= 1 && numDims <= 5 && "TDM supports 1D to 5D tensors");
   assert(static_cast<int>(warpsPerCTA.size()) == numDims);
+  assert(static_cast<int>(instrsPerCTA.size()) == numDims);
 
   SmallVector<unsigned> messageShape(numDims);
   unsigned activeWarps = 1;
@@ -1836,7 +1838,7 @@ LinearLayout getTDMLinearLayout(ArrayRef<int64_t> blockShape,
   }
 
   return (identityStandardND(S("message"), messageShape, order) * warpLayout *
-          cgaLayout)
+          identityStandardND(S("instr"), instrsPerCTA, order) * cgaLayout)
       .transposeOuts(standardOutDimNames(ctx, numDims));
 }
 

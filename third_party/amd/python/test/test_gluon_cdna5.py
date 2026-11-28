@@ -2307,6 +2307,62 @@ def test_runtime_tensor_load_and_store_multi_cta(M, N, BLOCK_M, BLOCK_N, NUM_WAR
 
 
 @gluon.jit
+def partitioned_tdm_multi_cta_copy_kernel(a_ptr, b_ptr, M, N,  #
+                                          BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr,  #
+                                          block_layout: ttgl.constexpr, smem_layout: ttgl.constexpr,
+                                          USE_TDM_LOAD: ttgl.constexpr):
+    """Copy a tile through a PartitionedSharedLayout, using TDM in one direction only."""
+    idx_m = ttgl.program_id(axis=0) * BLOCK_M
+    idx_n = ttgl.program_id(axis=1) * BLOCK_N
+    offs_m = idx_m + ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, block_layout))
+    offs_n = idx_n + ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, block_layout))
+    offs = offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    buffer = ttgl.allocate_shared_memory(a_ptr.type.element_ty, (BLOCK_M, BLOCK_N), smem_layout)
+
+    if USE_TDM_LOAD:
+        a_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=a_ptr, shape=(M, N), strides=(N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+        ttgl.amd.cdna5.tdm.async_load(a_desc, [idx_m, idx_n], buffer)
+        ttgl.amd.cdna5.tdm.async_wait(0)
+        ttgl.store(b_ptr + offs, buffer.load(layout=block_layout), mask=mask)
+    else:
+        buffer.store(ttgl.load(a_ptr + offs, mask=mask, other=0))
+        b_desc = ttgl.amd.cdna5.tdm.make_tensor_descriptor(base=b_ptr, shape=(M, N), strides=(N, 1),
+                                                           block_shape=(BLOCK_M, BLOCK_N), layout=smem_layout)
+        ttgl.amd.cdna5.tdm.async_store(b_desc, [idx_m, idx_n], buffer)
+        ttgl.amd.cdna5.tdm.async_wait(0)
+
+
+@pytest.mark.skipif(not is_hip_cdna5(), reason="Requires CDNA5")
+@pytest.mark.parametrize("USE_TDM_LOAD", [True, False])
+# 2 partitions x NUM_GROUPS pieces per CTA: 1 and 2 TDM instructions with 4 warps.
+@pytest.mark.parametrize("NUM_GROUPS", [1, 4])
+@pytest.mark.parametrize("PARTITION_DIM", [0, 1])
+@pytest.mark.parametrize("CGALayout", [[[0, 0]], [[1, 0]], [[0, 1]]])
+def test_runtime_partitioned_tdm_load_and_store_multi_cta(CGALayout, PARTITION_DIM, NUM_GROUPS, USE_TDM_LOAD):
+    M, N = 256, 256
+    BLOCK_M, BLOCK_N = 128, 128
+    torch.manual_seed(42)
+    # Overallocate so out-of-bounds writes land in the zero-initialized tail.
+    a = torch.randint(0x0, 0xFFFF, (M * 2, N), dtype=torch.uint16)
+    out = torch.zeros_like(a)
+    a_device = a.cuda()
+    out_device = out.cuda()
+
+    inner_layout = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0], CGALayout)
+    smem_layout = PartitionedSharedLayout(2, NUM_GROUPS, PARTITION_DIM, inner_layout)
+    block_layout = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0], CGALayout)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    partitioned_tdm_multi_cta_copy_kernel[grid](a_device, out_device, M, N, BLOCK_M, BLOCK_N, block_layout, smem_layout,
+                                                USE_TDM_LOAD, num_warps=4, num_ctas=2**len(CGALayout))
+
+    out_ref = torch.zeros_like(a)
+    out_ref[:M] = a[:M]
+    assert torch.equal(out_ref, out_device.cpu())
+
+
+@gluon.jit
 def tensor_fill_kernel(a_ptr, M, N, BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr, NUM_BUFFERS: ttgl.constexpr):
     SHARED_LAYOUT: ttgl.constexpr = ttgl.SwizzledSharedLayout(1, 1, 1, [1, 0])
     BLOCKED_LAYOUT: ttgl.constexpr = ttgl.BlockedLayout([1, 8], [4, 8], [4, 1], [1, 0])
